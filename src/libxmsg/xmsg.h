@@ -21,10 +21,13 @@
 
 #include "libxmsg/xmsg_config.h"
 #include "libxmsg/xmsg_endian.h"
+#include "libxmsg/xmsg_errors.h"
 #include "libxmsg/xmsg_ports.h"
 
 #include "libxmsg/hdlc/fcs16.h"
 #include "libxmsg/hdlc/hdlc_async.h"
+#include "libxmsg/lapb/lapb.h"
+#include "libxmsg/lapb/lapb_frame.h"
 #include "libxmsg/log/xmsg_log.h"
 
 #include "libxmsg/gen/sintran_wire.h"

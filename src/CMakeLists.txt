@@ -38,7 +38,8 @@ include(cmake/house_standard.cmake)
 # so a one-line translation unit is generated here until then.
 set(XMSG_SOURCES
     libxmsg/log/xmsg_log.c
-    libxmsg/hdlc/fcs16.c)
+    libxmsg/hdlc/fcs16.c
+    libxmsg/lapb/lapb.c)
 if(XMSG_WITH_ASYNC_FRAMER)
     list(APPEND XMSG_SOURCES libxmsg/hdlc/hdlc_async.c)
 endif()

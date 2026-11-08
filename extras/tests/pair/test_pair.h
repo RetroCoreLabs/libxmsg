@@ -164,6 +164,12 @@ TestSocket test_tcp_listen_accept_one(uint16_t *port, int ms);
  */
 TestSocket test_tcp_connect(uint16_t port);
 
+/**
+ * @brief Connect to a named host (name or dotted address) and port, for the integration tests
+ *        that reach an nd100x anywhere on the network. Returns the socket, or -1.
+ */
+TestSocket test_tcp_connect_host(const char *host, uint16_t port);
+
 /** @brief Close one socket. */
 void test_tcp_close(TestSocket s);
 

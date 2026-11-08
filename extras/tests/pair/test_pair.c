@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netdb.h>
 #include <netinet/tcp.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -298,6 +299,55 @@ TestSocket test_tcp_connect(uint16_t port)
     {
         printf("connect(%u) failed: %d\n", (unsigned)port, last_socket_error());
         native_close(s);
+        return -1;
+    }
+    disable_nagle(s);
+    if (set_nonblocking(s) != 0)
+    {
+        native_close(s);
+        return -1;
+    }
+    return (TestSocket)s;
+}
+
+TestSocket test_tcp_connect_host(const char *host, uint16_t port)
+{
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    char service[8];
+    NativeSocket s = NATIVE_INVALID;
+
+    if (test_tcp_startup() != 0)
+    {
+        return -1;
+    }
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    snprintf(service, sizeof service, "%u", (unsigned)port);
+    if (getaddrinfo(host, service, &hints, &res) != 0 || res == NULL)
+    {
+        printf("cannot resolve %s\n", host);
+        return -1;
+    }
+    for (struct addrinfo *ai = res; ai != NULL; ai = ai->ai_next)
+    {
+        s = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (s == NATIVE_INVALID)
+        {
+            continue;
+        }
+        if (connect(s, ai->ai_addr, (socklen_t)ai->ai_addrlen) == 0)
+        {
+            break;
+        }
+        native_close(s);
+        s = NATIVE_INVALID;
+    }
+    freeaddrinfo(res);
+    if (s == NATIVE_INVALID)
+    {
+        printf("connect(%s:%u) failed: %d\n", host, (unsigned)port, last_socket_error());
         return -1;
     }
     disable_nagle(s);
