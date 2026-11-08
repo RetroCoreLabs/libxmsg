@@ -1,0 +1,48 @@
+name: release
+
+# A tag v* publishes a GitHub Release carrying the library as an Arduino-installable zip
+# (library.properties, src/, examples/) and a checksum file. CMake consumers use the tag itself.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package and publish
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches library.properties and CMake
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          prop=$(sed -n 's/^version=//p' library.properties)
+          cmake_ver=$(sed -n 's/^project(libxmsg VERSION \([0-9.]*\).*/\1/p' src/CMakeLists.txt)
+          echo "tag=$tag library.properties=$prop CMake=$cmake_ver"
+          test "$tag" = "$prop" && test "$tag" = "$cmake_ver"
+
+      - name: Build and test once more
+        run: |
+          cmake -S src -B build -DXMSG_BUILD_TESTS=ON -DXMSG_WERROR=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+
+      - name: Make the Arduino zip
+        run: |
+          mkdir -p dist/libxmsg
+          cp -r library.properties LICENSE README.md src examples dist/libxmsg/
+          # Arduino compiles every .c under src/ with the C compiler; nothing else is shipped.
+          (cd dist && zip -qr "libxmsg-${GITHUB_REF_NAME}.zip" libxmsg)
+          (cd dist && sha256sum "libxmsg-${GITHUB_REF_NAME}.zip" > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/libxmsg-${{ github.ref_name }}.zip
+            dist/SHA256SUMS.txt
+          generate_release_notes: true

@@ -1,0 +1,547 @@
+{
+  "meta": {
+    "title": "CHAT - rooms, members and what they say",
+    "purpose": "The one protocol in this folder that Norsk Data never shipped. It is written down for the same reason as the others: so the next change is made against a statement rather than a re-reading of the source. Federation (task 58) adds message kinds to it, and constraint 5 of that design says both ends move in the SAME commit - this file is where a new kind is declared before it is built.",
+    "authority": "This file and the C# must agree - the conformance tests assert the parts a machine can check.",
+    "layering": "A chat message is the BODY of a SINTRAN datagram (see sintran-wire.json). Nothing about the body is COSMOS; everything carrying it is.",
+    "what_is_invented_and_what_is_not": "The VOCABULARY is invented here - no chat service exists on any SINTRAN image we hold, and the service registry carries terminal access, file transfer, spooling and file access and nothing else. What is NOT invented is everything underneath: claiming a name through XROUT, being admitted against a free-connection count, learning a sender's address from an arrived message, and port-to-port delivery are all captured from a running machine.",
+    "created": "2026-08-19"
+  },
+  "status_values": {
+    "MEASURED": "Observed on the wire or carved from the kernel, with the evidence named.",
+    "INFERRED": "Follows from something measured, or read from the ND manuals, but not itself observed here.",
+    "UNKNOWN": "We copy it, mirror it, or leave it alone. NOT safe to compute or vary.",
+    "SUPERSEDED": "A reading that was believed and is now disproved. Kept so it is not re-derived."
+  },
+  "the_two_ports": {
+    "summary": "A chat server holds TWO names, and the difference decides who spends a seat.",
+    "why_it_matters": "XROUT counts free connections against a CONNECTION port. Every seat spent there is one a human cannot have, and a leaked one never comes back while the server lives.",
+    "ports": [
+      {
+        "name": "*CHAT",
+        "kind": "connection port",
+        "opened_with": "the connection-port call",
+        "who_reaches_it": "local human clients only",
+        "costs_a_seat": true,
+        "status": "MEASURED",
+        "evidence": "16 seats offered, 16 taken at 4 users, XMXEMFL at 20 - the load test of 2026-08-19 RENAMED from CHAT-LOBBY 2026-08-20 - see the_room_model.the_port_name. The 16-seat measurement itself still stands; only the name changed."
+      },
+      {
+        "name": "CHAT-TRUNK",
+        "kind": "normal named port",
+        "opened_with": "XMPOPNM",
+        "who_reaches_it": "peer chat servers on other machines",
+        "costs_a_seat": false,
+        "status": "INFERRED",
+        "evidence": "constraint 1 of CHAT-FEDERATION-DESIGN.md - not yet built. A trunk on CHAT-LOBBY would hold a seat permanently, so seats must limit LOCAL USERS only."
+      }
+    ]
+  },
+  "message_prefix": {
+    "summary": "The two fixed bytes every chat message starts with. Everything after them is variable-length and must be walked, not indexed.",
+    "csharp": "NDInsight.Sintran.Xmsg.Chat.ChatMessage",
+    "byte_order": "big-endian",
+    "fields": [
+      {
+        "byte_offset": 0,
+        "width": 1,
+        "name": "kind",
+        "csharp": "Kind",
+        "meaning": "which message this is - see message_kinds",
+        "status": "MEASURED",
+        "evidence": "ChatMessageGoldenBytesTests pins the encoding both directions",
+        "width_bits": 8,
+        "c_type": "uint8_t",
+        "bindings": {
+          "c": {
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "byte_offset": 1,
+        "width": 1,
+        "name": "nickname_length",
+        "csharp": "Nickname",
+        "meaning": "how many ASCII bytes of nickname follow. Zero is legal and means the message carries no name.",
+        "status": "MEASURED",
+        "evidence": "ChatMessageGoldenBytesTests; a /who request carries kind 11 with an empty name field",
+        "width_bits": 8,
+        "c_type": "uint8_t",
+        "bindings": {
+          "c": {
+            "name": "nickname_length"
+          }
+        }
+      }
+    ],
+    "minimum_body_length": 4,
+    "minimum_body_length_note": "kind, nickname length, and the two-byte text length. A message with neither a name nor text is four bytes.",
+    "bindings": {
+      "c": {
+        "struct": "chat_message_prefix"
+      }
+    },
+    "variable_part_starts_at_byte": 2,
+    "variable_part_note": "Not a field. After the prefix come nickname_length bytes of ASCII nickname, then a TWO-byte big-endian text length, then that many bytes of ASCII text. A generator must emit a walker, not a struct overlay."
+  },
+  "message_kinds": {
+    "csharp_enum": {
+      "type": "NDInsight.Sintran.Xmsg.Chat.ChatMessageKind",
+      "is_flags": false,
+      "completeness": "EVERY member of this enum must appear here, and every entry here must exist in the enum. The test checks BOTH directions - a registry that is merely a subset is how code and documentation drift apart. This one matters more than most: the decoder bound has been left behind TWICE, and a kind the decoder does not know is dropped in SILENCE."
+    },
+    "direction_note": "Only Join and Say and their siblings travel from the client; everything else travels from the server. Join is the ONLY message addressed by NAME, so it is the only one that goes through XROUT - and it is what costs the server a seat.",
+    "values": [
+      {
+        "name": "None",
+        "value": "0",
+        "meaning": "not a valid message - guards against a zeroed buffer being read as a real one",
+        "status": "MEASURED",
+        "evidence": "ChatMessage.TryDecode rejects it"
+      },
+      {
+        "name": "Join",
+        "value": "1",
+        "meaning": "client to server: let me into the room, and know me by this nickname",
+        "status": "MEASURED",
+        "evidence": "two-user run proved on D100, 2026-08-18"
+      },
+      {
+        "name": "Welcome",
+        "value": "2",
+        "meaning": "server to client: you are in. Sent to the caller's own address, learned from the arrived join, so everything after it flows port to port. THE TEXT NOW CARRIES THE MACHINE THE CLIENT IS ON - 'D100', or the name if one has been set. It was always EMPTY and the client ignored it, so filling it in is backward compatible in both directions: an older client reads a length and does nothing with what follows, and an older server sends nothing so a new client shows the nickname alone. A CLIENT HAS NO OTHER WAY TO KNOW THIS. It has no system number and nothing in the join tells it; /map says so but in a sentence written for a person, and parsing prose for a fact is how a client ends up confidently wrong.",
+        "status": "MEASURED",
+        "evidence": "two-user run proved on D100"
+      },
+      {
+        "name": "Reject",
+        "value": "3",
+        "meaning": "server to client: refused, with a reason",
+        "status": "MEASURED",
+        "evidence": "XRBUS busy-try-later observed under the 20-client join burst, 2026-08-19"
+      },
+      {
+        "name": "Say",
+        "value": "4",
+        "meaning": "client to server: say this to the room",
+        "status": "MEASURED",
+        "evidence": "two-user run proved on D100"
+      },
+      {
+        "name": "Said",
+        "value": "5",
+        "meaning": "server to clients: somebody said something",
+        "status": "MEASURED",
+        "evidence": "two-user run proved on D100"
+      },
+      {
+        "name": "Leave",
+        "value": "6",
+        "meaning": "client to server: I am going",
+        "status": "MEASURED",
+        "evidence": "/quit path on D100"
+      },
+      {
+        "name": "Joined",
+        "value": "7",
+        "meaning": "server to clients: somebody entered the room",
+        "status": "MEASURED",
+        "evidence": "two-user run proved on D100"
+      },
+      {
+        "name": "Left",
+        "value": "8",
+        "meaning": "server to clients: somebody left the room",
+        "status": "MEASURED",
+        "evidence": "two-user run proved on D100"
+      },
+      {
+        "name": "Rename",
+        "value": "9",
+        "meaning": "member to server: know me by a different name from now on. A REQUEST, not a statement - it can be refused for the same reason a join can, because somebody already answers to that name.",
+        "status": "MEASURED",
+        "evidence": "/nick proved on D100, 2026-08-19"
+      },
+      {
+        "name": "Renamed",
+        "value": "10",
+        "meaning": "server to room: somebody is now known by a different name. Carries BOTH names, because a client showing a transcript has the old one on screen and could not otherwise connect the two. PLANC calls this kRenOk, not the obvious kRenamed: names are unique in only SEVEN characters across a BRF EXPORT/IMPORT, where kRename and kRenamed both read KRENAME and the linker would silently fold them into one. The wire number is unchanged and always was.",
+        "status": "MEASURED",
+        "evidence": "/nick proved on D100"
+      },
+      {
+        "name": "Who",
+        "value": "11",
+        "meaning": "client asks who is in the room; server answers the asker alone with the member names",
+        "status": "MEASURED",
+        "evidence": "/who proved on D100 2026-08-19 - 'CHAT: in (LOBBY): OLAV'"
+      },
+      {
+        "name": "AdminStatus",
+        "value": "32",
+        "meaning": "CHAT-MON to server: report what you are doing. Arrives on the COMMAND port, not CHAT-LOBBY, so it spends no seat.",
+        "status": "INFERRED",
+        "evidence": "phase A of CHAT-FEDERATION-DESIGN.md - declared here before it is built, which is what this registry is for. Not yet observed on a wire."
+      },
+      {
+        "name": "AdminStatusReply",
+        "value": "33",
+        "meaning": "server to CHAT-MON: the answer, as readable text in the text field. Text rather than a struct because the set of things worth reporting grows with every phase, and a text answer does not change the wire each time.",
+        "status": "INFERRED",
+        "evidence": "phase A - not yet observed on a wire"
+      },
+      {
+        "name": "AdminStop",
+        "value": "34",
+        "meaning": "CHAT-MON to server: shut down cleanly. The point is a stop that does not need STOP-TERMINAL, NOT releasing the CHAT-LOBBY name - SINTRAN already clears that on termination, measured 2026-08-18.",
+        "status": "INFERRED",
+        "evidence": "phase A - not yet observed on a wire"
+      },
+      {
+        "name": "AdminStartTrunk",
+        "value": "35",
+        "meaning": "CHAT-MON to server: trunk to the system named in the TEXT, as decimal digits. The server adds a peer row, greets it with a TrunkHello, and answers AdminStatusReply carrying readable text. CONFIGURATION, so it is an admin kind on the command port - seeing how the network is wired (Map) is not the same right as rewiring it. A missing or non-numeric argument is refused BY THE SERVER, deliberately: one place decides what a valid trunk argument is, rather than two that can disagree.",
+        "status": "BUILT, NOT YET OBSERVED ON A WIRE",
+        "evidence": "CHATSV.PLNC addPeer / CHATMON.PLNC START-TRUNK, 2026-08-22. Both compile clean."
+      },
+      {
+        "name": "AdminStopTrunk",
+        "value": "36",
+        "meaning": "CHAT-MON to server: forget the peer named in the TEXT. Answers AdminStatusReply. Removing a trunk does not notify the peer - there is nothing to notify, because a trunk is not a connection; the other side simply stops hearing from us and times out to Down.",
+        "status": "BUILT, NOT YET OBSERVED ON A WIRE",
+        "evidence": "CHATSV.PLNC dropPeer / CHATMON.PLNC STOP-TRUNK, 2026-08-22. Both compile clean."
+      },
+      {
+        "name": "AdminListTrunks",
+        "value": "37",
+        "meaning": "CHAT-MON to server: every configured peer and what we believe about it, answered as AdminStatusReply text - '102 up 103 unknown'. UP, DOWN and UNKNOWN are three states and are kept apart on purpose: unknown usually means a trunk that was never answered, which is probably a configuration mistake, while down means a machine that was there and went away.",
+        "status": "BUILT, NOT YET OBSERVED ON A WIRE",
+        "evidence": "CHATSV.PLNC buildTrunks / CHATMON.PLNC LIST-TRUNKS, 2026-08-22. Both compile clean."
+      },
+      {
+        "name": "TrunkHello",
+        "value": "48",
+        "meaning": "SERVER TO SERVER, on the CHAT-TRUNK port. ONE KIND BOTH DIRECTIONS, and the TEXT'S FIRST BYTE says which way: 0 is 'I am here, are you?' and 1 is 'I am here, and I am answering you'. An ANSWER is never answered - without that byte two servers would greet each other for ever. Anything arriving from a peer marks it Up, INCLUDING an unsolicited Hello from a machine that was never trunked here, which is what lets whichever machine boots second bring the trunk up without the first noticing. The sender's system is taken from its magic number with XMPFM2P, not carried in the message, so there is nothing to go stale.",
+        "status": "PROVED LIVE ON D100 AND D102",
+        "evidence": "CHATSV.PLNC sendHello / markPeerUp. PROVED 2026-08-22: D100 greeted D102 over Ethernet and LIST-TRUNKS said 102 up. D102 was never told to trunk - the unsolicited hello brought it up, exactly as this entry predicted. A SECOND IMPLEMENTATION agrees: NDInsight.Sintran.Xmsg.Chat.ChatServer.HandleTrunkHello, tested against a real second kernel 2026-08-23."
+      },
+      {
+        "name": "TrunkWho",
+        "value": "49",
+        "meaning": "SERVER TO SERVER: who is on you? Empty text - the kind IS the question. Sent on EVERY hello, not only the first: a peer greeting us again has very likely restarted, so what we remember about its members is stale. Two kinds rather than one shared kind like TrunkHello, because the ask and the answer carry different things and a receiver would otherwise have to guess from the length.",
+        "status": "PROVED LIVE ON D100 AND D102",
+        "evidence": "CHATSV.PLNC. PROVED 2026-08-22: /who on D100 listed people on D102 and the other way round."
+      },
+      {
+        "name": "TrunkMembers",
+        "value": "50",
+        "meaning": "SERVER TO SERVER: the answer to TrunkWho - 'NAME/ROOM NAME/ROOM ...', space between people, slash between a person and their room. A MACHINE REPORTS ONLY ITS OWN MEMBERS: relaying what it heard about a third machine would let a wrong entry echo round a ring of machines with nothing to stop it. The receiver REPLACES everything it held for that peer, wholesale - merging would leave ghosts of people who left while the machine was away. The remote table is entirely derived and never authoritative; if it disagrees with the far end, the far end is right.",
+        "status": "PROVED LIVE ON D100 AND D102",
+        "evidence": "CHATSV.PLNC. PROVED 2026-08-22: /who showed TESTER@D100 on D102 and SYSTEM@D102 on D100 - the qualified names are the proof the members table crossed."
+      },
+      {
+        "name": "TrunkSaid",
+        "value": "51",
+        "meaning": "SERVER TO SERVER: one of my members spoke. NAME field is the speaker as their own machine knows them, unqualified; TEXT is 'ROOM/what they said', split at the FIRST slash because a message may contain slashes and a room name may not. THE RECEIVER ADDS THE '@Dnnn', taken from the magic the letter arrived with - a speaker cannot forge the machine they are on. Sent only to peers believed UP, after the local broadcast, so a slow or absent peer never delays the people in the room. NOT RELAYED ONWARD: a message received on a trunk is delivered locally and stops. That is complete for two machines; three needs a hop count and an origin, which is the rest of phase D and is not built. Forwarding blindly now would loop the moment a third machine appeared.",
+        "status": "PROVED LIVE ON D100 AND D102",
+        "evidence": "CHATSV.PLNC forwardSaid / deliverRemoteSaid. PROVED 2026-08-22: a line typed on D100 appeared on D102 qualified, and the other way round. A SECOND IMPLEMENTATION agrees: ChatServer.HandleTrunkSaid / ForwardOverTrunks, with the not-relayed-onward rule pinned by a test, 2026-08-23."
+      },
+      {
+        "name": "Map",
+        "value": "12",
+        "meaning": "a member asks to see the network, and the server's answer. ONE KIND BOTH DIRECTIONS, like Who: the client sends it with empty text, the server answers the ASKER ALONE with readable text - 'this is D100 - 102 up  103 down', or 'this is D100 - on its own' when there are no trunks. IT NAMES THIS MACHINE FIRST: a trunk list alone is ambiguous the moment there is more than one machine, and a user who has just been told they are 'ANNA@D102' needs to know which end they are looking from. The number comes from xmpfm2p on our own magic at start-up, so it is what the KERNEL says we are. READ-ONLY - it configures nothing, which is what separates it from the admin kinds: SEEING how the network is wired is not the same right as REWIRING it, and START-TRUNK/STOP-TRUNK stay on the admin port in CHAT-MON. ALLOWED WHILE UNJOINED, like Rooms - 'is the other machine even there' is exactly what somebody asks when the room looks empty, and that is often when they hold no seat either. Peers are two spaces apart, number and state one apart. Nothing is parsed by the client.",
+        "status": "PROVED LIVE ON D100",
+        "evidence": "Ronny, 2026-08-20: end users should be able to see how the network is configured. PROVED on D100 2026-08-22: /map answered - this is D100 - 102 unknown - and - this is D100 - on its own."
+      },
+      {
+        "name": "Rooms",
+        "value": "13",
+        "meaning": "a member asks which rooms exist, and the server's answer. ONE KIND BOTH DIRECTIONS like Who and Map: the client sends it with empty text, the server answers the ASKER ALONE with 'NAME(count)' per room, space separated - 'LOBBY(2) GENERAL(1)'. READ-ONLY. The room list is DERIVED FROM THE SEATS and not kept anywhere: a room exists exactly as long as somebody is in it, the same rule the broadcast follows, so there is no room table to go stale. A room that has a topic but nobody in it does NOT appear - it is not a place you can talk to. Allowed while UNJOINED, unlike Who: 'what rooms are there' is exactly what somebody asks after being refused a name, and the server needs no seat to answer it. NO UNREAD COUNT YET - see the_unread_count; that needs the history ids, which do not exist.",
+        "status": "PROVED LIVE ON D100",
+        "evidence": "Built into CHATSV.PLNC (buildRooms) and CHAT.PLNC (/list). PROVED on D100 2026-08-22: /list showed the rooms with their counts. CORRECTION 2026-08-22: this entry has always said Rooms is allowed while UNJOINED, and the handler sat BELOW the membership guard so it was silently dropped. Moved above the guard the day AllWho was built beside it - the registry described the intention and the code never matched it."
+      },
+      {
+        "name": "Topic",
+        "value": "14",
+        "meaning": "set a room's topic, and the room being told it changed. A ROOM kind - it changes what a room IS called about, not how the server is configured. ONE KIND BOTH DIRECTIONS: an EMPTY text is the QUESTION and is answered to the asker alone; a non-empty text SETS the topic and is BROADCAST to the whole room, because a topic change is a change to the room rather than an answer to one person. THE ANSWER PUTS THE ROOM NAME IN THE NAME FIELD, where a nickname normally sits - it is the one message that is about a place, and naming the room means the client does not have to remember which room it asked about, which matters because a join can land between the question and the answer. An empty text in the ANSWER means the room has NO topic, which the client says in words rather than printing a blank. Topics are held in a table of 8 keyed by room NAME, deliberately separate from the member table so a topic OUTLIVES the people who set it - that is exactly when it is doing its job. Topic text is capped at 64 bytes; the server truncates and the client refuses so its own user is told. A full table is REFUSED with 'too many rooms have topics' rather than silently dropped.",
+        "status": "PROVED LIVE ON D100",
+        "evidence": "Built into CHATSV.PLNC (buildTopic, findTopic, claimTopic) and CHAT.PLNC (/topic). PROVED on D100 2026-08-22: /topic both showed and set."
+      },
+      {
+        "name": "AllWho",
+        "value": "15",
+        "meaning": "SERVER TO CLIENT ONLY - the answer to Who when the asker holds NO SEAT. Text is every room and the people in it, ready to read: rooms separated by TWO spaces, people inside a room by one, remote people qualified - 'LOBBY: TESTER OLAV  GENERAL: ANNA@D102'. NOTHING IS PARSED by the client; a format nobody parses cannot be parsed wrongly, and this answer exists to be read by a person who has just been told they are nowhere. A SEPARATE KIND FROM Who ON PURPOSE: the client labels a Who answer with the room it believes it is in, so putting every room's people under that label would print something FALSE - the same defect Who itself had until it learned to compare rooms. The CLIENT NEVER SENDS 15: it sends Who either way and the SERVER picks the answer, because the server is the one that knows whether the asker has a seat. An EMPTY text is a real answer - nobody is anywhere - and the client says that in words. KNOWN GAP: the walk starts from local seats, so a room containing only remote people is missed; fixing that means walking the remote table for rooms too and de-duplicating across both, and it is not worth the code until somebody has actually sat alone in a room on another machine.",
+        "status": "PROVED LIVE ON D100",
+        "evidence": "Ronny, 2026-08-22: running /who when not in a room should list all rooms and all people in the rooms. PROVED on D100 2026-08-22: it answered - CHAT: everyone LOBBY: TESTER RONNY@D102."
+      },
+      {
+        "name": "History",
+        "value": "16",
+        "meaning": "SERVER TO CLIENT ONLY - one per remembered message, replayed to a joiner alone, oldest first, AFTER the welcome and BEFORE the room hears they joined. NOT the same shape as Said any more: seven bytes of ND CALENDAR TIME sit between the kind and the name - second, minute, hour, day, month, then the FULL year big-endian - in the same place a relay header sits on the trunk kinds. Speaker in the name field, what they said in the text, as before. THE TIME IS WHY: a replayed line used to be shown with the moment it was REPLAYED, so a whole backlog shared one timestamp and could not say what happened when (measured on D103 2026-08-28, every backlog line read 13:24 while the same line read 03:33 in the other machine's live room). It is the ND's own calendar as MN113 hands it back, never an epoch and never text: each ND runs its own clock, so a time means nothing away from the machine that produced it - the same reason history does not cross a trunk. An ALL-ZERO time means the line came out of a block written before the time was recorded, and the client leaves the column blank rather than inventing one. A DISTINCT KIND AND NOT Said, so a client can always tell history from live traffic - the moment it timestamps, beeps or counts unread, that difference matters, and replaying Said would have made those wrong later. The client marks it: '| OLAV: what did you think of it'. Held in a per-room ring, one 512-byte block per message at block (id MOD size), in (SYSTEM)CHATHn:DATA where n is the room's index in the topic table. NOT SENT ACROSS A TRUNK, deliberately - see the_history.",
+        "status": "PROVED ON D100",
+        "evidence": "2026-08-23: said two lines, /quit, rejoined, and the room answered '| TESTER: REAL-TEST-LINE-ONE' and '| TESTER: REAL-TEST-LINE-TWO' in order. The TIME field was added 2026-08-28 and is NOT yet proved on a machine - golden bytes pin the layout, the PLANC side is written, and nothing is rt-loaded."
+      },
+      {
+        "name": "Direct",
+        "value": "17",
+        "meaning": "Client to server: send this text to ONE person, who need not be in the sender's room or in any room. The name field carries the target as typed - a bare alias (RONNY) or one qualified by machine (D102!RONNY). The separator is '!' and NOT '@' deliberately: '@' is the short command prefix, so @RONNY@D100 would need a parser that counts at-signs, whereas machine!alias reads left to right as route-then-person and has precedent in UUCP addressing of the same era. A bare alias matching more than one person in the federation is REFUSED with DirectBad and the candidate list, never guessed at - two machines can each hold a RONNY long before they trunk to each other, so no global uniqueness rule could ever have been applied, and a direct message delivered silently to the wrong person is a privacy failure rather than an inconvenience.",
+        "status": "PROVED ON D100, ONE MACHINE",
+        "evidence": "handler in CHAT.PLNC and CHATSV.PLNC; CHAT-PLAN.md records Phase 3 proved on D100 2026-08-25. Cross-trunk delivery is kind 54 and is NOT covered by this."
+      },
+      {
+        "name": "Directed",
+        "value": "18",
+        "meaning": "Server to client: a direct message addressed to this user personally. The name field carries the sender QUALIFIED (D102!KARI) so that what is displayed is also what can be typed back. A client marks these so they cannot be mistaken for room traffic. PLANC calls this kDirGot, not kDirected, for the same seven-character reason - kDirect and kDirected both read KDIRECT. The wire number is unchanged.",
+        "status": "PROVED ON D100, ONE MACHINE",
+        "evidence": "handler in both programs; same Phase 3 run. PLANC calls it kDirGot."
+      },
+      {
+        "name": "DirectSent",
+        "value": "19",
+        "meaning": "Server to client: the direct message was delivered, and this is the QUALIFIED name it went to. Sent on every delivery, not only ambiguous ones. Refusing an ambiguous alias protects the sender when the collision is visible; this protects them when it is not - a machine that just went Down, a second RONNY who logged in a moment ago, a trunk that came back with a different user list. A wrong delivery becomes visible immediately instead of days later, for one line.",
+        "status": "PROVED ON D100, ONE MACHINE",
+        "evidence": "handler in both programs; same Phase 3 run."
+      },
+      {
+        "name": "DirectBad",
+        "value": "20",
+        "meaning": "Server to client: the direct message was NOT delivered, and why. The name field carries the target that was tried; the text carries the reason, and for an ambiguous alias the candidate list ('which RONNY? D100!RONNY, D102!RONNY'). Carrying the candidates is what makes the refusal usable rather than merely annoying. 'not logged in' is a refusal too: there is deliberately NO store and forward, because a message that waits for somebody is a mailbox - a different product with different rules, and SINTRAN already has mail for that.",
+        "status": "PROVED ON D100, ONE MACHINE",
+        "evidence": "handler in both programs; same Phase 3 run."
+      },
+      {
+        "name": "AdminInitialize",
+        "value": "38",
+        "meaning": "CHAT-MON to server: set how many messages a room remembers, or the machine default. INITIALIZE 20 sets the DEFAULT that new rooms pick up; INITIALIZE LOBBY 20 sets one room. The server splits the text at the first space, so one place decides what a valid argument is. REFUSED once a room already has history: the ring is block = id MOD size, so changing size moves where every existing id lands and the replay would return other messages in the wrong order while looking healthy.",
+        "status": "MEASURED",
+        "evidence": "ChatMessageKind.AdminInitialize = 38 and the CHAT-MON command list on D100, which prints INITIALIZE <room> <n>; added to the registry 2026-08-24 after the conformance test caught it missing"
+      },
+      {
+        "name": "TrunkRelay",
+        "value": "52",
+        "meaning": "Server to server: a line being RELAYED onward, carrying where it started and how many hops it has left. Layout is TrunkSaid's with a three-byte header in front: origin system big-endian, then hops remaining, then the usual speaker length, speaker, two-byte text length and ROOM/text. The ORIGIN must travel explicitly because the receiver's usual trick - qualify the speaker with the system the letter came from - names the RELAY on a forwarded message rather than the speaker's own machine. HOPS is decremented at each relay and the message dropped at zero, which is what stops a mesh reflecting for ever. A separate kind rather than extra fields on TrunkSaid, so that a server which has not been upgraded yet keeps handling its direct trunks unchanged while the machines are upgraded one at a time.",
+        "status": "PROVED LIVE D103 -> D100 -> D102",
+        "evidence": "relay header parsed in CHATSV.PLNC; recorded run shows a D103 line arriving on D102 qualified @D103 rather than @D100, with relay 2 on the middle machine and relay 0 on the ends."
+      },
+      {
+        "name": "TrunkRelayId",
+        "value": "53",
+        "meaning": "Server to server: a relayed line that ALSO carries the line number the ORIGIN stamped on it, so the same line arriving by two different paths is delivered once. Layout is TrunkRelay's with two more bytes: origin system big-endian, hops remaining, line id big-endian, then the usual speaker length, speaker, two-byte text length and ROOM/text. The id MUST be stamped by the machine the line was typed on and passed on unchanged - a relay that renumbered it would make one line look like two to any node reachable by more than one path, which is the exact fault this kind prevents. A SEPARATE kind rather than a longer TrunkRelay header because these machines are upgraded one at a time: a server that had not been upgraded would read the two extra bytes as a name length and a name and hand its users garbage, whereas a kind it does not know it simply ignores.",
+        "status": "PROVED LIVE - the dedup counter moved",
+        "evidence": "recorded run over the D100/D102/D103 triangle: dupe went 0 to 1 while the line appeared ONCE. The counter is the evidence - one line on screen is also what a single delivery looks like."
+      },
+      {
+        "name": "TrunkDirect",
+        "value": "54",
+        "meaning": "Server to server: a direct message being carried across a trunk. It reuses TrunkRelayId's FIVE-BYTE HEADER - origin system big-endian, hops remaining, line id big-endian - because a direct message two machines away must be relayed and de-duplicated in exactly the same way a room line is, and a second mechanism would mean two places to get hop counting wrong. It also reuses TrunkSaid's text trick: TrunkSaid packs ROOM/message, this packs TARGET/message, which leaves the name field free to carry the SENDER - the thing the receiver has to display. The receiving server looks the target alias up in its own table and delivers, or relays onward if the addressed machine is not a direct neighbour.",
+        "status": "BUILT, NOT YET OBSERVED ON A WIRE",
+        "evidence": "handler present in CHATSV.PLNC, but no recorded run of a direct message crossing a trunk. CHAT-PLAN.md still lists cross-machine private messages as the open half of Phase 3."
+      },
+      {
+        "name": "TrunkDirectBad",
+        "value": "55",
+        "meaning": "Server to server: a direct message could NOT be delivered at the far end, and this carries the refusal back to the machine the sender is on. It reuses TrunkDirect's FIVE-BYTE HEADER - origin system big-endian, hops remaining, line id big-endian. **THE ORIGIN IS THE MACHINE THAT COULD NOT DELIVER, not the sender's machine** - an earlier draft of this entry said the opposite and writing the code showed it was wrong. Every other kind uses that field for the machine the line was TYPED on, and lineIsNew dedups on the pair (origin, id), so a refusal we compose is OURS. Nothing routes by it: the refusal reaches the sender's machine because sendToName is told where to put it. THE ID IS THE FAILED MESSAGE'S, passed straight through, which is what lets the far end say WHICH message - and is why the id has to be handed to takeRemDirect rather than left in handleMessage where it is parsed. The name field holds the SENDER, the person to be told. The text is TARGET/reason, laid out exactly as DirectBad's already is, so the receiving server hands it to the local path it already has and THE CLIENT NEEDS NO CHANGE - a person sees the same sentence in the same shape whether the failure was on their own machine or two hops away. WITHOUT THIS A DM ACROSS A TRUNK VANISHES IN SILENCE: takeRemDirect said so in its own comment - the sender was already told DirectSent by their own server, so a person who logged out, or renamed, in the gap between the two ends agreeing loses the message with nobody told. That was written for a logout race; a rename that does not propagate makes the two ends disagree permanently and turns a narrow race into a standing hole. A SEPARATE KIND rather than a flag on TrunkDirect, for the reason every kind here is separate: these machines are upgraded one at a time, and a server that does not know 55 IGNORES it - exactly today's behaviour, so nothing regresses. WHAT IT DOES NOT FIX: the sender is found by NAME at the origin, so somebody who renames in the window between sending and the refusal arriving is not found and the refusal is dropped. Closing that needs an identity that survives a rename, deliberately not part of this change.",
+        "status": "IMPLEMENTED IN PLANC, NOT COMPILED",
+        "evidence": "CHATLIB kTrkDBad + trHLen=6; CHATSV sendTrkBad builds it and takeRemBad turns it back into a local kDirBad; CHATTST checks the header length and the number. All seven sources lint clean. NOT COMPILED and nothing run on a machine."
+      },
+      {
+        "name": "AdminSetName",
+        "value": "39",
+        "meaning": "CHAT-MON to server: what this machine calls itself. The text is the name, and an EMPTY text CLEARS it - a machine with no name falls back to D<number> everywhere, which is exactly how every machine behaved before names existed, so there is a way back from a typo that needs no restart. Answered with AdminReply like every other admin verb, so CHAT-MON needs no new decoding. A NAME IS ONLY A LABEL ON A NUMBER and that is the property to protect: which machine a message came from is still decided by the sender's magic, which the kernel supplies and no sender can choose. So a machine may call itself anything and still cannot claim to BE another machine. The name reaches the other machines on the TRUNK HELLO (kind 48), appended after the direction byte that was always there - and the old Hello handler reads that first byte and nothing else, so an un-upgraded server ignores the name instead of breaking. Same trick as TrunkRelay, and it is what lets three running machines be upgraded one at a time. The name is NOT written to disk: it belongs in the machine's boot mode file beside START-TRUNK, which already drives CHAT-MON.",
+        "status": "MEASURED",
+        "evidence": "ChatMessageKind has no entry yet - this kind is PLANC-only so far, and the C# decoder bound has NOT been moved. Built in CHATSV.PLNC (kAdmName) and CHATMON.PLNC (SET-NAME)."
+      },
+      {
+        "name": "AdminLockPeers",
+        "value": "40",
+        "meaning": "CHAT-MON to server, on the ADMIN port: learn no NEW peers. A server adds any system that reaches its trunk port to its peer table, which is what lets a lab be set up without naming every machine, and is the default. It also means the server believes whatever that system says about who is speaking on it - a trunk line is delivered as NAME@thatsystem - so this is how an operator says the network is now complete. It does NOT drop peers already known: they were learned before the line was drawn, and cutting live trunks is not what 'take no more' means. STOP-TRUNK removes a peer. Deliberately not saved to disk - a server that came back from a reboot silently refusing its own trunks would be a worse failure than the one this prevents. PLANC calls it kAdmLock.",
+        "status": "BUILT, NOT YET OBSERVED ON A WIRE",
+        "evidence": "handler in CHATSV.PLNC guarded by fromAdmin; verb LOCK-PEERS in CHATMON.PLNC. Neither has been compiled or run at the time of writing."
+      },
+      {
+        "name": "AdminOpenPeers",
+        "value": "41",
+        "meaning": "The other half of kind 40: learn any system again. Answered with AdminStatusReply like every other admin verb, so CHAT-MON needs no new decoding. Two kinds rather than one with an argument, because every other admin verb here is its own number and a verb whose meaning depends on parsing its text is the one that gets typed wrong. PLANC calls it kAdmOpen.",
+        "status": "BUILT, NOT YET OBSERVED ON A WIRE",
+        "evidence": "handler in CHATSV.PLNC guarded by fromAdmin; verb OPEN-PEERS in CHATMON.PLNC. Neither has been compiled or run at the time of writing."
+      },
+      {
+        "name": "AdminDropMember",
+        "value": "42",
+        "meaning": "CHAT-MON to server, on the ADMIN port: free the named member's seat and tell NOBODY - no kLeft to the room, no tellMbrs to the peers. A TEST VERB, and the only way to reach TrunkDirectBad (55) on purpose. That refusal fires when this machine is asked to deliver a private message to somebody a PEER still believes is seated here, and every ordinary way of ending a session keeps the two machines in step: /quit sends kLeave which broadcasts kLeft and calls tellMbrs; /nick crosses the trunk so the peer follows the new name; an RT-load empties the table but the orphaned client rejoins; and a peer restart makes the other side purge what it knew. All four were measured against D100 and D102 on 2026-08-30 and every one self-healed, so every refusal came back as the LOCAL one and the trunk path never ran. Answered with AdminStatusReply like every other admin verb, so it costs no new decoding. PLANC calls it kAdmDrop.",
+        "status": "BUILT, NOT YET OBSERVED ON A WIRE",
+        "evidence": "handler in CHATSV.PLNC guarded by fromAdmin, freeing memberUsed and doing nothing else; verb DROP-MEMBER in CHATMON.PLNC."
+      },
+      {
+        "name": "AdminListMembers",
+        "value": "43",
+        "meaning": "CHAT-MON to server, on the ADMIN port: list who is seated right now, and which room. The other half of AdminDropMember (42) - that acts on a seat, this shows them. Carries no argument, so it travels like AdminListTrunks (37) rather than carrying text. Reads the same memberName/memberLen/mbrRoom tables DROP-MEMBER acts on, so the listing is never a stale copy of what DROP-MEMBER can reach. One seat per line, name padded to maxNameLen+1 so the room column lines up, same column discipline as AdminListTrunks. Answered with AdminStatusReply like every other admin verb. PLANC calls it kAdmMbrs; the server-side builder is named buildSeats (not buildMembers) because buildMembers already existed for kTrkMbrs, the trunk 'who is on you' answer, and PLANC's single-pass compiler makes two routines sharing a name print a huge unrelated cascade rather than one clean error - see planc-lint.py's duplicate-routine-name check.",
+        "status": "PROVED LIVE",
+        "evidence": "MEASURED on D102 2026-08-31: LI-M with nobody seated answered 'no members'; with a test client joined as TESTLM in LOBBY it answered 'TESTLM           LOBBY'. LI-T (LIST-TRUNKS) re-checked immediately after and unaffected."
+      }
+    ],
+    "admin_note": "Kinds 32 and up are ADMIN, and they arrive on the server's command port rather than CHAT-LOBBY. They share this one enum, and therefore one decoder bound, on purpose: the bound has been left behind TWICE and an unknown kind is dropped in SILENCE, so a second enum would be a second place to forget. A server must still refuse an admin kind that arrives on the lobby port - sharing the vocabulary is not sharing the authority.",
+    "map_note": "Map is a ROOM kind, not an admin one, and that is deliberate. It arrives on CHAT-LOBBY from an ordinary member and costs a seat like any other room message, because the asker already holds one. It shows the topology and changes nothing; TRUNK and UNTRUNK stay in CHAT-MON on the command port. Seeing the configuration is not the same right as changing it.",
+    "numbering_note": "Room kinds occupy 1..31; ADMIN starts at the reserved base 32. The admin block began at 12 and the very next kind added - Map, a ROOM kind - would have landed at 15, inside it, and been misread as administrative. A reserved base lets both halves grow: TRUNK and UNTRUNK join admin later without pushing anything, and new room kinds fill 13..31. Renumbering was free while nothing was built and would not have been once two machines were talking."
+  },
+  "open_questions": [
+    {
+      "id": "C1",
+      "question": "Does a trunk carry ONE room or ALL rooms?",
+      "status": "UNKNOWN",
+      "evidence": "not built. One CHAT-TRUNK per machine pair carrying every room is simpler and matches what a telephone trunk is.",
+      "would_settle_it": "phase B - bring one trunk up and see whether a per-room trunk buys anything a room field does not"
+    },
+    {
+      "id": "C2",
+      "question": "How does a system-qualified name travel?",
+      "status": "UNKNOWN",
+      "evidence": "constraint 4 of the federation design: RONNY@D100 and RONNY@D102 are different people, and the 16-byte name field will not hold both parts. So the system probably travels as its own field - but the message layout above has one name field and no system field.",
+      "would_settle_it": "phase C, and it changes message_prefix - the golden-byte tests must move in the same commit"
+    },
+    {
+      "id": "C3",
+      "question": "Where do origin system and hop count live?",
+      "status": "UNKNOWN",
+      "evidence": "constraint 3 requires loop prevention from the FIRST trunked message. XMSG's own header already carries hops and our relay decrements it, so mirroring that shape is the obvious move - but a chat message forwarded over a trunk is a new body, not a forwarded datagram.",
+      "would_settle_it": "phase D - three machines, one pair reachable only through the third, and a message that must arrive exactly once"
+    },
+    {
+      "id": "C4",
+      "question": "What frees a remote member's seat when the machine holding half a room goes away?",
+      "status": "UNKNOWN",
+      "evidence": "phase E. The answer decides whether membership is soft state, re-advertised periodically, or hard state with an explicit leave. Soft state is more forgiving on a network where a link can sit half-open - which we have measured after a hard kill.",
+      "would_settle_it": "stop a peer server mid-conversation and watch what the other side does"
+    }
+  ],
+  "flows": {
+    "join_and_say": {
+      "title": "A client joins a room and says something",
+      "summary": "The whole client path. Only the first step goes through XROUT; everything after it is port to port.",
+      "proved": "two users at once on D100, 2026-08-18",
+      "actors": [
+        "client",
+        "XROUT",
+        "server"
+      ],
+      "steps": [
+        {
+          "from": "client",
+          "to": "XROUT",
+          "msg": "Join",
+          "note": "the room is known by NAME, not address - this is the only chat message that is"
+        },
+        {
+          "from": "XROUT",
+          "to": "server",
+          "msg": "Join",
+          "note": "forwarding SPENDS one of the server's free connections"
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "msg": "Welcome",
+          "note": "sent to the address read OFF the arrived letter - the server is never told it separately"
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "msg": "Say",
+          "note": "direct, port to port; XROUT is out of the picture"
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "msg": "Said",
+          "note": "fanned out to every member of the room"
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "msg": "Leave",
+          "note": "or just terminate - SINTRAN clears the port either way"
+        }
+      ]
+    },
+    "rename": {
+      "title": "A member changes nickname",
+      "summary": "A request, not a statement: the server can refuse it for the same reason it refuses a join.",
+      "proved": "/nick on D100, 2026-08-19 - BJORN became OLAV and the name survived a restart via CHAT:CNFG",
+      "actors": [
+        "member",
+        "server",
+        "room"
+      ],
+      "steps": [
+        {
+          "from": "member",
+          "to": "server",
+          "msg": "Rename",
+          "note": "carries the wanted name"
+        },
+        {
+          "from": "server",
+          "to": "room",
+          "msg": "Renamed",
+          "note": "carries BOTH names, so a client holding a transcript can connect the old to the new"
+        }
+      ]
+    }
+  },
+  "the_room_model": {
+    "decision": "ONE PORT. The room is a FIELD IN THE MESSAGE, not a port name. Every client message goes to CHAT-LOBBY and the server keeps the room table.",
+    "decided_by": "Ronny, 2026-08-20: 'why the fuck would a room be a different named port. why are you not sending all over the same fucking port?'",
+    "what_it_replaced": "The client built the port name as 'CHAT-' + the short room name and asked XROUT for THAT - see setRoom in CHAT.PLNC, and the 2026-08-19 measurement that /join needed the CHAT- prefix. So each room was a separate NAMED PORT.",
+    "why_that_was_wrong": [
+      "The set of rooms became XROUT's data rather than the server's, and there is no discovery call that returns it - XMPFLMP hands back only the calling task's own ports. That made /list impossible to answer honestly.",
+      "Every room needed a server holding that port, so a room was not a cheap thing to create.",
+      "Seats are counted per connection port, so seat accounting fragmented across rooms instead of being one room-server's business.",
+      "Federation got much harder: a room spanning machines meant the SAME NAME registered on two systems, which is a name collision rather than shared state."
+    ],
+    "how_it_happened": "Join is the only message addressed by NAME, so the room name was reused as the port name. Expedient, never designed.",
+    "consequences_to_build": [
+      "Join carries the room name in its fields; the client stops building a port name from it.",
+      "The server holds a room table and routes Say/Said within a room.",
+      "Rooms becomes a read of that table. CREATE-ROOM becomes an entry in it.",
+      "A federated room is that table replicated over a trunk - ordinary shared state, not an XROUT name fight.",
+      "Rename the port to *CHAT everywhere - CHATSV opens it, the client addresses it, CHAT-MON's command port sits beside it. CHAT-LOBBY stops existing."
+    ],
+    "status": "DECIDED, NOT YET BUILT - the client and server both still do it the old way.",
+    "the_port_name": "*CHAT. DECIDED by Ronny, 2026-08-20, choosing it over *NDCHAT and *CHAT-SERVER. Every service on the machine is starred and short - *FA-SERVER, *XFTRA, *COSPO, *TADADM, *XM-FIDO, *FA-FSA - and the chat server is one of them, so it follows the same convention. *NDCHAT was the runner-up and was rejected because the reentrant client is already installed as NDCHAT: the same word would then name two different things, the port and the user's command, and a log line mentioning both would read ambiguously. CHAT-LOBBY is retired outright. It was never a service name - it was a ROOM name doing duty as one, which is the same mistake as the port-per-room model and dies with it. There is one port, it is called *CHAT, and LOBBY goes back to being an ordinary room in the table."
+  },
+  "the_history": {
+    "decision": "The server keeps a per-room history and replays it to somebody who joins, so a new arrival sees what was just said instead of an empty screen.",
+    "decided_by": "Ronny, 2026-08-20.",
+    "how_many": "A CONSTANT, default around 50 messages per room, CONFIGURABLE PER ROOM - settable by CHAT-MON, or by whoever creates the room from the chat program itself. Not a hard-coded 50 buried in the source.",
+    "where_it_lives": "A file per room, so it survives the server being stopped and started. That is the point of caching it rather than holding it in memory.",
+    "open": [
+      "WHAT the file is called and where it lives - a SINTRAN file per room needs a name derived from the room name, and room names are user-chosen. Names are limited and a user-chosen room name may not be a legal or unique file name. Settle this before building.",
+      "WHETHER the replay is the same Said messages or a distinct kind. Replaying Said is simplest and the client already renders it, but then a client cannot tell history from live traffic - which matters if it timestamps or beeps. Decide deliberately.",
+      "WHAT happens when the file reaches the limit - a ring that overwrites the oldest is the obvious shape and matches 'keep the last N'.",
+      "WHETHER history crosses a trunk in phase C or D. A federated room's history living on one machine only is a surprise worth deciding rather than discovering."
+    ],
+    "status": "BUILT AND PROVED ON D100, 2026-08-23. Said two lines, quit, rejoined, both replayed oldest first and marked. Still to do: INITIALIZE n from CHAT-MON to set a room's size, and the latest-id in the Rooms reply that the unread count needs.",
+    "prerequisite_dissolved": "The old note said this DEPENDS ON a one-port room table, because rooms are DERIVED from the seats (buildRooms walks them) and there is no per-room anything. That prerequisite is GONE: the TOPIC table is already a room table in everything but name - a fixed 8 entries keyed by room NAME, with findTopic and claimTopic to look up and allocate. History uses the same shape and the same 8 slots. A room that has a topic or a history is a room that has an entry; a room with neither needs no storage. No new structure, and the two cannot disagree about what a room is.",
+    "answers": {
+      "file_name": "DERIVED FROM THE TABLE INDEX, NEVER FROM THE ROOM NAME: CHATH1:DATA .. CHATH8:DATA. Room names are chosen by users and a SINTRAN file name is short, case-folded and must be unique - deriving one from arbitrary text is a source of collisions and illegal names with no good failure mode. The index is already the thing that identifies a room in the table, it is guaranteed legal and unique, and the name-to-index mapping lives in exactly one place. The cost is that the files are not self-describing on disk; the room name is written in the file's own first record to pay that back.",
+      "replay_kind": "A DISTINCT KIND, not Said. Replaying Said is less code and the client already renders it, but then a client CANNOT TELL history from live traffic - and the moment it timestamps, beeps, or counts unread, that difference matters. Choosing the cheap option here would be choosing to make those features wrong later.",
+      "when_full": "A RING THAT OVERWRITES THE OLDEST. It matches what was asked for - keep the last N - and it means the file has a FIXED SIZE decided when the room is created, so it can never grow without bound and never needs compacting.",
+      "crosses_a_trunk": "NO, AND DELIBERATELY. History is LOCAL to the machine that holds it. A federated room's history living on one machine only is a surprise, so it is written down rather than discovered: somebody joining on D102 sees what was said ON D102, not what D100 heard. Relaying history would mean deciding whose copy is authoritative, merging two rings by time across machines whose clocks differ (each ND runs its own), and bounding a replay that can now arrive from anywhere. That is a bigger design than the feature is worth today, and the same reasoning that keeps TrunkSaid from being relayed onward applies unchanged.",
+      "storage_shape": "ONE 512-BYTE BLOCK PER MESSAGE, N BLOCKS PER ROOM, AND THE RING IS block = id MOD N. Driven by what the machine actually offers, not by what would be tidy: the sequential calls this codebase already uses (MON50 open, MON1 byte in, MON2 byte out, MON43 close) CANNOT overwrite in place, so a ring built on them would mean rewriting the whole file - either on every message, or on every N with a compaction step. ReadFromFile (RFILE 117B) and WriteToFile (WFILE 120B) are random and BLOCK-ADDRESSED: 512 bytes, first block is 0, 'the file must be opened for random read access', and -1 means the next block. So one message per block makes an append a SINGLE WriteToFile at block (id mod N) - no read-modify-write, no compaction, ever, and the file has a fixed size from the day the room is created. The cost is space: a 200-byte message in a 512-byte block, 50 blocks a room, 8 rooms - about 200KB total, which is nothing on this disk. Paying disk to remove an entire class of failure is the right trade here.",
+      "the_id": "A per-room counter that only ever goes UP, stored in the room's table entry and in block 0 of its file. It is what makes 'block = id mod N' work, and it is the SAME id the unread count needs (see the_unread_count: the server reports the room's latest id and the client subtracts). One number, two features - so it must be right."
+    }
+  },
+  "the_unread_count": {
+    "question": "/list should show the number of UNREAD messages per room. Who counts them?",
+    "decision": "THE SERVER REPORTS THE ROOM'S LATEST ID; THE CLIENT SUBTRACTS.",
+    "why": "The alternative is for the server to know each client's read position, which means keeping per-client state for every room a client has ever visited - state that must be stored, aged out, and kept correct across a client that never comes back. The client already stores its anchor per room for the history sync (see the_history), so it has everything it needs; the server only has to say where the room has got to.",
+    "consequences": [
+      "The Rooms reply carries, per room: name, topic, and the room's LATEST message id.",
+      "The client computes unread from its own stored anchor. A room it has never visited has no anchor, so every message is unread - which is the right answer.",
+      "The server keeps NO per-client state, so nothing has to be aged out and nothing goes stale.",
+      "A client with no local cache yet still gets a correct count, because the count comes from the anchor rather than from what it happens to hold."
+    ],
+    "status": "DECIDED, NOT BUILT"
+  }
+}

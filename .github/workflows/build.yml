@@ -1,0 +1,96 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel an older run of the same PR when a new push arrives; never cancel a run on main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  host-linux:
+    name: Linux ${{ matrix.cc }} ${{ matrix.flavour }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cc: gcc
+            flavour: release
+            extra: -DCMAKE_BUILD_TYPE=Release
+          - cc: clang
+            flavour: release
+            extra: -DCMAKE_BUILD_TYPE=Release
+          - cc: gcc
+            flavour: sanitizers
+            # ASan + UBSan on the tests; undefined behaviour is fatal, not a report.
+            extra: -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS=-fsanitize=address,undefined\ -fno-omit-frame-pointer\ -fno-sanitize-recover=undefined
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang
+        if: matrix.cc == 'clang'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang
+      - name: Configure
+        run: cmake -S src -B build -DCMAKE_C_COMPILER=${{ matrix.cc }} -DXMSG_BUILD_TESTS=ON -DXMSG_WERROR=ON ${{ matrix.extra }}
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  host-windows:
+    name: Windows MinGW gcc
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
+      - name: Configure
+        run: cmake -S src -B build -G Ninja -DXMSG_BUILD_TESTS=ON -DXMSG_WERROR=ON -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  gen-check:
+    name: Generated headers are current
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Regenerate and compare
+        run: python -I extras/tools/regen.py --check
+
+  style:
+    name: Formatting, banned functions, ASCII
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install clang-format
+        run: pip install clang-format
+      - name: clang-format (hand-written sources only; gen/ is generated)
+        run: |
+          files=$(find src extras/tests examples -type f \( -name '*.c' -o -name '*.h' \) -not -path '*/gen/*' 2>/dev/null || true)
+          if [ -n "$files" ]; then clang-format --dry-run --Werror $files; fi
+      - name: Banned functions and host calls inside the libraries
+        run: .github/scripts/banned.sh
+      - name: ASCII only, LF only, no tabs, no trailing whitespace
+        run: .github/scripts/ascii-check.sh

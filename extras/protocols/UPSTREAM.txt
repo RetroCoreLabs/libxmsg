@@ -1,0 +1,14 @@
+Vendored copy of the XMSG protocol registry.
+
+Source repository: RetroCoreLabs/RetroIO, folder src/DOC/protocols
+Source commit:     ab74b31d9f6a7abb41df7001af42057c1f36e492
+Copied:            2026-11-08
+
+The source of truth is the public NDInsight repository, folder SINTRAN/XMSG/DOC/protocols;
+RetroIO carries a copy and so does this repository. Do not edit the files here. To refresh:
+  python extras/tools/regen.py --from <path to RetroIO>/src/DOC/protocols
+which copies the registry, records the commit here and regenerates src/libxmsg/gen/*.h.
+
+Note 2026-11-08: generate_c.py here carries a fix (message_prefix is named from bindings.c.struct
+instead of a hard-coded fa_message_prefix) that is applied in the RetroIO working copy but not yet
+committed there. Once RetroIO commits it, re-run the refresh so the commit above moves forward.

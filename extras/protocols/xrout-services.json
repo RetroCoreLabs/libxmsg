@@ -1,0 +1,912 @@
+{
+  "meta": {
+    "title": "XROUT - the SINTRAN name and routing service",
+    "purpose": "How a name becomes an address, how a letter is forwarded, and the SEAT accounting that goes with it. The seat rule is here because getting it wrong costs nothing visible at the time and closes a service hours later.",
+    "authority": "This file and the C# must agree - the conformance tests assert the parts a machine can check.",
+    "layering": "XROUT requests ride as ordinary XMSG messages with the Route option set. See sintran-wire.json for the header.",
+    "created": "2026-08-17",
+    "one_line": "the name and routing service - and the seat count that decides if a service has room"
+  },
+  "status_values": {
+    "MEASURED": "Observed on the wire or against a live machine, with the evidence named.",
+    "INFERRED": "Follows from something measured, or read from the ND manuals, but not itself observed here.",
+    "UNKNOWN": "Copied or mirrored. Never computed or varied.",
+    "SUPERSEDED": "Believed once, disproved. Kept so it is not re-derived."
+  },
+  "the_seat_law": {
+    "summary": "XROUT holds a FREE-CONNECTION count for a registered connection port, forwards a letter only while it is above zero, and DECREMENTS IT ON FORWARD - before the receiver has seen a byte of the body.",
+    "status": "MEASURED",
+    "evidence": "the real file access server builds its 30 seats this way, captured; and ChatSeatAccountingTests reproduces the whole rule",
+    "consequences": [
+      {
+        "rule": "The seat belongs to the ARRIVAL, never to a kind of message.",
+        "why": "A letter carrying something other than the expected request, or a body too damaged to decode, never reaches a handler - so no handler can give the seat back. Settling seats per message kind leaks one every time.",
+        "found": "2026-08-11, by reading two independent implementations of one rule against each other"
+      },
+      {
+        "rule": "Keep the seat only if the arrival put somebody NEW in the room.",
+        "why": "'Became a member', not 'was accepted': a member sending a second letter spends a second seat and only one of them is theirs."
+      },
+      {
+        "rule": "A leaked seat is invisible when it happens.",
+        "why": "No error, no log line, nobody refused. The service is simply one seat smaller for ever, and it surfaces much later as XROUT turning requests away from a service that visibly has room."
+      }
+    ],
+    "marker": {
+      "field": "message type XMROU",
+      "meaning": "the ONLY thing telling a receiver that a seat was spent on this arrival",
+      "status": "MEASURED",
+      "evidence": "both sample servers in the COSMOS Programmer Guide (ND-60.164.3) refuse anything that is not XMROU - 'IF MSGTYPE >< XMROU THEN' in PLANC and the same test in FORTRAN - and each then reads the CLIENT's magic from the arrived message to reply directly",
+      "our_kernel": "XFFWD produces XMROU via XmsgKernel.ChooseType, which tests Forward FIRST because XFHIP and XFRRO are the same bit"
+    },
+    "the_return": {
+      "summary": "A SEAT COMES BACK WHEN THE PORT IS CLOSED, not when a message is handled. XROUT marks the port with 5PKOC when it spends a seat; the XMSG kernel sees that bit on close and KICKS XROUT, which does the restoring. No XSNSP is sent and nothing crosses the wire.",
+      "status": "MEASURED",
+      "carved": "2026-08-18",
+      "evidence": "XMSG-POFTABS-L03.SYMB, the port block definition, in ND's own words: 'SYMBOL 5PKOC=0  % KICK XROUT ON CLOSE (SET BY XROUT)' - bit 0 of the port status word XPSTA (word 1 of the port block). The kernel honours it in YCLOS=131306, the port-close routine: at ram:b30e 'BSKP ONE bit 0' on XPSTA, falling through to 'JPL [pool 0xb327]' = 0xb330 = 131460 = YKROU (kick XROUT) when the bit is SET, and skipping it when clear.",
+      "decode_cross_check": "The BSKP bit field prints as bit<<3 and the sub-operation is ZRO below 0o200, ONE at or above. Three decodes in the same routine land on three DEFINED bits of XPSTA: fa 85 = 0o175205 -> bit 0 = 5PKOC; fa 75 = 0o175165 -> bit 14 = 5PIMX; fa ad = 0o175255 -> bit 5 = 5PKIK. (MAC numbers are octal, so the symbol file's 5PIMX=16 is bit 14 and 5PACT=17 is bit 15.)",
+      "xpsta_bits": [
+        { "name": "5PKOC", "bit": 0, "meaning": "kick XROUT on close - SET BY XROUT when it spends a seat to deliver a connect letter", "status": "MEASURED", "evidence": "XMSG-POFTABS-L03.SYMB comment, and the test at YCLOS ram:b30e" },
+        { "name": "5PWAI", "bit": 2, "meaning": "a receive-with-wait has been done on this port", "status": "INFERRED", "evidence": "XMSG-POFTABS-L03.SYMB comment only" },
+        { "name": "5PROU", "bit": 3, "meaning": "this port is the routing port (XROUT)", "status": "INFERRED", "evidence": "XMSG-POFTABS-L03.SYMB comment only" },
+        { "name": "5PWAK", "bit": 4, "meaning": "filling an empty message queue will cause a wake-up", "status": "INFERRED", "evidence": "XMSG-POFTABS-L03.SYMB comment only" },
+        { "name": "5PKIK", "bit": 5, "meaning": "XROUT/COSROUT has been kicked (routing ports only)", "status": "MEASURED", "evidence": "XMSG-POFTABS-L03.SYMB comment, and a BSKP on it at YCLOS ram:b2ea" },
+        { "name": "5PIMX", "bit": 14, "meaning": "immediate execution of code at XPIMC on a chain attempt", "status": "MEASURED", "evidence": "XMSG-POFTABS-L03.SYMB comment, and a BSKP on it at YCLOS ram:b2db" },
+        { "name": "5PACT", "bit": 15, "meaning": "port active - YCLOS clears it at ram:b2d9", "status": "MEASURED", "evidence": "XMSG-POFTABS-L03.SYMB comment, and BSET ZRO bit 15 at YCLOS ram:b2d9" }
+      ],
+      "consequences": [
+        {
+          "rule": "A CLIENT of a connection port returns the seat by making the SERVER close its session port - which means finishing the conversation properly, not by sending anything seat-shaped.",
+          "why": "The client cannot touch the counter; only XROUT can, and only the kernel can tell it to. The client's lever is the teardown message that makes the server conclude the session.",
+          "found": "2026-08-18, carving cos-fa-serv-e04.prog and then the XMSG kernel"
+        },
+        {
+          "rule": "A SERVER that owns a connection port and does NOT close it per session must call XMPINFC (XSNSP) itself.",
+          "why": "5PKOC only fires on close. A long-lived server port that serves many sessions never closes, so nothing kicks XROUT and the count only ever falls. This is exactly the CHATSV case - it calls xmpinfc(0, myPort, 1, 0) - and it is why the FA server, which DOES close per session, needs no such call outside its initialisation.",
+          "found": "2026-08-18"
+        },
+        {
+          "rule": "A leak can be several hops upstream of the counter.",
+          "why": "Our FA client sent the server's own Close (07C0) instead of a client Release (0782). The server therefore never concluded the session, never closed the port, 5PKOC never fired and XROUT was never kicked. Three experiments aimed at the teardown frame's opcode and flags because the counter was the visible symptom; the fix was to make the server's close actually happen.",
+          "found": "2026-08-18, commits a6e8f047 and ec7f0772"
+        }
+      ]
+    }
+  },
+  "services": {
+    "note": "Service codes are DECIMAL here and octal in the ND manuals - the manual's XSRME=106 is 70. Mixing the two bases is an easy and silent error.",
+    "csharp": "NDInsight.Sintran.Xmsg.XroutService",
+    "values": [
+      {
+        "name": "XSNUL",
+        "value": 64,
+        "meaning": "do nothing - the no-op",
+        "status": "INFERRED",
+        "evidence": "ND-60.134.2 Communication Guide service table"
+      },
+      {
+        "name": "XSLET",
+        "value": 65,
+        "meaning": "deliver this letter to a service I only know by NAME. XROUT looks the name up, spends one of that service's free slots, and passes the letter on - after which the two sides talk directly and XROUT is out of the way",
+        "status": "MEASURED",
+        "evidence": "every chat join and FA connect; the forward that spends a seat"
+      },
+      {
+        "name": "XSNAM",
+        "value": 66,
+        "meaning": "claim a name for my port, so others can find me by asking for it instead of needing my address",
+        "status": "MEASURED",
+        "evidence": "our servers claim their names this way"
+      },
+      {
+        "name": "XSCNM",
+        "value": 67,
+        "meaning": "give my name back, so nobody is sent to a port that has closed",
+        "status": "MEASURED",
+        "evidence": "ChatServer.Close releases its name"
+      },
+      {
+        "name": "XSGNM",
+        "value": 68,
+        "meaning": "tell me the name registered for this address",
+        "status": "INFERRED",
+        "evidence": "service table"
+      },
+      {
+        "name": "XSGNI",
+        "value": 69,
+        "meaning": "tell me more about a registered name - who holds it and how much room it has",
+        "status": "INFERRED",
+        "evidence": "service table"
+      },
+      {
+        "name": "XSRME",
+        "value": 70,
+        "meaning": "find me the address of a named port on ANOTHER machine. Asked of our own XROUT, which does the asking onwards",
+        "status": "INFERRED",
+        "evidence": "Communication Guide section 4.4.2.9; manual gives it as octal 106"
+      },
+      {
+        "name": "XSGMG",
+        "value": 71,
+        "meaning": "give me the address behind this name",
+        "status": "INFERRED",
+        "evidence": "service table"
+      },
+      {
+        "name": "XSCMG",
+        "value": 72,
+        "meaning": "forget that address - one XROUT telling another that a port is gone. Privileged, and not something a normal program sends",
+        "status": "INFERRED",
+        "evidence": "Communication Guide section 4.4.2.11; octal 110"
+      },
+      {
+        "name": "XSDRN",
+        "value": 73,
+        "meaning": "record that a remote system exists and what number it has. This is what the DEF-REMOTE operator command does, and it is how D100 was taught that D19999 is us",
+        "status": "MEASURED",
+        "evidence": "used to define D19999 on D100"
+      },
+      {
+        "name": "XSDMC",
+        "value": 74,
+        "meaning": "record how to reach another machine - which link, and how far away it is",
+        "status": "INFERRED",
+        "evidence": "service table",
+        "alias_of": "XSDSY",
+        "alias_note": "SAME VALUE, two names. Both appear in the sources; neither is wrong."
+      },
+      {
+        "name": "XSDSY",
+        "value": 74,
+        "meaning": "record how to reach another machine - the same service as XSDMC, under a second name",
+        "status": "INFERRED",
+        "evidence": "service table",
+        "alias_of": "XSDMC",
+        "alias_note": "SAME VALUE as XSDMC - see there."
+      },
+      {
+        "name": "XSGMC",
+        "value": 75,
+        "meaning": "tell me what you know about that machine - can you reach it, and how",
+        "status": "INFERRED",
+        "evidence": "service table",
+        "alias_of": "XSGSY",
+        "alias_note": "SAME VALUE, two names."
+      },
+      {
+        "name": "XSGSY",
+        "value": 75,
+        "meaning": "tell me what you know about that machine - the same service as XSGMC. D100 answers this one live, and its reply carries a counter that changes each time, which is how we know we are talking to something real rather than a cache",
+        "status": "MEASURED",
+        "evidence": "answered live by D100; see the XSGSY echo-counter note",
+        "alias_of": "XSGMC",
+        "alias_note": "SAME VALUE as XSGMC - see there."
+      },
+      {
+        "name": "XSLKI",
+        "value": 76,
+        "meaning": "tell me about the links this machine has - what is connected and in what state",
+        "status": "INFERRED",
+        "evidence": "service table"
+      },
+      {
+        "name": "XSTIN",
+        "value": 77,
+        "meaning": "tell me the time, as this machine has it",
+        "status": "INFERRED",
+        "evidence": "service table"
+      },
+      {
+        "name": "XSTCL",
+        "value": 78,
+        "meaning": "Close tracing (privileged)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSTDC",
+        "value": 79,
+        "meaning": "Define tracing conditions (privileged)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSCRS",
+        "value": 80,
+        "meaning": "Create service (name, init no of SP's)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSNSP",
+        "value": 81,
+        "meaning": "New service point(s) (increment/decrement in SP's)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSGIN",
+        "value": 82,
+        "meaning": "Get information about name",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSDLO",
+        "value": 83,
+        "meaning": "Define local system (privileged)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSLEK",
+        "value": 84,
+        "meaning": "Send letter and kick if unavailable (privileged)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSNET",
+        "value": 85,
+        "meaning": "Start/stop gateway (network server) (privileged)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSSCI",
+        "value": 86,
+        "meaning": "Set crash information (privileged)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSGAT",
+        "value": 87,
+        "meaning": "Get/check attribute",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSDAT",
+        "value": 88,
+        "meaning": "Define/remove attribute (privileged)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSNSI",
+        "value": 89,
+        "meaning": "Get network server information (privileged)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSLIN",
+        "value": 90,
+        "meaning": "Get information about a link (privileged)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSPIN",
+        "value": 91,
+        "meaning": "Get information about named ports",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSLSY",
+        "value": 92,
+        "meaning": "Get information about a system (privileged)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSGSU",
+        "value": 93,
+        "meaning": "Get info about system utilization (privileged)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSCRM",
+        "value": 94,
+        "meaning": "Start/stop Cosmos routing manager (priv - COSROUT only!)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSGLI",
+        "value": 95,
+        "meaning": "Get information from link tables (priv - COSROUT only!)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSGSG",
+        "value": 96,
+        "meaning": "Get info about system generation variables (privileged)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      },
+      {
+        "name": "XSMAX",
+        "value": 96,
+        "meaning": "Maximum legal service value (alias of XSGSG)",
+        "status": "INFERRED",
+        "evidence": "the ND service table, via the summary on the enum member. Not driven against a machine here"
+      }
+    ],
+    "csharp_enum": {
+      "type": "NDInsight.Sintran.Xmsg.XroutService",
+      "is_flags": false,
+      "completeness": "EVERY member of this enum must appear here, and every entry here must exist in the enum. The test checks BOTH directions - a registry that is merely a subset is how code and documentation drift apart."
+    },
+    "bindings": {
+      "c": {
+        "enum": "xrout_service",
+        "prefix": "XROUT_",
+        "underlying_type": "uint16_t"
+      }
+    }
+  },
+  "connection_types": {
+    "csharp": "NDInsight.Sintran.Xmsg.XroutConnectionType",
+    "values": [
+      {
+        "name": "Unavailable",
+        "value": 0,
+        "status": "MEASURED",
+        "evidence": "returned for a system with no route"
+      },
+      {
+        "name": "Neighbour",
+        "value": 1,
+        "meaning": "the machine is on the same wire - we can talk to it without being told a path",
+        "status": "MEASURED",
+        "evidence": "an adjacent system answers without one"
+      },
+      {
+        "name": "Via",
+        "value": 2,
+        "meaning": "the machine is further away, and another machine passes traffic along for us",
+        "status": "MEASURED",
+        "evidence": "the 102-via-100-to-103 route-through captures"
+      },
+      {
+        "name": "ViaNetworkServer",
+        "value": 3,
+        "status": "UNKNOWN",
+        "evidence": "named in the sources; never observed on this lab"
+      },
+      {
+        "name": "Local",
+        "value": 4,
+        "status": "MEASURED",
+        "evidence": "our own system"
+      }
+    ],
+    "csharp_enum": {
+      "type": "NDInsight.Sintran.Xmsg.XroutConnectionType",
+      "is_flags": false,
+      "completeness": "EVERY member of this enum must appear here, and every entry here must exist in the enum. The test checks BOTH directions - a registry that is merely a subset is how code and documentation drift apart."
+    },
+    "bindings": {
+      "c": {
+        "enum": "xrout_connection_type",
+        "prefix": "XROUT_CONN_",
+        "underlying_type": "uint8_t"
+      }
+    }
+  },
+  "errors": {
+    "note": "There are far more of these than we produce. They are PEER-produced by nature: we need to NAME one when it arrives, not to invent it. Only the handful we act on are listed.",
+    "csharp": "NDInsight.Sintran.Xmsg.XroutError",
+    "values": [
+      {
+        "name": "XRSOK",
+        "value": 0,
+        "meaning": "it worked",
+        "status": "MEASURED",
+        "evidence": "every successful exchange"
+      },
+      {
+        "name": "XRUNN",
+        "value": 2,
+        "meaning": "nobody here has registered that name - either the service is not running, or the name is spelled differently",
+        "status": "MEASURED",
+        "evidence": "returned for a name never registered"
+      },
+      {
+        "name": "XRNSP",
+        "value": 4,
+        "meaning": "that service is full. Its free-slot count is zero, so XROUT will not forward another letter to it until somebody leaves",
+        "status": "MEASURED",
+        "evidence": "the room-full path; see the_seat_law"
+      },
+      {
+        "name": "XRUNM",
+        "value": 7,
+        "meaning": "that address means nothing here - the port it named has closed",
+        "status": "MEASURED",
+        "evidence": "delivery to a closed port"
+      },
+      {
+        "name": "XRNCO",
+        "value": 46,
+        "meaning": "there is no connection to work with",
+        "status": "MEASURED",
+        "evidence": "D100 answered APPEND-REMOTE-BATCH with it, task 30 - a NAMED refusal, which proves the path"
+      },
+      {
+        "name": "XRISN",
+        "value": 1,
+        "meaning": "Illegal service number",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRDDF",
+        "value": 3,
+        "meaning": "Another port already has this name",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRIPT",
+        "value": 5,
+        "meaning": "Illegal parameter type",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRMMP",
+        "value": 6,
+        "meaning": "Missing mandatory parameter",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRMTL",
+        "value": 8,
+        "meaning": "Too short message or resulting message too long",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRSMF",
+        "value": 9,
+        "meaning": "Standard message format not handled",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRPRV",
+        "value": 10,
+        "meaning": "Caller was not privileged",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRISY",
+        "value": 11,
+        "meaning": "Illegal system number parameter",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRNRO",
+        "value": 12,
+        "meaning": "No access to remote system",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRIIV",
+        "value": 13,
+        "meaning": "Illegal integer value",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRNEI",
+        "value": 14,
+        "meaning": "Cannot define route to a neighbour",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRNXM",
+        "value": 15,
+        "meaning": "Invalid service request - not available to current caller",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRILN",
+        "value": 16,
+        "meaning": "Illegal/Reserved Logical Unit Number (LUN) for link",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRNXL",
+        "value": 17,
+        "meaning": "No more Link Descriptors (XL-blocks) for start-link/netserver",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRNXD",
+        "value": 18,
+        "meaning": "Not enough resources (XD/XF/XM-Blocks) for start-link/netserver",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRNTR",
+        "value": 19,
+        "meaning": "No trace generated (no trace buffer available)'",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRTRA",
+        "value": 20,
+        "meaning": "Trace already active",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRTRP",
+        "value": 21,
+        "meaning": "Trace passive",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRTFE",
+        "value": 22,
+        "meaning": "Trace/dump file open error (see parameter 1)",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRTRT",
+        "value": 23,
+        "meaning": "Trace RT-prog (XTRACE) not found",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRTIS",
+        "value": 24,
+        "meaning": "Illegal trace system number",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRBLK",
+        "value": 25,
+        "meaning": "Bad link - open unsuccessful",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRSYD",
+        "value": 26,
+        "meaning": "Attempt to redefine local system no",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRNLS",
+        "value": 27,
+        "meaning": "No local system number defined",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRTRE",
+        "value": 28,
+        "meaning": "Too many remote names to this system",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRRNA",
+        "value": 29,
+        "meaning": "Old service calls (below 64) cannot go remote",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRBUS",
+        "value": 30,
+        "meaning": "Service points busy",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRNSE",
+        "value": 31,
+        "meaning": "This is not a service port",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRRPN",
+        "value": 32,
+        "meaning": "Remote port statically declared",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRUKS",
+        "value": 33,
+        "meaning": "Unknown remote system name or number",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRMFL",
+        "value": 34,
+        "meaning": "Remote system message table space full",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRROV",
+        "value": 35,
+        "meaning": "Remote task message space used up",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRRFU",
+        "value": 36,
+        "meaning": "Routing table full (too many systems)",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRNRB",
+        "value": 37,
+        "meaning": "No remote batch service available",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRURT",
+        "value": 38,
+        "meaning": "Unknown RT name",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRSNR",
+        "value": 39,
+        "meaning": "This server is not running",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRRND",
+        "value": 40,
+        "meaning": "Netserver: remote system is not defined",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRNNA",
+        "value": 41,
+        "meaning": "Netserver: network not available",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRISE",
+        "value": 42,
+        "meaning": "Netserver: internal server error",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRIRQ",
+        "value": 43,
+        "meaning": "Netserver: invalid request",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRNGA",
+        "value": 44,
+        "meaning": "XMSG not congfigurated with gateway code",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRRNL",
+        "value": 45,
+        "meaning": "Remote system not on same LAN",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRAMB",
+        "value": 47,
+        "meaning": "Ambiguous name",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRFFU",
+        "value": 48,
+        "meaning": "Friend system table full (too many friends)",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRNTA",
+        "value": 49,
+        "meaning": "Netserver: network temporarily not available",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRMTO",
+        "value": 50,
+        "meaning": "Netserver: message too old",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRCNR",
+        "value": 51,
+        "meaning": "COSMOS routing manager is not running",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRICR",
+        "value": 52,
+        "meaning": "COSMOS routing manager is already running",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRRID",
+        "value": 53,
+        "meaning": "Routing information defined (start/stop inhibited)",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRIRR",
+        "value": 54,
+        "meaning": "COSMOS routing manager: invalid request",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRILX",
+        "value": 55,
+        "meaning": "XRILX - Illegal link number parameter. SOURCE DISCREPANCY: present in XMSG-PL-VALUES-L.INCL (\"CONSTANT XRILX=55\") but ABSENT from XMSG-VALUES-L.SYMB, whose XROUT error range stops at XRIRR=54. The M-version include file that generated this enum has it, so the value 55 is kept",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      },
+      {
+        "name": "XRXXX",
+        "value": 16960,
+        "meaning": "Base for XROUT errors: 41100B",
+        "status": "INFERRED",
+        "evidence": "the ND error table, via the summary on the enum member. PEER-produced: we name these, we do not send them"
+      }
+    ],
+    "bindings": {
+      "c": {
+        "enum": "xrout_error",
+        "prefix": "XROUT_ERR_",
+        "underlying_type": "int16_t"
+      }
+    }
+  },
+  "open_questions": [
+    {
+      "id": "X1",
+      "question": "Is echoing the session token REQUIRED, or only observed?",
+      "status": "UNKNOWN",
+      "evidence": "unbroken through 0x01FF in captures; IXmsgServerTransport records the doubt",
+      "would_settle_it": "answer once without echoing and see whether the peer minds"
+    },
+    {
+      "id": "X2",
+      "question": "The XROUT random generator's seed cell",
+      "status": "UNKNOWN",
+      "evidence": "the cell's contents cannot be reproduced from the image we have; XmsgRandomGenerator says so",
+      "matters_because": "nothing we do depends on reproducing their sequence - it is recorded so the question is not re-opened"
+    }
+  ],
+  "flows": {
+    "find_a_service_by_name": {
+      "title": "Reaching a service you only know by name",
+      "summary": "The one thing XROUT is for, and where the seat is spent.",
+      "proved": "every chat join and every FA connect in this repository",
+      "actors": [
+        "client",
+        "XROUT",
+        "server"
+      ],
+      "steps": [
+        {
+          "from": "server",
+          "to": "XROUT",
+          "op": "XSNAM",
+          "note": "at start-up: claim the name, and say how many callers can be held at once"
+        },
+        {
+          "from": "client",
+          "to": "XROUT",
+          "op": "XSLET",
+          "note": "deliver this to that name"
+        },
+        {
+          "alt": "the name is registered and has a free slot",
+          "steps": [
+            {
+              "from": "XROUT",
+              "to": "server",
+              "op": "XSLET",
+              "note": "the free count DROPS HERE, before the server has seen the body"
+            },
+            {
+              "from": "server",
+              "to": "client",
+              "msg": "XRSOK",
+              "reply": true,
+              "note": "the server answers the client DIRECTLY - it learned the address from the arrival"
+            }
+          ],
+          "else": "no such name, or it is full",
+          "else_steps": [
+            {
+              "from": "XROUT",
+              "to": "client",
+              "msg": "XRUNN",
+              "reply": true,
+              "note": "or XRNSP when the slots are all taken"
+            }
+          ]
+        },
+        {
+          "loop": "from here on",
+          "steps": [
+            {
+              "from": "client",
+              "to": "server",
+              "msg": "XRSOK",
+              "note": "port to port; XROUT is not involved again"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "XROUT",
+          "op": "XSCNM",
+          "note": "at shutdown: give the name back"
+        }
+      ],
+      "gotchas": [
+        {
+          "name": "The slot is spent on FORWARD.",
+          "detail": "Not on acceptance. If the server does not seat the caller, IT must give the slot back - nobody else will."
+        },
+        {
+          "name": "A leaked slot is silent.",
+          "detail": "The service just becomes one caller smaller, for ever, and refuses people hours later for no visible reason."
+        }
+      ]
+    }
+  }
+}

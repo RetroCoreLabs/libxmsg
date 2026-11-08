@@ -1,0 +1,517 @@
+{
+  "meta": {
+    "title": "SINTRAN XMSG wire layout - structures and bitfields",
+    "purpose": "The single machine-readable statement of what each field IS and how well we know it. Written because the same facts were being re-carved: word 6 was re-derived as a channel-and-counter model that had been superseded months earlier, while the compiler printed the obsolete warning on every build.",
+    "authority": "This file and the C# must agree - ProtocolRegistryConformanceTests asserts it. Neither is allowed to drift silently.",
+    "unknowns": "WHAT-WE-DO-NOT-KNOW.md section 2 is GENERATED from the status fields here. Do not hand-edit that section.",
+    "created": "2026-08-17",
+    "one_line": "the envelope every message rides in - the 7-word header, the bitfields, the ND link"
+  },
+  "status_values": {
+    "MEASURED": "Observed on the wire or carved from the kernel, with the evidence named. A field may only be MEASURED if evidence is filled in.",
+    "INFERRED": "Follows from something measured, but not itself observed. Safe to implement, unsafe to cite as fact.",
+    "UNKNOWN": "We copy it, mirror it, or leave it alone. NOT safe to compute or vary.",
+    "SUPERSEDED": "A reading that was believed and is now disproved. Kept so it is not re-derived."
+  },
+  "structures": {
+    "sintran_header": {
+      "size_bytes": 14,
+      "words": 7,
+      "byte_order": "big-endian",
+      "csharp": "NDInsight.Sintran.Xmsg.SintranHeader",
+      "fields": [
+        {
+          "word": 0,
+          "byte_offset": 0,
+          "name": "marker",
+          "meaning": "XDROU - NETWORK INFO (VERSION, PROTOCOL, HOP COUNT). NOT a marker. High byte = version/protocol: X5VRS = 20400 octal = 0x2100, left byte 0x21 = OP 0, VERSION 2, PROTOCOL 1. Low byte = HOP COUNT, which is why a relayed frame reads 0x12 against a direct 0x13 - one hop apart.",
+          "csharp": [
+            "Marker1",
+            "Marker2"
+          ],
+          "status": "MEASURED",
+          "evidence": "XMSG-POFTABS-L03.SYMB (the POF tables of the L03 kernel we drive); corroborated by every capture in DOC/captures",
+          "width_bits": 16,
+          "c_type": "uint16_t",
+          "bindings": {
+            "c": {
+              "name": "marker"
+            }
+          },
+          "kernel_name": "XDROU"
+        },
+        {
+          "word": 1,
+          "byte_offset": 2,
+          "name": "packet_type_and_subtype",
+          "meaning": "XDTYP - DATAGRAM TYPE INFO (SD, ED, DC, CONTROL...). A BIT SET, not a type/subtype byte pair: XD5CO=0 control, XD5SD=1 start, XD5ED=2 end, XD5DC=3 confirm-delivery, XD5CE=5 checksum enabled (with SD), XD5CP=6 checksum provided (with ED). On a control datagram the bits are reused: XD5UT=1 outgoing, XD5BA=2 BAD STATUS (REJ/NAK), XD5IN=4 connection initialise. Our high/low byte split is a reading of those bits.",
+          "csharp": [
+            "PacketType",
+            "Subtype"
+          ],
+          "status": "MEASURED",
+          "evidence": "XMSG-POFTABS-L03.SYMB (the POF tables of the L03 kernel we drive); every capture for the observed values",
+          "width_bits": 16,
+          "c_type": "uint16_t",
+          "bindings": {
+            "c": {
+              "name": "packet_type_and_subtype"
+            }
+          },
+          "kernel_name": "XDTYP"
+        },
+        {
+          "word": 2,
+          "byte_offset": 4,
+          "name": "destination_node",
+          "csharp": [
+            "DestinationNode"
+          ],
+          "status": "MEASURED",
+          "evidence": "every capture; XMSG-POFTABS-L03.SYMB (the POF tables of the L03 kernel we drive) names it DESTINATION NETWORK ADDRESS",
+          "width_bits": 16,
+          "c_type": "uint16_t",
+          "bindings": {
+            "c": {
+              "name": "destination_node"
+            }
+          },
+          "kernel_name": "XDDNA"
+        },
+        {
+          "word": 3,
+          "byte_offset": 6,
+          "name": "source_node",
+          "csharp": [
+            "SourceNode"
+          ],
+          "status": "MEASURED",
+          "evidence": "every capture; XMSG-POFTABS-L03.SYMB (the POF tables of the L03 kernel we drive) names it SOURCE NETWORK ADDRESS",
+          "width_bits": 16,
+          "c_type": "uint16_t",
+          "bindings": {
+            "c": {
+              "name": "source_node"
+            }
+          },
+          "kernel_name": "XDSNA"
+        },
+        {
+          "word": 4,
+          "byte_offset": 8,
+          "name": "flags1",
+          "meaning": "XDREF - CONNECTION REFERENCE FIELD (MESS NO). A message number belonging to a CONNECTION, not a free-running link counter. Measured behaviour: one counter per (sender, peer), zeroed only at bring-up, never in use.",
+          "csharp": [
+            "Flags1"
+          ],
+          "status": "MEASURED",
+          "evidence": "XMSG-POFTABS-L03.SYMB (the POF tables of the L03 kernel we drive) names it; THE FLAGS 1 LAW is the measured behaviour; PUSH-XENSE-2026-08-11 shows the refused number echoed in the error frame",
+          "width_bits": 16,
+          "c_type": "uint16_t",
+          "bindings": {
+            "c": {
+              "name": "flags1"
+            }
+          },
+          "kernel_name": "XDREF"
+        },
+        {
+          "word": 5,
+          "byte_offset": 10,
+          "name": "flags2",
+          "meaning": "XDSCR - SCRATCH (SIZE, DISPL, STATUS). Scratch space the layers reuse, which is why no single fixed meaning has ever fitted it. Observed as frame class, equal to XMCSM >> 16; on an error frame it is the negative error code instead.",
+          "csharp": [
+            "Flags2"
+          ],
+          "status": "MEASURED",
+          "evidence": "XMSG-POFTABS-L03.SYMB (the POF tables of the L03 kernel we drive) names it; 601/601 data frames for the observed use",
+          "width_bits": 16,
+          "c_type": "uint16_t",
+          "bindings": {
+            "c": {
+              "name": "flags2"
+            }
+          },
+          "kernel_name": "XDSCR"
+        },
+        {
+          "word": 6,
+          "byte_offset": 12,
+          "name": "checksum",
+          "rule": "~ones_complement_sum(w0..w5)",
+          "meaning": "ones-complement checksum over the other six words. There is NO channel, NO epoch and NO per-link seed.",
+          "csharp": [
+            "Checksum"
+          ],
+          "status": "MEASURED",
+          "evidence": "carved from the kernel at 137314; verified 3595/3595 frames, every subtype, no special cases. DOC/XMSG-HEADER-WORD6-IS-A-CHECKSUM-2026-07-31.md; XMSG-POFTABS-L03.SYMB (the POF tables of the L03 kernel we drive) calls it CHECKSUM (COMP'T OF ONES COMP'T ADD), independently the routine carved 2026-07-31",
+          "supersedes": [
+            {
+              "reading": "offset 12 is a Protocol-ID 'channel', offset 13 a sub-header 'Counter', with Channel = 0xDE - (XMCSM>>24) - epoch and Counter = (seed - Flags1) AND 0xFF",
+              "status": "SUPERSEDED",
+              "why_it_survived": "the checksum is a deterministic function of the same header fields the old model used as inputs. Its per-link 'seed' was the contribution of the fields nobody varied, and its 'epoch' was carry propagation out of the low byte.",
+              "cost": "re-derived from scratch on 2026-08-17 and nearly published as a defect",
+              "csharp_marked_obsolete": [
+                "SintranHeader.ProtocolId",
+                "SintranHeader.Counter"
+              ]
+            }
+          ],
+          "width_bits": 16,
+          "c_type": "uint16_t",
+          "bindings": {
+            "c": {
+              "name": "checksum"
+            }
+          },
+          "kernel_name": "XDCSM"
+        }
+      ],
+      "bindings": {
+        "c": {
+          "struct": "sintran_header",
+          "note": "Seven 16-bit words, big-endian on the wire. A C reader must byte-swap on a little-endian host; the generator should emit accessors rather than a packed struct, because a packed struct silently depends on the host's endianness and alignment."
+        }
+      }
+    },
+    "nd_link_header": {
+      "size_bytes": 11,
+      "byte_order": "big-endian",
+      "csharp": "NDInsight.Sintran.Xmsg.Ethernet.NdLinkHeader",
+      "note": "The link header on the ETHERNET path. It sits after the 802.3 header and the LLC bytes A8 A8 03, and it is NOT the SINTRAN header - the SINTRAN header follows it as payload on a Data frame. This entry exists because the header was documented only in a C# file, and reading it from a capture without that file is how it gets mis-parsed.",
+      "trap": "THE TWO LINK ID FIELDS ARE NAMED BACKWARDS IN C#. Bytes 5-6 are the DESTINATION and bytes 7-8 are the SOURCE, but NdLinkHeader calls them SenderLinkId and ReceiverLinkId. NdLinkLayer says so in a comment and works around it. Reading the C# names as the wire meaning already cost one bug: every reply addressed D100 as 1 and it answered DR BY NS reason 1 with the link up.",
+      "fields": [
+        {
+          "byte_offset": 0,
+          "width_bits": 8,
+          "name": "header_length",
+          "meaning": "Always 0x0B = 11, which IS the length of this header, not a magic number. The sender computes it, so searching an ND binary for a literal 0B02 finds nothing.",
+          "status": "MEASURED",
+          "evidence": "every frame in every Ethernet capture; NdLinkHeader.Signature0",
+          "c_type": "uint8_t"
+        },
+        {
+          "byte_offset": 1,
+          "width_bits": 8,
+          "name": "signature",
+          "meaning": "Always 0x02. Meaning unknown - it is used together with byte 0 only to recognise the header.",
+          "status": "MEASURED",
+          "evidence": "every frame in every Ethernet capture; NdLinkHeader.Signature1",
+          "c_type": "uint8_t"
+        },
+        {
+          "byte_offset": 2,
+          "width_bits": 8,
+          "name": "frame_kind",
+          "meaning": "Which kind of link frame this is. See the nd_link_frame_kind bitfield.",
+          "status": "MEASURED",
+          "evidence": "DOC/captures/XMSG-DEGRADE-2026-08-24/segment.pcap - 1050 frames of a D100/D102 Ethernet segment, every frame the hub carried",
+          "bitfield": "nd_link_frame_kind",
+          "c_type": "uint8_t",
+          "csharp": [
+            "Kind"
+          ]
+        },
+        {
+          "byte_offset": 3,
+          "width_bits": 8,
+          "name": "unused",
+          "meaning": "Zero on every frame we have ever captured, and our own parser skips it. Whether it carries anything on some frame we have not seen is NOT established.",
+          "status": "UNKNOWN",
+          "evidence": "0x00 in all 1050 frames of DOC/captures/XMSG-DEGRADE-2026-08-24/segment.pcap - 1050 frames of a D100/D102 Ethernet segment, every frame the hub carried",
+          "c_type": "uint8_t"
+        },
+        {
+          "byte_offset": 4,
+          "width_bits": 8,
+          "name": "sequence",
+          "meaning": "Send sequence, ONE byte. Each direction runs its own. An Acknowledge carries the received sequence PLUS ONE - the next expected value.",
+          "status": "MEASURED",
+          "evidence": "DOC/captures/XMSG-DEGRADE-2026-08-24/segment.pcap - 1050 frames of a D100/D102 Ethernet segment, every frame the hub carried; observed stepping 0x43,0x44,0x45 in the 2026-08-03 both-ends capture",
+          "c_type": "uint8_t",
+          "csharp": [
+            "Sequence"
+          ]
+        },
+        {
+          "byte_offset": 5,
+          "width_bits": 16,
+          "name": "destination_link_id",
+          "meaning": "The link reference of the machine this frame is FOR. Zero on a connection request, because the sender does not know the peer's reference yet.",
+          "status": "MEASURED",
+          "evidence": "Lined up across a full setup in DOC/captures/XMSG-DEGRADE-2026-08-24/segment.pcap - 1050 frames of a D100/D102 Ethernet segment, every frame the hub carried: D100's request carries 0000/0789, D102's confirm 0789/0A17, and D100's following data 0A17/0789 - only destination-then-source is consistent with all three.",
+          "csharp": [
+            "SenderLinkId"
+          ],
+          "csharp_name_is_wrong": true,
+          "c_type": "uint16_t"
+        },
+        {
+          "byte_offset": 7,
+          "width_bits": 16,
+          "name": "source_link_id",
+          "meaning": "The sender's own link reference. A node LEARNS the peer's from this field and takes its own from configuration - synthesising one from the node number would be a fabricated constant. The ids are per-session: 0x5062/0x59C1 in one capture, 0x2F48/0x28A4 in another.",
+          "status": "MEASURED",
+          "evidence": "same three-frame line-up as destination_link_id",
+          "csharp": [
+            "ReceiverLinkId"
+          ],
+          "csharp_name_is_wrong": true,
+          "c_type": "uint16_t"
+        },
+        {
+          "byte_offset": 9,
+          "width_bits": 16,
+          "name": "trailing_field",
+          "meaning": "NOT always a length. On Data it is the payload length. On a ConnectionRequest it is the SENDER'S OWN SYSTEM NUMBER (0x0066 = 102) with the real payload length zero. On a DisconnectRequestByNetworkService it is 0x0101, meaning unknown. The 802.3 length field is the authority on how many payload bytes are present.",
+          "status": "MEASURED",
+          "evidence": "both-ends capture 2026-08-03; confirmed again throughout DOC/captures/XMSG-DEGRADE-2026-08-24/segment.pcap - 1050 frames of a D100/D102 Ethernet segment, every frame the hub carried",
+          "c_type": "uint16_t",
+          "csharp": [
+            "PayloadLength"
+          ]
+        }
+      ],
+      "control_frames_carry_no_payload": "0x0F and 0x6F frames have 802.3 length 0x000E = 3 LLC + 11 header + 0 payload. EVERY byte after the eleventh is Ethernet padding up to the 60-byte minimum. Readings that assign meaning to that tail are reading padding - this has now caught two people, so it is written here as well as in the C# file."
+    }
+  },
+  "bitfields": {
+    "xmsg_frame_flags": {
+      "location": "sub-header byte 3",
+      "width_bits": 8,
+      "csharp": "NDInsight.Sintran.Xmsg.XmsgFrameFlags",
+      "rule": "MIRROR THE CAPTURED COMBO for the frame type. Do NOT compose bit by bit - the per-bit rules below are not all known.",
+      "bits": [
+        {
+          "bit": 1,
+          "mask": "0x02",
+          "name": "Marker01",
+          "meaning": "set on every observed frame",
+          "status": "UNKNOWN",
+          "evidence": "601-frame sweep; always set, purpose never established"
+        },
+        {
+          "bit": 2,
+          "mask": "0x04",
+          "name": "Letter",
+          "meaning": "set on setup and on 0x96 terminal frames, clear on 0x92 and 0x82",
+          "status": "UNKNOWN",
+          "evidence": "601-frame sweep; the one bit whose rule is not known. NOTE: unrelated to an XROUT letter despite the name"
+        },
+        {
+          "bit": 4,
+          "mask": "0x10",
+          "name": "DataPhase",
+          "meaning": "established terminal-phase frames",
+          "status": "INFERRED",
+          "evidence": "238 of 242 terminal-phase frames fit"
+        },
+        {
+          "bit": 7,
+          "mask": "0x80",
+          "name": "SystemMode",
+          "meaning": "XFSYS system-mode call",
+          "status": "INFERRED",
+          "evidence": "set on every observed frame"
+        }
+      ],
+      "combos": [
+        {
+          "name": "Setup",
+          "value": "0x86",
+          "bits": [
+            "SystemMode",
+            "Marker01",
+            "Letter"
+          ],
+          "status": "MEASURED",
+          "evidence": "setup / control-letter frames"
+        },
+        {
+          "name": "ControlBare",
+          "value": "0x82",
+          "bits": [
+            "SystemMode",
+            "Marker01"
+          ],
+          "status": "MEASURED",
+          "evidence": "ESCA, DCON, 0xFD notify"
+        },
+        {
+          "name": "DataA",
+          "value": "0x96",
+          "bits": [
+            "SystemMode",
+            "Marker01",
+            "Letter",
+            "DataPhase"
+          ],
+          "status": "MEASURED",
+          "evidence": "terminal-phase frames carrying the Letter bit"
+        },
+        {
+          "name": "DataB",
+          "value": "0x92",
+          "bits": [
+            "SystemMode",
+            "Marker01",
+            "DataPhase"
+          ],
+          "status": "MEASURED",
+          "evidence": "terminal-phase frames without it"
+        }
+      ],
+      "csharp_enum": {
+        "type": "NDInsight.Sintran.Xmsg.XmsgFrameFlags",
+        "is_flags": true,
+        "completeness": "EVERY member of this enum must appear here, and every entry here must exist in the enum. The test checks BOTH directions - a registry that is merely a subset is how code and documentation drift apart.",
+        "only_in_code": [
+          "None",
+          "Setup",
+          "ControlBare"
+        ],
+        "only_in_code_why": "None is the empty value; Setup and ControlBare are combos, listed under combos rather than bits"
+      },
+      "bindings": {
+        "c": {
+          "enum": "xmsg_frame_flags",
+          "prefix": "XMSG_FRAME_FLAG_",
+          "underlying_type": "uint8_t"
+        }
+      }
+    },
+    "xmsg_send_options": {
+      "location": "MON 200B T-register high byte; the ROLE byte on the wire",
+      "width_bits": 16,
+      "csharp": "NDInsight.Sintran.Xmsg.Api.XmsgSendFlags",
+      "bits": [
+        {
+          "bit": 13,
+          "mask": "0x2000",
+          "names": [
+            "XFHIP",
+            "XFRRO"
+          ],
+          "shared": true,
+          "disambiguated_by": "XFROU",
+          "meaning": "XFROU set -> bit 13 means RemoteRoute and the target XROUT's system number comes from the A register. XFROU clear -> bit 13 means HighPriority and the message is chained to the head of the receiver's queue.",
+          "status": "MEASURED",
+          "evidence": "COSMOS Programmer Guide appendix A section 3.2.11, the 'acts as' rule",
+          "trap": "ONE BIT, TWO NAMES. Test the disambiguator FIRST. Getting this wrong made a forwarded letter read as high priority - see XmsgKernel.ChooseType."
+        }
+      ],
+      "bindings": {
+        "c": {
+          "enum": "xmsg_send_option",
+          "prefix": "XMSG_SEND_",
+          "underlying_type": "uint16_t"
+        }
+      }
+    },
+    "nd_link_frame_kind": {
+      "location": "ND link header, kind byte",
+      "width_bits": 8,
+      "csharp": "NDInsight.Sintran.Xmsg.Ethernet.NdLinkFrameKind",
+      "rule": "high nibble is the NPDU type; the low nibble is only partly understood",
+      "values": [
+        {
+          "value": "0x0F",
+          "name": "ConnectionRequest",
+          "status": "MEASURED",
+          "evidence": "D100 sends it; captured many times"
+        },
+        {
+          "value": "0x20",
+          "name": "Data",
+          "status": "MEASURED",
+          "evidence": "every capture"
+        },
+        {
+          "value": "0x3F",
+          "name": "Acknowledge",
+          "status": "MEASURED",
+          "evidence": "every capture"
+        },
+        {
+          "value": "0x6F",
+          "name": "DisconnectRequestByNetworkService",
+          "status": "MEASURED",
+          "evidence": "D100 answers an unexpected connection request with it, 2026-08-11 and 2026-08-17"
+        },
+        {
+          "value": "0x60",
+          "name": "DisconnectRequest60",
+          "meaning": "the other disconnect - D100 sends this one repeatedly once it gives up on a conversation",
+          "status": "MEASURED",
+          "evidence": "leaving it unrecognised produced an endless run of 'unknown ND frame kind 0x60' in the runner log while the link stayed nominally up"
+        },
+        {
+          "value": "0x70",
+          "name": "DisconnectConfirm",
+          "meaning": "The confirmation of a disconnect request. Read from its position in the exchange - a connection request is refused with DisconnectRequest60 and the refused side answers with this.",
+          "status": "INFERRED",
+          "evidence": "three independent occurrences across DOC/captures/XMSG-DEGRADE-2026-08-24 (segment.pcap and after-fix.pcap), 2026-08-24 - every one immediately after a DisconnectRequest60, link ids swapped, trailing field 0 where the request carried 0x0001, no payload",
+          "would_disprove_it": "A 0x70 that does NOT follow a disconnect request. Every sample so far follows one immediately, so one counter-example retires this reading.",
+          "note": "The FIRST of each pair is addressed to MAC 08:00:26:00:00:00 - system number ZERO - and only the retry is addressed properly, because the sender has not learned the peer's identity yet."
+        }
+      ],
+      "unknown_aspects": [
+        {
+          "name": "disconnect low nibble",
+          "meaning": "the by-user variant of the disconnect family has never been seen",
+          "status": "UNKNOWN",
+          "evidence": "only by-network-service observed"
+        }
+      ],
+      "csharp_enum": {
+        "type": "NDInsight.Sintran.Xmsg.Ethernet.NdLinkFrameKind",
+        "is_flags": false,
+        "completeness": "EVERY member of this enum must appear here, and every entry here must exist in the enum. The test checks BOTH directions - a registry that is merely a subset is how code and documentation drift apart."
+      },
+      "constants": {
+        "note": "Byte values we SEND that are not members of the kind enum, because we have never had to decode one. Not compared against the enum - see why_not_in_the_enum on each.",
+        "values": [
+          {
+            "value": "0x1F",
+            "name": "ConnectionConfirm",
+            "status": "MEASURED",
+            "evidence": "2026-08-17: we answered D100's CR with it and D100 moved on to DT, which is the test the code's own comment names. Low nibble still inferred from 'every control frame ends in F'",
+            "csharp": "NdLinkLayer.ConnectionConfirmKindUnverified",
+            "why_not_in_the_enum": "It is a CONSTANT on NdLinkLayer, not a member of NdLinkFrameKind - we send this byte but have never received one, so it is not a kind we decode. The completeness check caught it being listed as an enum member, which it is not."
+          }
+        ]
+      },
+      "bindings": {
+        "c": {
+          "enum": "nd_link_frame_kind",
+          "prefix": "ND_LINK_KIND_",
+          "underlying_type": "uint8_t"
+        }
+      }
+    }
+  },
+  "open_questions": [
+    {
+      "id": "B3",
+      "question": "The TAD connect-accept trailing parameter pair",
+      "observed": [
+        "01 02 0000 / 02 02 000A",
+        "01 02 0001 / 02 02 0009"
+      ],
+      "status": "UNKNOWN",
+      "evidence": "census of 9 archived connect captures, 2026-08-17",
+      "refuted_readings": [
+        "identifies the responding machine - D100 sends BOTH",
+        "sessions in use against free, summing to ten - two connects to one responder in a single capture keep the same pair"
+      ],
+      "would_settle_it": "a third distinct value"
+    },
+    {
+      "id": "B4",
+      "question": "The ethernet seam serves one peer only",
+      "status": "KNOWN_GAP",
+      "evidence": "D102's connection requests went unanswered on the wire, 2026-08-17; EthernetLink drops frames not from its own peer and the runner builds one from PrimaryEthernetPeer()",
+      "would_settle_it": "not a question - it is work: one EthernetLink per peer"
+    }
+  ]
+}

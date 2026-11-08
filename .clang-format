@@ -1,0 +1,30 @@
+# House C standard (rule numbers refer to the c-coding-standard skill).
+# Apply to changed lines only:  git clang-format origin/main
+# Never reformat a whole existing file inside a functional commit.
+BasedOnStyle: LLVM
+Language: Cpp
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+BreakBeforeBraces: Allman
+IndentCaseLabels: false
+PointerAlignment: Right
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AlignConsecutiveMacros: true
+AlignTrailingComments: true
+SortIncludes: Never
+ReflowComments: false
+IndentPPDirectives: None
+MaxEmptyLinesToKeep: 2
+InsertNewlineAtEOF: true
+LineEnding: LF
+InsertBraces: true
+# Public headers wrap their contents in extern "C" for C++ consumers (Arduino); that block must
+# not add an indentation level. Not in the nd100x copy of this file because nd100x has no such
+# blocks - proposed as a house addition 2026-11-08.
+IndentExternBlock: NoIndent

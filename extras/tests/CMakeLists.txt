@@ -1,0 +1,29 @@
+# Unit tests: one executable per module, plain C, no framework (see test_util.h).
+#
+# xmsg_add_test(name) builds extras/tests/test_<name>.c against the library with the house
+# warnings, and registers it with CTest. The PASS_REGULAR_EXPRESSION makes a test that dies before
+# its verdict line count as a failure even when the exit code is lost.
+#
+# Integration tests (label "integration") talk to a running nd100x and SKIP (exit code 2) when the
+# environment variable ND100X_HDLC_HOST is not set, so a plain `ctest` is always runnable.
+
+function(xmsg_add_test name)
+    add_executable(test_${name} test_${name}.c)
+    target_link_libraries(test_${name} PRIVATE xmsg::xmsg house_warnings)
+    target_include_directories(test_${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME ${name} COMMAND test_${name})
+    set_tests_properties(${name} PROPERTIES PASS_REGULAR_EXPRESSION "TB_RESULT: PASS")
+endfunction()
+
+function(xmsg_add_integration_test name)
+    add_executable(test_${name} integration/test_${name}.c)
+    target_link_libraries(test_${name} PRIVATE xmsg::xmsg house_warnings)
+    target_include_directories(test_${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME ${name} COMMAND test_${name})
+    set_tests_properties(${name} PROPERTIES
+        PASS_REGULAR_EXPRESSION "TB_RESULT: PASS"
+        SKIP_RETURN_CODE 2
+        LABELS integration)
+endfunction()
+
+xmsg_add_test(smoke)

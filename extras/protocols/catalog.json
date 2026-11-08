@@ -1,0 +1,115 @@
+{
+  "meta": {
+    "title": "The XMSG protocol catalog",
+    "what_this_is": "The master list. Every protocol registry in this folder is named here, in the order a reader should meet them. Tools read THIS to find the registries - nothing has a hard-coded list, so adding a registry means adding it here and nowhere else.",
+    "the_rule": "A registry file that is not in this catalog, or a catalog entry with no file, FAILS THE BUILD. That is what stops a new protocol being documented and then quietly forgotten, or a deleted one lingering in the docs.",
+    "how_it_is_checked": [
+      "RegistryCatalogTests - every file listed exists, every .json in the folder is listed, and nothing is described twice",
+      "RegistryEnumCompletenessTests - every C# enum a registry binds is described in FULL, and the registry describes nothing the enum no longer has",
+      "ProtocolRegistryConformanceTests - the values, offsets and masks match the code",
+      "generate.py --check - the generated markdown is not stale"
+    ],
+    "created": "2026-08-17"
+  },
+  "status_values": {
+    "MEASURED": "Observed on the wire or carved from the kernel, with the evidence named.",
+    "INFERRED": "Follows from something measured, or read from the ND manuals, but not itself observed here.",
+    "UNKNOWN": "We copy it, mirror it, or leave it alone. NOT safe to compute or vary.",
+    "SUPERSEDED": "A reading that was believed and is now disproved. Kept so it is not re-derived."
+  },
+  "registries": [
+    {
+      "file": "sintran-wire.json",
+      "markdown": "sintran-wire.md",
+      "title": "The SINTRAN envelope",
+      "one_line": "the envelope every message rides in - the 7-word header, the bitfields, the ND link underneath",
+      "read_order": 1,
+      "read_first_because": "every other registry assumes this header"
+    },
+    {
+      "file": "tad-wire.json",
+      "markdown": "tad-wire.md",
+      "title": "TAD - terminal sessions",
+      "one_line": "how a terminal on one machine reaches another: CONNECT-TO, the accept, then keystrokes and screen output",
+      "read_order": 2
+    },
+    {
+      "file": "fa-qform.json",
+      "markdown": "fa-qform.md",
+      "title": "FA - remote files, and the QFORM encoding",
+      "one_line": "open, read, write, create and list files on another machine - and the tag encoding its bodies use",
+      "read_order": 3
+    },
+    {
+      "file": "xrout-services.json",
+      "markdown": "xrout-services.md",
+      "title": "XROUT - names, routes and seats",
+      "one_line": "the phone book: it turns a registered name into an address, forwards the first letter, and counts the seats",
+      "read_order": 4
+    },
+    {
+      "file": "chat-wire.json",
+      "markdown": "chat-wire.md",
+      "title": "CHAT - rooms, members and what they say",
+      "one_line": "the one protocol Norsk Data never shipped: joining a room, saying something, and the two ports that decide who spends a seat",
+      "read_order": 5,
+      "read_first_because": "it is the only registry here whose vocabulary we invented, so it is the one where a new message kind is declared before it is built"
+    }
+  ],
+  "generated": [
+    {
+      "file": "PROTOCOLS.md",
+      "from": "the catalog and every registry",
+      "by": "generate.py"
+    }
+  ],
+  "not_registries": {
+    "note": "Files in this folder that are NOT protocol registries, so the catalog check knows to ignore them.",
+    "files": [
+      "catalog.json"
+    ]
+  },
+  "consumers": {
+    "note": "Who reads these registries. Listed because it decides what the registries must CARRY - detail that is missing when a consumer is written has to be re-derived, which is the whole thing this folder exists to prevent.",
+    "now": [
+      {
+        "name": "the C# implementation",
+        "how": "tests hold the code to the registry in both directions"
+      },
+      {
+        "name": "generate.py",
+        "how": "renders the readable markdown and the mermaid diagrams"
+      }
+    ],
+    "planned": [
+      {
+        "name": "generated C# - PROVED as a dry run",
+        "status": "the generator exists and its output compiles clean",
+        "what_was_proved": "generate_csharp.py emits 11 files - enums with the plain-English meaning, the status and the evidence as XML doc comments, plus accessors for the header - and they build with GenerateDocumentationFile on and ZERO warnings.",
+        "why_csharp_first": "there is a hand-written C# library to compare against, so a shortfall shows up as a difference from working code rather than as a bug found later in a language nobody has tested. What the registry lacks for C# it would lack for C too.",
+        "not_yet": "it writes to a temp folder. Nothing under SRC is generated, and the hand-written library is still the one that runs."
+      },
+      {
+        "name": "an XMSG protocol library in C",
+        "status": "FEASIBILITY PROVED - generator exists, output compiles and decodes real bytes",
+        "why_it_is_recorded_here": "so the registries keep what it will need instead of being trimmed to what C# happens to use",
+        "requires": [
+          "an explicit width_bits and c_type on EVERY structure field - not implied by a word number",
+          "a c.struct name per structure, and a c.enum name plus prefix and underlying_type per enum block",
+          "byte order stated per structure - it is big-endian on the wire, and a C host is usually not",
+          "the plain-English meaning, which becomes the generated comment"
+        ],
+        "guarded_by": "RegistryIsCodeGenerationReadyTests - the requirements above are checked, so the door cannot quietly close",
+        "what_was_proved": "generate_c.py emits four headers with no gaps. They compile under gcc -std=c11 -Wall -Wextra -Werror -pedantic, and a test program decodes a REAL captured D100 accept correctly: dest 102, source 100, Flags1 0x0021, checksum 0xD9F3. The XSDMC/XSDSY alias compares equal, and XFHIP/XFRRO both come out 0x2000.",
+        "what_c_found_that_csharp_could_not": "the snake-case helper split every capital, so the all-caps ND symbol XSLET became X_S_L_E_T. C# never saw it because it keeps member names verbatim. A second language is what tests the generator, not just the registry.",
+        "not_yet": "writes to a temp folder; no C library is built from it yet."
+      },
+      {
+        "name": "TypeScript",
+        "status": "UNDECIDED - Ronny is considering it",
+        "note": "The bindings are keyed by language for this reason: adding typescript is a new key beside c, not a restructure. TypeScript needs no fixed-width types but does need the width and byte order to drive a DataView, which the registry already carries."
+      }
+    ],
+    "rule": "Language-specific naming lives under bindings.<language>. Everything a generator needs that is NOT language-specific - width, byte order, meaning, status, evidence - lives on the field itself, so a new language costs one key and no re-authoring. Generating a SECOND language is what tests the generator itself - C demanded fixed widths, byte order and a flat namespace, and caught a naming bug C# could not."
+  }
+}

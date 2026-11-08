@@ -1,0 +1,695 @@
+{
+  "meta": {
+    "title": "TAD - the SINTRAN terminal-access protocol, as carried over XMSG",
+    "purpose": "What a CONNECT-TO exchange actually contains, field by field, and how well each part is known. Written while #34 was blocked on the connect accept, so that the next attempt starts from what is settled instead of re-deriving it.",
+    "authority": "This file and the C# must agree - ProtocolRegistryConformanceTests asserts the parts a machine can check.",
+    "layering": "A TAD message rides in the BODY of a SINTRAN datagram. The 7-word header in front of it is described in sintran-wire.json and is NOT repeated here.",
+    "created": "2026-08-17",
+    "one_line": "terminal sessions - CONNECT-TO, the accept, keystrokes and screen output"
+  },
+  "status_values": {
+    "MEASURED": "Observed on the wire, with the capture named.",
+    "INFERRED": "Follows from something measured, not itself observed.",
+    "UNKNOWN": "Copied or mirrored. Never computed or varied.",
+    "SUPERSEDED": "Believed once, disproved. Kept so it is not re-derived."
+  },
+  "control_services": {
+    "note": "The XMCSM word. Its top byte feeds nothing on the wire directly, but the whole word appears in the body and identifies what kind of exchange this is.",
+    "values": [
+      {
+        "name": "XsletLetter",
+        "value": "0x04000041",
+        "meaning": "XROUT connect letter / setup. Low byte 0x41 is the XROUT service code.",
+        "csharp": "XmcsmService.XsletLetter",
+        "status": "MEASURED",
+        "evidence": "every captured connect and accept"
+      },
+      {
+        "name": "SessionSetup",
+        "value": "0x04000000",
+        "meaning": "session setup control word",
+        "csharp": "XmcsmService.SessionSetup",
+        "status": "MEASURED",
+        "evidence": "port-assign frames"
+      },
+      {
+        "name": "TerminalData",
+        "value": "0x01080000",
+        "meaning": "terminal data phase",
+        "csharp": "XmcsmService.TerminalData",
+        "status": "MEASURED",
+        "evidence": "601-frame sweep"
+      },
+      {
+        "name": "BareTadControl",
+        "value": "0x00080000",
+        "meaning": "bare TAD control - ESCA, DCON, the 0xFD notify",
+        "csharp": "XmcsmService.BareTadControl",
+        "status": "MEASURED",
+        "evidence": "control frames in ND-TO-ND captures"
+      },
+      {
+        "name": "SessionNotify",
+        "value": "0x00060000",
+        "meaning": "tell the other side something about the session itself, rather than carrying data",
+        "status": "INFERRED",
+        "evidence": "named in the ND sources, via the summary on the enum member"
+      },
+      {
+        "name": "XsgsyRequest",
+        "value": "0x0100014B",
+        "meaning": "ask another machine what it knows about a system",
+        "status": "MEASURED",
+        "evidence": "answered live by D100"
+      },
+      {
+        "name": "XsgsyReply",
+        "value": "0x01000100",
+        "meaning": "the answer to that question",
+        "status": "MEASURED",
+        "evidence": "answered live by D100"
+      }
+    ],
+    "csharp_enum": {
+      "type": "NDInsight.Sintran.Xmsg.XmcsmService",
+      "is_flags": false,
+      "completeness": "EVERY member of this enum must appear here, and every entry here must exist in the enum. The test checks BOTH directions - a registry that is merely a subset is how code and documentation drift apart."
+    },
+    "bindings": {
+      "c": {
+        "enum": "xmcsm_service",
+        "prefix": "XMCSM_",
+        "underlying_type": "uint32_t"
+      }
+    }
+  },
+  "exchanges": {
+    "connect": {
+      "summary": "What happens when somebody types CONNECT-TO. Their machine asks XROUT to carry a letter to the service called *TADADM on the machine they named; that service answers with an accept, and from then on the two sides exchange keystrokes and screen output directly.",
+      "request": {
+        "direction": "asker -> responder",
+        "body_fields": [
+          {
+            "name": "role",
+            "value": "0x86E4",
+            "meaning": "who is speaking and in what phase. The high byte says this is session SETUP; the low byte says this side is the one ASKING to connect",
+            "status": "MEASURED",
+            "evidence": "D100 -> 19999 on 2026-08-17; identical shape in ARCHIVE-2026-07 captures"
+          },
+          {
+            "name": "service_name",
+            "value": "*TADADM",
+            "encoding": "length-prefixed ASCII, 0xFF 0x07 then the 7 bytes",
+            "status": "MEASURED",
+            "evidence": "2A 54 41 44 41 44 4D on the wire"
+          },
+          {
+            "name": "target_system",
+            "encoding": "0xFE, length, ASCII",
+            "example": "D19999",
+            "status": "MEASURED",
+            "evidence": "FE 06 44 31 39 39 39 39"
+          }
+        ]
+      },
+      "accept": {
+        "direction": "responder -> asker",
+        "length_bytes": 40,
+        "csharp": "TadTerminalResponder.BuildConnectAccept",
+        "body_fields": [
+          {
+            "name": "role",
+            "value": "0x8640",
+            "meaning": "the same two halves as the request: still session setup, but the low byte now says this side is ANSWERING",
+            "status": "MEASURED",
+            "evidence": "every real accept in ARCHIVE-2026-07"
+          },
+          {
+            "name": "asker_node",
+            "meaning": "the machine that asked, copied back so it can recognise its own answer",
+            "status": "MEASURED",
+            "evidence": "same captures"
+          },
+          {
+            "name": "responder_node",
+            "meaning": "the machine that answered - us",
+            "status": "MEASURED",
+            "evidence": "same captures"
+          },
+          {
+            "name": "session_port",
+            "meaning": "the address the answering side will listen on for the rest of this session. Everything after the accept goes there",
+            "observed": [
+              {
+                "value": "0x0215",
+                "responder": "D100",
+                "captures": [
+                  "ethernet-conn-to-D100-from-102-WORKING",
+                  "ALLTEST-fa-connectto"
+                ]
+              },
+              {
+                "value": "0x0156",
+                "responder": "ours",
+                "note": "TadAdminWirePort, a fixed constant in our code"
+              }
+            ],
+            "csharp": "TadTerminalResponder.TadAdminWirePort",
+            "status": "UNKNOWN",
+            "evidence": "we emit a constant; a real responder's value differs and its rule has not been established. An earlier note offered (freeSlot<<7)|incarnation, which fits 0x0215 but has never been confirmed",
+            "matters_because": "if the asker addresses the session by this port, a wrong one loses everything after the accept"
+          },
+          {
+            "name": "control_service",
+            "value": "0x04000041",
+            "status": "MEASURED",
+            "evidence": "identical in ours and every real accept"
+          },
+          {
+            "name": "parameter_trailer",
+            "encoding": "two blocks: 01 02 p1, then 02 02 p2",
+            "observed": [
+              {
+                "value": "01 02 0000 / 02 02 000A",
+                "captures": [
+                  "test1",
+                  "li-syst-tad-103",
+                  "li-rout-102-tree",
+                  "conn-to-d102-from-100",
+                  "new-conn-to-102-from-100",
+                  "conn-to-102-from103-via100"
+                ]
+              },
+              {
+                "value": "01 02 0001 / 02 02 0009",
+                "captures": [
+                  "ethernet-conn-to-D100-from-102-WORKING",
+                  "ALLTEST-fa-connectto",
+                  "ethernet-hdlc-ROUTE-THROUGH-WORKING"
+                ]
+              }
+            ],
+            "status": "UNKNOWN",
+            "evidence": "census of 9 archived connect captures, 2026-08-17. We emit 0/10 unconditionally",
+            "refuted_readings": [
+              {
+                "reading": "it identifies the responding machine",
+                "why_wrong": "D100 sends BOTH values"
+              },
+              {
+                "reading": "sessions in use against sessions free, summing to ten",
+                "why_wrong": "two connects to the same responder inside one capture keep the same pair"
+              }
+            ],
+            "known": "stable within a capture, different between captures - so it tracks something slower-moving than a single connect",
+            "would_settle_it": "a third distinct value"
+          }
+        ]
+      }
+    }
+  },
+  "sequencing": {
+    "responder_flags1": {
+      "rule": "The responder runs its OWN datagram sequence. It advances by one per NEW connect and does NOT reset per connect.",
+      "status": "MEASURED",
+      "evidence": "li-syst-tad-103: D100 answers successive connects at 0x000b then 0x000c; D102 at 0x0002 then 0x0003",
+      "retransmissions": {
+        "rule": "A repeated connect - identical bytes - is answered with the SAME Flags1. Only a genuinely new connect advances it.",
+        "status": "MEASURED",
+        "evidence": "the same captures show three identical accepts per connect, all at one Flags1"
+      },
+      "persistence": {
+        "note": "Our store advances on the peer's ACK, not on send. Persisting on send over-counts frames the peer never received and leaves the saved value ahead, which the peer then refuses with XENSE.",
+        "csharp": "TadTerminalResponder, _respFlags1 and ConfirmDelivered",
+        "status": "INFERRED",
+        "evidence": "reasoned from the XENSE rejections in PUSH-XENSE-2026-08-11; the alternative was tried and produced them"
+      }
+    }
+  },
+  "operations": {
+    "note": "TAD opcodes carried in the message body. Names from the ND sources; values confirmed on the wire where an evidence pointer is given. The twelve ops added on 2026-08-18 (USCN, ISRQ, ISRS, NOWT, TNOW, NWRE, RLOC, EDRS, TREP, CPCO, ERRS, REJE) come from the version J TAD driver source. Their VALUES are measured - identical in the J, K03, L07 and M06 symbol tables - and their ROLES are proven for J, but none of them has been seen on our own wire yet, so they are carried as INFERRED for the Release L machines we drive.",
+    "csharp": "NDInsight.Sintran.Xmsg.Node.Tad.TadOp",
+    "values": [
+      {
+        "name": "Bdat",
+        "value": "0x01",
+        "meaning": "here is some text - the characters going to or from the screen. The workhorse: almost all terminal traffic is this",
+        "status": "MEASURED",
+        "evidence": "601-frame sweep"
+      },
+      {
+        "name": "Rfi",
+        "value": "0x02",
+        "meaning": "your turn to type - the far end is waiting for input",
+        "status": "MEASURED",
+        "evidence": "login exchanges"
+      },
+      {
+        "name": "Eckm",
+        "value": "0x03",
+        "meaning": "decide who echoes what you type - the terminal itself, or the machine at the far end",
+        "status": "INFERRED",
+        "evidence": "name from ND sources; seen in the login ladder"
+      },
+      {
+        "name": "Bmmx",
+        "value": "0x04",
+        "meaning": "BREAK parameters: a break-strategy byte, a 16-bit BRKMAX word, and for strategy 7 a 16-byte break table. It decides WHICH characters break the input and how many may pile up first - it is NOT the largest block the far end will accept, which is what this entry used to say",
+        "status": "MEASURED",
+        "evidence": "BDBREA in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL - message type 7BMMX, strategy clamped to 7, I-field 0o3 bytes normally and 0o23 (19 decimal) for strategy 7 = 1 + 2 + 16. Refutes the earlier INFERRED reading 'the largest block the far end will accept in one go'. Our captures only ever carry 00 04 03 strategy hi lo, which fits the source layout and not the old one. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Esca",
+        "value": "0x08",
+        "meaning": "the user pressed the escape key - break out of whatever is running",
+        "status": "MEASURED",
+        "evidence": "bare-TAD control frames"
+      },
+      {
+        "name": "Dcon",
+        "value": "0x09",
+        "meaning": "end the session and hang up",
+        "status": "MEASURED",
+        "evidence": "the disconnect ladder, ND-TO-ND-2026-08-08"
+      },
+      {
+        "name": "Tmod",
+        "value": "0x0C",
+        "meaning": "how the terminal should behave - a line at a time or a character at a time, and similar settings",
+        "status": "MEASURED",
+        "evidence": "100 sends it after CONNECTION ESTABLISHED"
+      },
+      {
+        "name": "Ttyp",
+        "value": "0x0D",
+        "meaning": "what kind of terminal this is, so the far end knows what it can draw",
+        "status": "MEASURED",
+        "evidence": "same exchange"
+      },
+      {
+        "name": "Cesc",
+        "value": "0x0E",
+        "meaning": "enable (payload 1) or disable (payload 0) the escape function for this session. Choosing WHICH key means escape is DESC (0x0F) - this entry used to describe DESC",
+        "status": "MEASURED",
+        "evidence": "BCESC in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/06-COS-TAD-RES-CODE.NPL builds the payload as 'IF DFOPP.DFLAG BIT 5IESC THEN A:=0 ELSE A:=1' - 5IESC is inhibit-escape, so 1 = enabled and 0 = disabled. A responder with escape inhibited answers ESCA with EDRS rather than ESRS (ESCDIS in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL). The CescState enum was already right; the observed 0->1 step during login is escape being turned off while credentials are typed and back on afterwards. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Desc",
+        "value": "0x0F",
+        "meaning": "define what the escape key does",
+        "status": "INFERRED",
+        "evidence": "name from ND sources"
+      },
+      {
+        "name": "Sycn",
+        "value": "0x13",
+        "meaning": "the SYSTEM CONTROL word - one 16-bit payload word on a general control channel. Its user-control twin is USCN (0x14). The login values we see stepping through a connect are one USE of the channel, not its definition; 'get back in step', which this entry used to say, is wrong",
+        "status": "MEASURED",
+        "evidence": "CTOBAD in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/06-COS-TAD-RES-CODE.NPL sends 7SYCN for output-ioset control code 23 (octal) and 7USCN for 24, one word by WORDPUT in both cases, flushing immediately only for parameter values 1, 13 and 17 (octal). The observed login values 0x0002/0x0003/0x0006/0x000A stay MEASURED from conn-to-d102 frames 62/64/68/70 - see SycnState - but what writes them is above the driver and not in this source. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Rese",
+        "value": "0x16",
+        "meaning": "start clean. Sent twice while a session is being set up, which is why it appears in the accept ladder",
+        "status": "MEASURED",
+        "evidence": "port-assign ladder"
+      },
+      {
+        "name": "Reco",
+        "value": "0x17",
+        "meaning": "reset confirm - the answer to a RESE. Not 'pick up a session again after it was interrupted', which this entry used to say",
+        "status": "MEASURED",
+        "evidence": "the driver's own prebuilt head is named RESCF with the comment 'RESET-CONF MESSAGE' in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL, and an incoming RECO is treated only as the awaited confirmation of a sent RESE (the CHRESO/RSPNUM arm there, and the RESE send in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/06-COS-TAD-RES-CODE.NPL). Also matches the bring-up ladder we drive live. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Dumm",
+        "value": "0x18",
+        "meaning": "a placeholder that carries nothing. Real machines send one during setup, so we do too",
+        "status": "MEASURED",
+        "evidence": "port-assign ladder"
+      },
+      {
+        "name": "Opsv",
+        "value": "0x001F",
+        "meaning": "OPSV - OS / protocol version handshake (0x1F)",
+        "status": "INFERRED",
+        "evidence": "named in the ND sources, via the summary on the enum member"
+      },
+      {
+        "name": "Cers",
+        "value": "0x0021",
+        "meaning": "CERS - escape / CESC response (0x21). Asker-sent after each host burst / CESC change",
+        "status": "INFERRED",
+        "evidence": "named in the ND sources, via the summary on the enum member"
+      },
+      {
+        "name": "Esrs",
+        "value": "0x20",
+        "meaning": "the host answering the terminal ESCA - sent with Rese as the pair that lets the login prompt follow",
+        "status": "MEASURED",
+        "evidence": "conn-to-d102-from-100.pcapng frame 603, server side; and 7ESRS=000040 octal in SINTRAN/NPL-SOURCE/SYMBOLS/K03. Its disabled-escape twin EDRS (0x29) is built from the prebuilt head EDRSP in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL"
+      },
+      {
+        "name": "Lun",
+        "value": "0x0B",
+        "meaning": "the TAD logical-unit index in the port assignment; the unit the user sees is 768 + this value",
+        "status": "MEASURED",
+        "evidence": "7LUN=000013 octal in SINTRAN/NPL-SOURCE/SYMBOLS. LU=768+value confirmed live 2026-08-17 (index 0x02 printed \"TAD LOGICAL UNIT NO: 770\"). FIVE index values observed across captures - 0x00 conn-to-102-from103-via100, 0x01 ethernet-conn-to-D100-from-102-WORKING, 0x02 new-conn, 0x03 ALLTEST-fa-connectto, 0x04 conn-to-d102-from-100. D102 is the server in BOTH the 0x00 and the 0x04 capture, so the index is free-slot state on the serving machine: not constant, not per-machine, not derivable from the session ordinal. The earlier claim that 0x00 was never observed is REFUTED. We allocate per session and only guarantee uniqueness"
+      },
+      {
+        "name": "Fbsi",
+        "value": "0x15",
+        "meaning": "field/buffer size tag in the port assignment; we emit the two-byte value 01 08 copied from a real capture",
+        "status": "INFERRED",
+        "evidence": "7FBSI=000025 octal in SINTRAN/NPL-SOURCE/SYMBOLS/K03 names the TAG. What its two bytes MEAN is not established - treat 01 08 as an observed constant, not a decoded field"
+      },
+      {
+        "name": "Mod8",
+        "value": "0x2C",
+        "meaning": "8-bit mode negotiation for the terminal line; we neither send nor handle it",
+        "status": "INFERRED",
+        "evidence": "78MOD=000054 / 7UMOD=000053 octal in SINTRAN/NPL-SOURCE/SYMBOLS/L07 and M06. ABSENT from K03 - these two arrived after Release K. Not implemented here; recorded so the value is not re-carved"
+      },
+      {
+        "name": "Umod",
+        "value": "0x2B",
+        "meaning": "a mode message that appears alongside 78MOD from Release L onwards; meaning not established",
+        "status": "INFERRED",
+        "evidence": "78MOD=000054 / 7UMOD=000053 octal in SINTRAN/NPL-SOURCE/SYMBOLS/L07 and M06. ABSENT from K03 - these two arrived after Release K. Not implemented here; recorded so the value is not re-carved"
+      },
+      {
+        "name": "Uscn",
+        "value": "0x14",
+        "meaning": "the USER CONTROL word - one 16-bit payload word; the sender then waits for an ERRS response",
+        "status": "INFERRED",
+        "evidence": "CTOBAD in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/06-COS-TAD-RES-CODE.NPL builds 7USCN for output-ioset control code 24 (octal), stores 7ERRS as the awaited response and suspends the caller. Twin of SYCN. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Isrq",
+        "value": "0x22",
+        "meaning": "remote ISIZE request - empty I-field. Asks the far end how many input characters are waiting",
+        "status": "INFERRED",
+        "evidence": "BISIZ/OISIZ in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/06-COS-TAD-RES-CODE.NPL send it with a requested I-field size of zero when a program calls ISIZE (MON 66) or IBRSIZ (MON 313) and the local input buffer is empty, then suspend the caller. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Isrs",
+        "value": "0x23",
+        "meaning": "remote ISIZE response - two data bytes, big-endian character count",
+        "status": "INFERRED",
+        "evidence": "prebuilt head ISZRS := (7ISRS\\2) in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL; the driver reads the count as byte6*256 + byte7 and returns it to the suspended caller. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Nowt",
+        "value": "0x24",
+        "meaning": "nowait status - one status byte; the variant chosen when the entry status is zero",
+        "status": "INFERRED",
+        "evidence": "NWSTA in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL: 'IF A=0 THEN A:=7NOWT ELSE A:=7TNOW FI', then one byte by STORBYT. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Tnow",
+        "value": "0x25",
+        "meaning": "nowait status - one status byte; the variant chosen when the entry status is non-zero",
+        "status": "INFERRED",
+        "evidence": "NWSTA in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL, the other arm of the same test as NOWT. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Nwre",
+        "value": "0x26",
+        "meaning": "nowait restart - high priority, empty. The receiver bounces it straight back and then restarts its suspended user program",
+        "status": "INFERRED",
+        "evidence": "prebuilt head NWREM := (7NWRE\\0) in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL; the BDRINP high-priority arm sends the message back with XFSND before going to DATRES. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Rloc",
+        "value": "0x27",
+        "meaning": "remote local / rubout for NORD-NET - high priority, empty. Handled in the same branch as ESCA",
+        "status": "INFERRED",
+        "evidence": "prebuilt head RLOCA := (7RLOC\\0) with the comment 'REMOTE LOCAL (RUBOUT NORD-NET)' in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL; ESCDIS delivers the configured local character when the 5LCHAR flag is set and 0o177 otherwise. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Edrs",
+        "value": "0x29",
+        "meaning": "escape response sent when the escape function is DISABLED - high priority, empty. This is the answer to ESCA or RLOC that a responder with escape inhibited sends INSTEAD of ESRS",
+        "status": "INFERRED",
+        "evidence": "prebuilt buffer EDRSP := (7EDRS\\0,0,2) with the comment 'ESCAPE RESPONSE ESCAPE DISABLED BUFFER' in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL; ESCDIS sends it and runs no escape handling at all in that case. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Trep",
+        "value": "0x2A",
+        "meaning": "terminal report status - two data bytes, big-endian. Bit 2 buffer overrun, bit 3 parity error, bit 4 framing error",
+        "status": "INFERRED",
+        "evidence": "prebuilt head TREPS := (7TREP\\2) in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL; the receiver bounces the message back and folds bits 2/3/4 into its own TINFO word as 5BFUL/5PAER/5FRER. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Cpco",
+        "value": "0xFA",
+        "meaning": "completion code - four data bytes, two 16-bit words",
+        "status": "INFERRED",
+        "evidence": "SNDCP in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL creates the header with the even-start builder and stores two words with whole-word stores, advancing the byte pointer by 4. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Errs",
+        "value": "0xFB",
+        "meaning": "error response - two data bytes, big-endian; the answer to USCN",
+        "status": "INFERRED",
+        "evidence": "prebuilt head ERRSP := (7ERRS\\2) in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL; read big-endian from head bytes 6-7 like ISRS, and it releases the caller CTOBAD suspended after a USCN. value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      },
+      {
+        "name": "Reje",
+        "value": "0xFE",
+        "meaning": "reject - one data byte, the type of the message being rejected. Three bytes on the wire: FE 01 type",
+        "status": "INFERRED",
+        "evidence": "REJECT in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL writes 7REJE, a count of 1, then CURMES AND 0xFF. Sent for a normal-priority type the driver does not accept, for a message claiming more bytes than the buffer holds, and for an unrecognised high-priority head; SNDREJ appends an RFI when the rejected message was data. The asking program sees SINTRAN error TER01 (0o315). value identical in all four symbol tables under SINTRAN/NPL-SOURCE/SYMBOLS (J, K03, L07, M06), re-checked by hand 2026-08-18"
+      }
+    ],
+    "csharp_enum": {
+      "type": "NDInsight.Sintran.Xmsg.Node.Tad.TadOp",
+      "is_flags": false,
+      "completeness": "EVERY member of this enum must appear here, and every entry here must exist in the enum. The test checks BOTH directions - a registry that is merely a subset is how code and documentation drift apart."
+    },
+    "bindings": {
+      "c": {
+        "enum": "tad_op",
+        "prefix": "TAD_OP_",
+        "underlying_type": "uint8_t"
+      }
+    }
+  },
+  "open_questions": [
+    {
+      "id": "B3",
+      "question": "the accept parameter trailer",
+      "see": "exchanges.connect.accept.body_fields[parameter_trailer]"
+    },
+    {
+      "id": "T1",
+      "question": "the session-port rule",
+      "see": "exchanges.connect.accept.body_fields[session_port]"
+    },
+    {
+      "id": "T2",
+      "question": "does a Release L machine still SEND reject (REJE), the escape-disabled response (EDRS) and terminal-report (TREP)? The constants are in the L07 and M06 symbol tables and the version J driver plainly uses all three, but we have never captured one. A capture would settle it.",
+      "see": "operations.values[Reje]"
+    },
+    {
+      "id": "T3",
+      "question": "what the SYCN payload values 0x0002/0x0003/0x0006/0x000A actually encode. The J driver shows the channel and the one-word payload, not the codes - whatever writes them sits above the driver and is not in that listing.",
+      "see": "operations.values[Sycn]"
+    },
+    {
+      "id": "T4",
+      "question": "the FBSI (0x15) payload 01 08. The J driver's buffers are NOBUFF buffers of FBSIZ bytes each, so the pair COULD be that, or FBSIZ = 0x0108 = 264, or neither. TADADM, which builds the trailer, is on segment SG36 and is not in the source. Speculation only.",
+      "see": "operations.values[Fbsi]"
+    },
+    {
+      "id": "T5",
+      "question": "the names of the raw session-setup opcodes 0x06 and 0x07. 7CORQ=000006 and 7CORS=000007 ('connect request / connect response') sit at exactly those values in the J symbol table, with 7CONF=000005 beside them - but the 7-prefix symbol space carries several unrelated families with overlapping small values, so this is a VALUE MATCH ONLY and they stay raw in the code until captured semantics confirm it. Same for 0xFD, where 7POLL=000375 matches the notify byte our teardown sends.",
+      "see": "exchanges.connect"
+    }
+  ],
+  "flows": {
+    "connect_a_terminal": {
+      "title": "Somebody types CONNECT-TO",
+      "summary": "How a terminal session on one machine reaches another. The asker knows only a NAME, so XROUT carries the first letter and then steps aside.",
+      "proved": "the asking side is captured many times in ARCHIVE-2026-07; OUR side answering is not yet accepted by D100 - see the open questions",
+      "actors": [
+        "terminal",
+        "XROUT",
+        "responder"
+      ],
+      "steps": [
+        {
+          "from": "terminal",
+          "to": "XROUT",
+          "op": "XSLET",
+          "note": "a letter naming *TADADM and the target machine"
+        },
+        {
+          "from": "XROUT",
+          "to": "responder",
+          "op": "XSLET",
+          "note": "SPENDS a free slot - see the seat law in xrout-services"
+        },
+        {
+          "from": "responder",
+          "to": "terminal",
+          "msg": "Rese",
+          "reply": true,
+          "note": "the accept: role 0x8640, the session port, the parameter pair"
+        },
+        {
+          "from": "responder",
+          "to": "terminal",
+          "msg": "Dumm",
+          "reply": true
+        },
+        {
+          "from": "terminal",
+          "to": "responder",
+          "msg": "Ttyp",
+          "note": "what kind of terminal this is"
+        },
+        {
+          "from": "responder",
+          "to": "terminal",
+          "msg": "Tmod",
+          "reply": true
+        },
+        {
+          "loop": "for the rest of the session",
+          "steps": [
+            {
+              "from": "terminal",
+              "to": "responder",
+              "msg": "Bdat",
+              "note": "keystrokes"
+            },
+            {
+              "from": "responder",
+              "to": "terminal",
+              "msg": "Bdat",
+              "reply": true,
+              "note": "screen output"
+            }
+          ]
+        },
+        {
+          "from": "terminal",
+          "to": "responder",
+          "msg": "Dcon",
+          "note": "hang up"
+        }
+      ],
+      "gotchas": [
+        {
+          "name": "The responder runs its OWN sequence.",
+          "detail": "It does not echo the asker's. It advances per NEW connect and answers a retransmission at the same number."
+        },
+        {
+          "name": "Everything after the accept goes to the SESSION PORT.",
+          "detail": "Not to the address the letter arrived on."
+        }
+      ]
+    }
+  },
+  "bitfields": {
+    "tad_terminal_mode": {
+      "location": "The single payload byte of a TMOD (0x0C) terminal-mode message",
+      "width_bits": 8,
+      "rule": "Bits 4-7 are not read by the version J receiver at all - do not invent meanings for them. This byte was undecoded here until 2026-08-18.",
+      "csharp": "NDInsight.Sintran.Xmsg.Node.Tad.TerminalModeFlags",
+      "bits": [
+        {
+          "bit": 0,
+          "mask": "0x01",
+          "name": "CapitalLettersOnly",
+          "meaning": "fold the line's input to capital letters (SINTRAN flag 5CAPITAL)",
+          "status": "INFERRED",
+          "evidence": "sender CTMOD in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/06-COS-TAD-RES-CODE.NPL sets it from 5CAPITAL and receiver BDTMOD in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL reads it back into the same flag - both halves of the J driver agree. Proven for J; no L source read and this bit has not been seen set on our wire."
+        },
+        {
+          "bit": 1,
+          "mask": "0x02",
+          "name": "CarriageReturnDelay",
+          "meaning": "the terminal needs filler time after a carriage return (SINTRAN flag 5CRDLY)",
+          "status": "INFERRED",
+          "evidence": "CTMOD in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/06-COS-TAD-RES-CODE.NPL sets it from 5CRDLY; BDTMOD in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL reads it back. Proven for J; not yet seen set on our wire."
+        },
+        {
+          "bit": 2,
+          "mask": "0x04",
+          "name": "StopOnFullPage",
+          "meaning": "pause output when the screen fills instead of scrolling on (the datafield's SCREEN counter)",
+          "status": "INFERRED",
+          "evidence": "CTMOD in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/06-COS-TAD-RES-CODE.NPL sets it when SCREEN is non-zero; BDTMOD in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL sets SCREEN from it. Proven for J; not yet seen set on our wire."
+        },
+        {
+          "bit": 3,
+          "mask": "0x08",
+          "name": "LogoutOnMissingCarrier",
+          "meaning": "log the user out when the line's carrier goes away (SINTRAN flag 5LBLOG)",
+          "status": "MEASURED",
+          "evidence": "CTMOD in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/06-COS-TAD-RES-CODE.NPL sets it from 5LBLOG and BDTMOD in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL reads it back. This is the one bit we have on the wire: real clients send TMOD 0x08 in the terminal-setup burst, which under this decode reads as 'log me out if the carrier drops' - a sensible request from a remote terminal and an independent check on the decode."
+        }
+      ],
+      "csharp_enum": {
+        "type": "NDInsight.Sintran.Xmsg.Node.Tad.TerminalModeFlags",
+        "is_flags": true,
+        "only_in_code": [
+          "None"
+        ],
+        "only_in_code_why": "None is the empty value, not a bit. Every real bit is described above.",
+        "completeness": "EVERY member of this enum must appear here, and every entry here must exist in the enum."
+      },
+      "bindings": {
+        "c": {
+          "enum": "tad_terminal_mode",
+          "prefix": "TAD_TERMINAL_MODE_",
+          "underlying_type": "uint8_t"
+        }
+      }
+    }
+  },
+  "error_codes": {
+    "note": "SINTRAN error numbers the TAD driver hands back to a program on its own machine. These never travel on the wire - a live experiment reporting one of them is telling you about the far side's driver state, not about the frame you sent.",
+    "csharp": "NDInsight.Sintran.Xmsg.Node.Tad.TadErrorCodes",
+    "values": [
+      {
+        "name": "TER00",
+        "value": "0xCC",
+        "octal": "000314",
+        "decimal": 204,
+        "meaning": "input completed while a delayed escape action was still pending",
+        "status": "INFERRED",
+        "evidence": "IEDCHK in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/06-COS-TAD-RES-CODE.NPL; TER00=000314 in the J symbol table. Proven for J, never observed by us."
+      },
+      {
+        "name": "TER01",
+        "value": "0xCD",
+        "octal": "000315",
+        "decimal": 205,
+        "meaning": "the message was rejected - the driver sent a REJE and failed its caller with this",
+        "status": "INFERRED",
+        "evidence": "set right after CALL SNDREJ in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/06-COS-TAD-RES-CODE.NPL and reached through the SRJE path in CTRMES in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL; TER01=000315 in the J symbol table. This is the number to look for when a remote program complains and we suspect we sent an opcode the far driver does not accept."
+      },
+      {
+        "name": "TER02",
+        "value": "0xCE",
+        "octal": "000316",
+        "decimal": 206,
+        "meaning": "the TAD is not connected - its port number is zero",
+        "status": "INFERRED",
+        "evidence": "the PORTNO=0 guards in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL; TER02=000316 in the J symbol table."
+      },
+      {
+        "name": "XKXXX",
+        "value": "0x4200",
+        "octal": "041000",
+        "decimal": 16896,
+        "meaning": "the base a negated XMSG error code is OR-ed onto to make a SINTRAN error number",
+        "status": "MEASURED",
+        "evidence": "CNVERR in SINTRAN III version J NPL source, SINTRAN/NPL-SOURCE-2/NPL-CLEAN/20-COS-TAD-POF-CODE.NPL is one instruction pair: negate the negative XMSG code and OR with XKXXX, so XENSE (-34 decimal = -0o42) surfaces as 0o41042. XKXXX=041000 in the J and K03 symbol tables, and the same 16896 already carried in xmsg-constants.json."
+      }
+    ]
+  }
+}

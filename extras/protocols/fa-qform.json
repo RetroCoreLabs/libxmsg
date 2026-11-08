@@ -1,0 +1,695 @@
+{
+  "meta": {
+    "title": "FA - the COSMOS file-access service, and the QFORM encoding its bodies use",
+    "purpose": "The protocol behind tasks 38, 23 and 33 - pull, create and the sync daemon. All three are proved against a real machine, so most of this is MEASURED; it is written down so the next change is made against a statement rather than a re-reading of the captures.",
+    "authority": "This file and the C# must agree - the conformance tests assert the parts a machine can check.",
+    "layering": "An FA message is the BODY of a SINTRAN datagram (see sintran-wire.json). Its first eight bytes are a fixed prefix; everything after is QFORM, EXCEPT a data message, which is raw content to the end.",
+    "created": "2026-08-17",
+    "one_line": "remote files - open, read, write, create, list - and the QFORM encoding its bodies use"
+  },
+  "status_values": {
+    "MEASURED": "Observed on the wire, with the capture or live run named.",
+    "INFERRED": "Follows from something measured, not itself observed.",
+    "UNKNOWN": "Copied or mirrored. Never computed or varied.",
+    "SUPERSEDED": "Believed once, disproved. Kept so it is not re-derived."
+  },
+  "qform": {
+    "summary": "How FA writes its fields down. Each item is a tag byte saying what KIND of thing follows and how long it is, then the thing itself. A body reads as a list of pairs - a selector naming a field, then that field value - and a selector of 0x00FF marks the end.",
+    "csharp": "NDInsight.Sintran.Xmsg.Qform.QformReader",
+    "tag_byte": {
+      "width_bits": 8,
+      "rules": [
+        {
+          "name": "end_of_stream",
+          "test": "bit 7 CLEAR",
+          "meaning": "the stream ends here",
+          "status": "MEASURED",
+          "evidence": "every FA capture"
+        },
+        {
+          "name": "class",
+          "extract": "(tag AND 0x70) >> 4",
+          "status": "MEASURED",
+          "evidence": "every FA capture"
+        },
+        {
+          "name": "length",
+          "extract": "tag AND 0x0F",
+          "applies_to": "classes 1..7",
+          "status": "MEASURED",
+          "evidence": "every FA capture"
+        },
+        {
+          "name": "subtype",
+          "extract": "tag AND 0x17",
+          "applies_to": "class 0",
+          "note": "class 0 is CONSTRUCTED and its length is ALWAYS escaped",
+          "status": "MEASURED",
+          "evidence": "every FA capture"
+        },
+        {
+          "name": "length_escape",
+          "test": "length nibble == 0",
+          "meaning": "the real length is the FOLLOWING byte",
+          "status": "MEASURED",
+          "evidence": "every FA capture"
+        },
+        {
+          "name": "escape_marker",
+          "value": "0x80",
+          "meaning": "an escaped length byte of 0x80 is a MARKER, not a length - the length is the byte after it",
+          "status": "MEASURED",
+          "evidence": "the LIST-FILES request 8C 80 46, whose arithmetic only closes with this reading"
+        }
+      ]
+    },
+    "classes": [
+      {
+        "value": 0,
+        "name": "Constructed",
+        "meaning": "length-delimited, content itself tagged",
+        "csharp": "QformClass.Constructed",
+        "status": "MEASURED",
+        "evidence": "FA listing replies"
+      },
+      {
+        "value": 1,
+        "name": "Integer",
+        "csharp": "QformClass.Integer",
+        "status": "MEASURED",
+        "evidence": "FA requests"
+      },
+      {
+        "value": 2,
+        "name": "TypedInteger",
+        "meaning": "carries the SINTRAN error number in a rejection - 0x0030 = 48 = wrong password",
+        "csharp": "QformClass.TypedInteger",
+        "status": "MEASURED",
+        "evidence": "a rejected open"
+      },
+      {
+        "value": 3,
+        "name": "ByteString",
+        "csharp": "QformClass.ByteString",
+        "status": "MEASURED",
+        "evidence": "file names, listing records"
+      },
+      {
+        "value": 4,
+        "name": "Class4",
+        "csharp": "QformClass.Class4",
+        "status": "UNKNOWN",
+        "evidence": "seen in captures; meaning never established"
+      },
+      {
+        "value": 5,
+        "name": "Class5",
+        "csharp": "QformClass.Class5",
+        "status": "UNKNOWN",
+        "evidence": "seen in captures; meaning never established"
+      },
+      {
+        "value": 6,
+        "name": "Class6Unknown",
+        "csharp": "QformClass.Class6Unknown",
+        "status": "UNKNOWN",
+        "evidence": "named for what it is - seen, not understood"
+      },
+      {
+        "value": 7,
+        "name": "Selector",
+        "meaning": "names the field whose value follows",
+        "csharp": "QformClass.Selector",
+        "status": "MEASURED",
+        "evidence": "every FA request"
+      }
+    ],
+    "traps": [
+      {
+        "name": "a flat walk descends into constructed values",
+        "detail": "Reading a body as a flat run of tag/value pairs walks INTO a class-0 payload and reads its bytes as top-level tags.",
+        "status": "MEASURED",
+        "evidence": "measured against captures; QformReader recurses instead"
+      },
+      {
+        "name": "SINTRAN pads a body to an even length",
+        "detail": "The pad byte can look like the start of a field. On 2026-08-06 it was read as an escaped length, ran off the end and threw, and every listing request was refused until it was found.",
+        "status": "MEASURED",
+        "evidence": "DOC/captures; the fix is the single-trailing-byte guard in QformReader"
+      }
+    ],
+    "bindings": {
+      "c": {
+        "enum": "qform_class",
+        "prefix": "QFORM_CLASS_",
+        "underlying_type": "uint8_t"
+      }
+    }
+  },
+  "message_prefix": {
+    "summary": "The eight bytes before the QFORM, present on every FA message.",
+    "csharp": "NDInsight.Sintran.Xmsg.Fa.FaExchangeCodec",
+    "fields": [
+      {
+        "byte_offset": 0,
+        "width": 2,
+        "name": "message_type",
+        "csharp": "MessageTypeOffset",
+        "status": "MEASURED",
+        "evidence": "every FA capture",
+        "width_bits": 16,
+        "c_type": "uint16_t",
+        "bindings": {
+          "c": {
+            "name": "message_type"
+          }
+        }
+      },
+      {
+        "byte_offset": 2,
+        "width": 2,
+        "name": "conversation",
+        "csharp": "ConversationOffset",
+        "status": "MEASURED",
+        "evidence": "every FA capture",
+        "width_bits": 16,
+        "c_type": "uint16_t",
+        "bindings": {
+          "c": {
+            "name": "conversation"
+          }
+        }
+      },
+      {
+        "byte_offset": 4,
+        "width": 4,
+        "name": "session_header",
+        "csharp": "SessionHeaderOffset",
+        "status": "MEASURED",
+        "evidence": "every FA capture",
+        "width_bits": 32,
+        "c_type": "uint32_t",
+        "bindings": {
+          "c": {
+            "name": "session_header"
+          }
+        }
+      }
+    ],
+    "minimum_body_length": 14,
+    "bindings": {
+      "c": {
+        "struct": "fa_message_prefix"
+      }
+    },
+    "qform_starts_at_byte": 8,
+    "qform_starts_note": "Not a field - the offset where the tagged data begins. It was listed as a field with a width of nothing, which a generator would have emitted as an empty member."
+  },
+  "message_types": [
+    {
+      "name": "Request",
+      "value": "0x07F0",
+      "csharp": "FaMessageType.Request",
+      "status": "MEASURED",
+      "evidence": "every FA capture"
+    },
+    {
+      "name": "ShortAck",
+      "value": "0x07A2",
+      "csharp": "FaMessageType.ShortAck",
+      "status": "MEASURED",
+      "evidence": "captured from a REAL client, FA-OPERATIONS-2026-08-08"
+    },
+    {
+      "name": "SessionFinished",
+      "value": "0x0782",
+      "csharp": "FaMessageType.SessionFinished",
+      "status": "MEASURED",
+      "evidence": "the close ladder"
+    },
+    {
+      "name": "SessionFinishedAlternate",
+      "value": "0x0781",
+      "csharp": "FaMessageType.SessionFinishedAlternate",
+      "status": "MEASURED",
+      "evidence": "the close ladder"
+    },
+    {
+      "name": "ConnectionConfirm",
+      "value": "0x07D2",
+      "csharp": "FaMessageType.ConnectionConfirm",
+      "status": "MEASURED",
+      "evidence": "connect exchange"
+    },
+    {
+      "name": "Close",
+      "value": "0x07C0",
+      "csharp": "FaMessageType.Close",
+      "status": "MEASURED",
+      "evidence": "the close ladder"
+    }
+  ],
+  "operations": {
+    "csharp": "NDInsight.Sintran.Xmsg.Fa.FaOperation",
+    "values": [
+      {
+        "name": "FileEntryDisconnect",
+        "value": "0x0001",
+        "meaning": "let go of a file slot",
+        "status": "MEASURED",
+        "evidence": "captured ladders"
+      },
+      {
+        "name": "ReserveFileEntry",
+        "value": "0x0002",
+        "meaning": "claim one of the far machine file slots before doing anything with a file",
+        "status": "MEASURED",
+        "evidence": "proved live, task 23"
+      },
+      {
+        "name": "ReleaseFileEntry",
+        "value": "0x0003",
+        "meaning": "give that slot back when finished",
+        "status": "MEASURED",
+        "evidence": "proved live, task 23"
+      },
+      {
+        "name": "ChangeFileEntryId",
+        "value": "0x0004",
+        "meaning": "renumber a slot",
+        "status": "INFERRED",
+        "evidence": "named in the ND sources; never driven"
+      },
+      {
+        "name": "OpenFile",
+        "value": "0x0005",
+        "meaning": "open a file by name, for reading or for writing",
+        "status": "MEASURED",
+        "evidence": "proved live, tasks 23 and 38"
+      },
+      {
+        "name": "CloseFile",
+        "value": "0x0006",
+        "meaning": "close it",
+        "status": "MEASURED",
+        "evidence": "proved live"
+      },
+      {
+        "name": "SetBlockSize",
+        "value": "0x0007",
+        "meaning": "agree how big each chunk of data will be",
+        "status": "MEASURED",
+        "evidence": "proved live"
+      },
+      {
+        "name": "ReadFile",
+        "value": "0x0008",
+        "meaning": "send me the contents",
+        "status": "MEASURED",
+        "evidence": "task 38 - 20400 bytes pulled off D100, SHA256 identical"
+      },
+      {
+        "name": "WriteFile",
+        "value": "0x0009",
+        "meaning": "here are the contents to store",
+        "status": "MEASURED",
+        "evidence": "task 23 - 20400 bytes written to D100"
+      },
+      {
+        "name": "CreateFile",
+        "value": "0x000A",
+        "meaning": "make a new file with this name and this many pages",
+        "status": "MEASURED",
+        "evidence": "task 23 - created by quoted new name, confirmed by D100's own file server"
+      },
+      {
+        "name": "DeleteFile",
+        "value": "0x000B",
+        "meaning": "delete a file",
+        "status": "MEASURED",
+        "evidence": "the request is pinned byte-for-byte against real ND-to-ND traffic - D102 deleting XFERTEST:DATA on D100, claude-delete-file-102-to-100-2026-07-29.pcapng - and FaDeleteFileCodec.BuildRequest reproduces it. NOT yet driven against a live server: what a real server ANSWERS is still uncaptured, because the two deletes D100 sent us in August were refused."
+      },
+      {
+        "name": "SiiiSpecial",
+        "value": "0x000C",
+        "meaning": "a SINTRAN-specific request",
+        "status": "INFERRED",
+        "evidence": "named in the ND sources"
+      },
+      {
+        "name": "DeviceFunction",
+        "value": "0x000D",
+        "meaning": "operate on a device rather than a file",
+        "status": "UNKNOWN",
+        "evidence": "no operator command is known to drive it; blocked since 2026-08-09"
+      }
+    ],
+    "csharp_enum": {
+      "type": "NDInsight.Sintran.Xmsg.Protocol.Fa.FaOperation",
+      "is_flags": false,
+      "completeness": "EVERY member of this enum must appear here, and every entry here must exist in the enum. The test checks BOTH directions - a registry that is merely a subset is how code and documentation drift apart."
+    },
+    "bindings": {
+      "c": {
+        "enum": "fa_operation",
+        "prefix": "FA_OP_",
+        "underlying_type": "uint16_t"
+      }
+    }
+  },
+  "status_codes": {
+    "note": "Returned in a rejection. These are SINTRAN error numbers and MUST match the real error table - a made-up value is worse than none.",
+    "csharp": "NDInsight.Sintran.Xmsg.Servers.Fa.FaServerStatus",
+    "values": [
+      {
+        "name": "Ok",
+        "value": 0,
+        "meaning": "it worked",
+        "status": "MEASURED",
+        "evidence": "every successful exchange"
+      },
+      {
+        "name": "NoSuchFile",
+        "value": 46,
+        "meaning": "no file of that name on that machine",
+        "status": "MEASURED",
+        "evidence": "SINTRAN error table; observed on a missing file"
+      },
+      {
+        "name": "WrongPassword",
+        "value": 48,
+        "meaning": "the file is protected and the password did not match",
+        "status": "MEASURED",
+        "evidence": "observed as TypedInteger 0x0030 in a rejected open"
+      },
+      {
+        "name": "StoreError",
+        "value": 97,
+        "meaning": "the machine could not write it - out of room, or the disc complained",
+        "status": "INFERRED",
+        "evidence": "SINTRAN error table"
+      },
+      {
+        "name": "NotSupported",
+        "value": 129,
+        "meaning": "that machine does not offer this operation",
+        "status": "INFERRED",
+        "evidence": "SINTRAN error table"
+      },
+      {
+        "name": "EndOfDirectory",
+        "value": 197,
+        "meaning": "no more files - the end of a listing, not a fault",
+        "status": "MEASURED",
+        "evidence": "ends every listing walk"
+      },
+      {
+        "name": "BadRequest",
+        "value": 211,
+        "meaning": "the request did not make sense to the far end",
+        "status": "INFERRED",
+        "evidence": "SINTRAN error table"
+      }
+    ],
+    "csharp_enum": {
+      "type": "NDInsight.Sintran.Xmsg.Servers.Fa.FaServerStatus",
+      "is_flags": false,
+      "completeness": "EVERY member of this enum must appear here, and every entry here must exist in the enum. The test checks BOTH directions - a registry that is merely a subset is how code and documentation drift apart."
+    },
+    "bindings": {
+      "c": {
+        "enum": "fa_status",
+        "prefix": "FA_STATUS_",
+        "underlying_type": "uint16_t"
+      }
+    }
+  },
+  "data_transfer": {
+    "block_length": 1024,
+    "blocks_per_read": 2,
+    "data_message_length": 1032,
+    "note": "A data message is the eight-byte prefix then RAW content to the end - it carries no QFORM. It is recognised by its LENGTH and by a transfer being in progress, never by parsing it: walking it as tagged fields decodes file text as tags.",
+    "csharp": "NDInsight.Sintran.Xmsg.Fa.FaFileDataCodec",
+    "status": "MEASURED",
+    "evidence": "tasks 23 and 38, 20400 bytes each way",
+    "rules": [
+      {
+        "name": "bodies must be WORD-ALIGNED",
+        "detail": "an odd-length body is dropped in silence by the peer",
+        "status": "MEASURED",
+        "evidence": "found the hard way; see the memory of the same name"
+      },
+      {
+        "name": "the last message is marked AND counted",
+        "detail": "the flag is used, but the byte count decides completion - a misread flag would otherwise hang a write forever",
+        "status": "MEASURED",
+        "evidence": "FaServer.StoreWriteBlock"
+      }
+    ]
+  },
+  "open_questions": [
+    {
+      "id": "B5",
+      "question": "Does DeleteFile work at all?",
+      "see": "operations.values[DeleteFile]",
+      "blocks": "the sync daemon mirroring a deletion"
+    },
+    {
+      "id": "F1",
+      "question": "What does the FA read-ladder bit MEAN?",
+      "known": "only WHEN it is set",
+      "status": "UNKNOWN",
+      "evidence": "FaReadLadder remarks"
+    },
+    {
+      "id": "F2",
+      "question": "QFORM classes 4, 5 and 6",
+      "status": "UNKNOWN",
+      "evidence": "seen in captures, never decoded; nothing we build uses them"
+    },
+    {
+      "id": "F3",
+      "question": "Why does a LIST-FILES against our FA server put D100 into a reconnect loop?",
+      "observed": "D100 opened six conversations in thirty seconds. We issued a NEW connection number on each confirm - 0x0042 through 0x0047 - while every 'I am finished' from D100 named 0x0042.",
+      "status": "UNKNOWN",
+      "evidence": "DOC/captures/fa-listing-reconnect-loop-2026-08-17.log, 2026-08-17",
+      "candidate": "the client may keep its OWN conversation number rather than adopting the one we hand out, in which case issuing a fresh one per connect is our error. NOT diagnosed - the numbers are what was observed, the reading of them is not established.",
+      "would_settle_it": "a capture where a real client reconnects to a real server - every archived FA capture holds a single session",
+      "progress_2026_08_17": "The two-number scheme is now MEASURED - see conversation_numbers. What is still unknown is narrower: on a RECONNECT, does the server issue a new number or reuse the old one? Our pool hands out a fresh one each time (0x0042..0x0047 in thirty seconds) while D100 kept naming 0x0042."
+    }
+  ],
+  "flows": {
+    "pull_a_file": {
+      "title": "Reading a file off a remote machine",
+      "summary": "The ladder task 38 drove against D100. Every step was answered by the real machine.",
+      "proved": "task 38 - 20400 bytes pulled off D100, SHA256 identical to the original",
+      "actors": [
+        "us",
+        "XROUT",
+        "D100"
+      ],
+      "steps": [
+        {
+          "from": "us",
+          "to": "XROUT",
+          "op": "XSLET",
+          "note": "we know the service by NAME, not address"
+        },
+        {
+          "from": "XROUT",
+          "to": "D100",
+          "op": "XSLET",
+          "note": "forwarding SPENDS one of the server's free slots"
+        },
+        {
+          "from": "D100",
+          "to": "us",
+          "msg": "ConnectionConfirm",
+          "reply": true,
+          "note": "from here we have its address and XROUT is out of the way"
+        },
+        {
+          "from": "us",
+          "to": "D100",
+          "op": "ReserveFileEntry"
+        },
+        {
+          "from": "D100",
+          "to": "us",
+          "msg": "ShortAck",
+          "reply": true
+        },
+        {
+          "from": "us",
+          "to": "D100",
+          "op": "OpenFile"
+        },
+        {
+          "from": "D100",
+          "to": "us",
+          "msg": "ShortAck",
+          "reply": true
+        },
+        {
+          "from": "us",
+          "to": "D100",
+          "op": "SetBlockSize"
+        },
+        {
+          "loop": "until the whole file has arrived",
+          "steps": [
+            {
+              "from": "us",
+              "to": "D100",
+              "op": "ReadFile"
+            },
+            {
+              "from": "D100",
+              "to": "us",
+              "msg": "Request",
+              "reply": true,
+              "note": "raw content, 1024 bytes a block - NO tagged fields"
+            }
+          ]
+        },
+        {
+          "from": "us",
+          "to": "D100",
+          "op": "CloseFile"
+        },
+        {
+          "from": "us",
+          "to": "D100",
+          "op": "ReleaseFileEntry"
+        },
+        {
+          "from": "us",
+          "to": "D100",
+          "msg": "Close"
+        }
+      ],
+      "gotchas": [
+        {
+          "name": "A repeat is not a new event.",
+          "detail": "A retransmitted confirm must not rewind the session - treating one as a fresh step restarts the transfer."
+        },
+        {
+          "name": "Filter by session port.",
+          "detail": "Another conversation on the same node will otherwise be read as part of this one."
+        }
+      ]
+    },
+    "create_and_push_a_file": {
+      "title": "Creating a file on a remote machine and writing to it",
+      "summary": "The ladder task 23 drove. The name is QUOTED, which is what makes it a create rather than an open of something existing.",
+      "proved": "task 23 - 20400 bytes written to D100 under a quoted new name, the size confirmed by D100's own file server",
+      "actors": [
+        "us",
+        "D100"
+      ],
+      "steps": [
+        {
+          "from": "us",
+          "to": "D100",
+          "op": "ReserveFileEntry"
+        },
+        {
+          "from": "D100",
+          "to": "us",
+          "msg": "ShortAck",
+          "reply": true
+        },
+        {
+          "from": "us",
+          "to": "D100",
+          "op": "CreateFile",
+          "note": "name in quotes, plus how many pages"
+        },
+        {
+          "from": "us",
+          "to": "D100",
+          "op": "OpenFile",
+          "note": "now open the file we just made"
+        },
+        {
+          "from": "us",
+          "to": "D100",
+          "op": "SetBlockSize"
+        },
+        {
+          "loop": "one pass per block",
+          "steps": [
+            {
+              "from": "us",
+              "to": "D100",
+              "op": "WriteFile"
+            },
+            {
+              "from": "us",
+              "to": "D100",
+              "msg": "Request",
+              "note": "the raw block; the LAST one is marked AND counted"
+            },
+            {
+              "from": "D100",
+              "to": "us",
+              "msg": "ShortAck",
+              "reply": true
+            }
+          ]
+        },
+        {
+          "from": "us",
+          "to": "D100",
+          "op": "CloseFile"
+        },
+        {
+          "from": "us",
+          "to": "D100",
+          "op": "ReleaseFileEntry"
+        },
+        {
+          "from": "us",
+          "to": "D100",
+          "msg": "Close"
+        }
+      ],
+      "gotchas": [
+        {
+          "name": "Bodies must be WORD-ALIGNED.",
+          "detail": "An odd-length body is dropped in silence by the peer - no error comes back, the transfer simply stops."
+        },
+        {
+          "name": "Quotes are what create.",
+          "detail": "The quoting is kept on the wire; an unquoted name asks to open something that already exists."
+        }
+      ]
+    }
+  },
+  "conversation_numbers": {
+    "summary": "There are TWO, one per direction, used like port numbers: each side addresses the other by the OTHER side's number.",
+    "status": "MEASURED",
+    "evidence": "claude-delete-file-102-to-100-2026-07-29.pcapng, a real ND deleting a file on another real ND",
+    "observed": {
+      "confirm": "07d2 0002 0048 - the server issues 0048 and echoes the client's 0002",
+      "client_to_server": "07f0 0048 ... - the client addresses the server by the SERVER's number",
+      "server_to_client": "07f0 0002 ... - and the server answers using the CLIENT's",
+      "close": "07c0 0002 0048 - carries both"
+    },
+    "does_not_settle": "F3. That capture holds ONE session, so it cannot show whether a RECONNECT should be given a fresh number or keep the old one - which is exactly what our reconnect loop turns on."
+  },
+  "request_encoding_rules": {
+    "byte_string_form": {
+      "rule": "COMPACT while the field is 15 bytes or fewer - the length rides in the tag's low nibble - and ESCAPED from 16, where it needs a following byte.",
+      "status": "MEASURED",
+      "evidence": "a real client's OpenFile carries BF with fifteen characters and switches to B0 10 at sixteen; every captured delete is compact (BB, BD, BF)",
+      "why_it_matters": "emitting the compact tag for a longer field is not a size error, it is a DIFFERENT ENCODING - the peer then reads the wrong number of bytes"
+    },
+    "file_name_field": {
+      "rule": "the name, the SINTRAN terminator 0x27, then ONE more byte - so the field is the name length plus two",
+      "status": "MEASURED",
+      "evidence": "four samples across two capture sets",
+      "the_extra_byte": "UNKNOWN and it VARIES - T, W, F, R across the four. Not constant, not padding (odd-length three times), not derivable from the name. We write a space and stop at the terminator when reading, which is what a real server must also do or it could not accept four different values."
+    }
+  }
+}
