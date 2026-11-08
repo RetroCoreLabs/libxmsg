@@ -60,7 +60,7 @@ static int s_test_checks = 0;
     test_check_bytes(__FILE__, __LINE__, (actual), (size_t)(actual_len), (expected_hex))
 
 /** Parse "7E 01 3F" into bytes. Returns the count, or -1 when the text is not hex pairs. */
-static int test_hex_to_bytes(const char *hex, uint8_t *out, size_t cap)
+static inline int test_hex_to_bytes(const char *hex, uint8_t *out, size_t cap)
 {
     size_t n = 0;
     int nibbles = 0;
@@ -108,7 +108,7 @@ static int test_hex_to_bytes(const char *hex, uint8_t *out, size_t cap)
     return (int)n;
 }
 
-static void test_print_hex(const uint8_t *b, size_t n)
+static inline void test_print_hex(const uint8_t *b, size_t n)
 {
     for (size_t i = 0; i < n; i++)
     {
@@ -116,8 +116,8 @@ static void test_print_hex(const uint8_t *b, size_t n)
     }
 }
 
-static void test_check_bytes(const char *file, int line, const uint8_t *actual, size_t actual_len,
-                             const char *expected_hex)
+static inline void test_check_bytes(const char *file, int line, const uint8_t *actual,
+                                    size_t actual_len, const char *expected_hex)
 {
     uint8_t expected[4096];
     int expected_len = test_hex_to_bytes(expected_hex, expected, sizeof expected);

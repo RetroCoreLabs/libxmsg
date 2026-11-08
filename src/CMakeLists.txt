@@ -36,7 +36,12 @@ include(cmake/house_standard.cmake)
 # Header-only until P1 lands the first .c file; the empty source list is deliberate so the target
 # and its usage requirements exist from P0 on. CMake needs at least one source for a STATIC library,
 # so a one-line translation unit is generated here until then.
-set(XMSG_SOURCES)
+set(XMSG_SOURCES
+    libxmsg/log/xmsg_log.c
+    libxmsg/hdlc/fcs16.c)
+if(XMSG_WITH_ASYNC_FRAMER)
+    list(APPEND XMSG_SOURCES libxmsg/hdlc/hdlc_async.c)
+endif()
 
 if(NOT XMSG_SOURCES)
     set(XMSG_PLACEHOLDER_C "${CMAKE_CURRENT_BINARY_DIR}/xmsg_placeholder.c")

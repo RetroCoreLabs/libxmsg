@@ -7,9 +7,18 @@
 # Integration tests (label "integration") talk to a running nd100x and SKIP (exit code 2) when the
 # environment variable ND100X_HDLC_HOST is not set, so a plain `ctest` is always runnable.
 
+# The peer-to-peer test transport (in-memory pair with faults, loopback TCP). Test code, so it
+# may use the C library freely; it still builds with the house warnings.
+add_library(xmsg_testpair STATIC pair/test_pair.c)
+target_include_directories(xmsg_testpair PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(xmsg_testpair PUBLIC xmsg::xmsg PRIVATE house_warnings)
+if(WIN32)
+    target_link_libraries(xmsg_testpair PUBLIC ws2_32)
+endif()
+
 function(xmsg_add_test name)
     add_executable(test_${name} test_${name}.c)
-    target_link_libraries(test_${name} PRIVATE xmsg::xmsg house_warnings)
+    target_link_libraries(test_${name} PRIVATE xmsg::xmsg xmsg_testpair house_warnings)
     target_include_directories(test_${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     add_test(NAME ${name} COMMAND test_${name})
     set_tests_properties(${name} PROPERTIES PASS_REGULAR_EXPRESSION "TB_RESULT: PASS")
@@ -27,3 +36,7 @@ function(xmsg_add_integration_test name)
 endfunction()
 
 xmsg_add_test(smoke)
+xmsg_add_test(fcs16)
+xmsg_add_test(hdlc_async)
+xmsg_add_test(log)
+xmsg_add_test(pair_hdlc)
