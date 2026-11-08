@@ -400,7 +400,7 @@ static void handle_datagram(XmsgNode *n, const XmsgDatagram *in, uint32_t now_ms
             XmsgSession *s = find_session(n, &whole);
             if (s != NULL && s->ops->on_datagram != NULL)
             {
-                if (s->peer_port == 0)
+                if (s->peer_port == 0 && !s->any_peer_port)
                 {
                     s->peer_port = whole.sub.src_port; /* learned, never computed */
                 }

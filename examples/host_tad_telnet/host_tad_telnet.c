@@ -1,0 +1,840 @@
+/*
+ * host_tad_telnet.c - telnet to a SINTRAN machine: each telnet client gets its own TAD session.
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Ronny Hansen
+ *
+ * The tool dials the HDLC line of a SINTRAN machine (nd100x started with --hdlc=N:PORT listens
+ * for it), brings the XMSG link up as node --node, and listens for telnet clients. Every client
+ * that connects gets a terminal session on the host, as CONNECT-TO would give it on a real ND
+ * machine. Up to XMSG_MAX_SESSIONS clients at a time.
+ *
+ *   host_tad_telnet --hdlc 127.0.0.1:1362 --node 19999 --peer 100 --system D100 --listen 2300
+ *                   [--flags1 flags1.txt] [--log info]
+ *
+ * The SINTRAN side must know our node: the link is defined there for it, and XMSG is running.
+ *
+ * Terminal behaviour, following what the real asker does (see libxmsg/tad/tad_asker.h):
+ *  - the tool asks the telnet client for character mode and does the echoing itself, as the
+ *    host's ECKM says: echo on, or off while a password is typed;
+ *  - it edits a line locally (backspace and delete work) and sends it when Return is pressed,
+ *    one line per input grant, as the real asker sent "sys" + Return in one piece;
+ *  - host text goes to the client byte for byte (0xFF doubled, as telnet needs).
+ *
+ * The Flags1 count to each peer is kept in a small text file (--flags1, default
+ * host_tad_telnet.flags1) so a restart of the tool continues where it stopped.
+ *
+ * This is a host program, so it may print, allocate and use sockets; the library does none of
+ * those.
+ */
+#include <errno.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+typedef SOCKET Sock;
+#define SOCK_NONE INVALID_SOCKET
+#else
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <time.h>
+#include <unistd.h>
+typedef int Sock;
+#define SOCK_NONE (-1)
+#endif
+
+#include "libxmsg/xmsg.h"
+
+/* ------------------------------------------------------------------------------------------ */
+/* Platform                                                                                   */
+/* ------------------------------------------------------------------------------------------ */
+
+static uint32_t now_ms(void)
+{
+#ifdef _WIN32
+    return (uint32_t)GetTickCount64();
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)((uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u);
+#endif
+}
+
+static void sock_close(Sock s)
+{
+    if (s == SOCK_NONE)
+    {
+        return;
+    }
+#ifdef _WIN32
+    closesocket(s);
+#else
+    close(s);
+#endif
+}
+
+static void sock_nonblocking(Sock s)
+{
+#ifdef _WIN32
+    u_long on = 1;
+    ioctlsocket(s, FIONBIO, &on);
+#else
+    int flags = fcntl(s, F_GETFL, 0);
+    fcntl(s, F_SETFL, flags | O_NONBLOCK);
+#endif
+    int one = 1;
+    setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
+}
+
+static bool sock_would_block(void)
+{
+#ifdef _WIN32
+    return WSAGetLastError() == WSAEWOULDBLOCK;
+#else
+    return errno == EAGAIN || errno == EWOULDBLOCK;
+#endif
+}
+
+/* Non-blocking send: bytes taken, 0 when the buffer is full, -1 on a dead socket. */
+static int sock_send(Sock s, const uint8_t *b, size_t n)
+{
+    int r = (int)send(s, (const char *)b, (int)n, 0);
+    if (r < 0)
+    {
+        return sock_would_block() ? 0 : -1;
+    }
+    return r;
+}
+
+/* Non-blocking receive: bytes read, 0 when nothing waits, -1 when closed or failed. */
+static int sock_recv(Sock s, uint8_t *b, size_t cap)
+{
+    int r = (int)recv(s, (char *)b, (int)cap, 0);
+    if (r == 0)
+    {
+        return -1;
+    }
+    if (r < 0)
+    {
+        return sock_would_block() ? 0 : -1;
+    }
+    return r;
+}
+
+static Sock sock_dial(const char *host, const char *port)
+{
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    Sock s = SOCK_NONE;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, port, &hints, &res) != 0)
+    {
+        return SOCK_NONE;
+    }
+    for (struct addrinfo *a = res; a != NULL; a = a->ai_next)
+    {
+        s = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+        if (s == SOCK_NONE)
+        {
+            continue;
+        }
+        if (connect(s, a->ai_addr, (int)a->ai_addrlen) == 0)
+        {
+            break;
+        }
+        sock_close(s);
+        s = SOCK_NONE;
+    }
+    freeaddrinfo(res);
+    if (s != SOCK_NONE)
+    {
+        sock_nonblocking(s);
+    }
+    return s;
+}
+
+static Sock sock_listen(uint16_t port)
+{
+    struct sockaddr_in sa;
+    int one = 1;
+    Sock s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s == SOCK_NONE)
+    {
+        return SOCK_NONE;
+    }
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof one);
+    memset(&sa, 0, sizeof sa);
+    sa.sin_family = AF_INET;
+    sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    sa.sin_port = htons(port);
+    if (bind(s, (struct sockaddr *)&sa, sizeof sa) != 0 || listen(s, 4) != 0)
+    {
+        sock_close(s);
+        return SOCK_NONE;
+    }
+    sock_nonblocking(s);
+    return s;
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* Flags1 kept in a text file: one line per peer, "peer next"                                 */
+/* ------------------------------------------------------------------------------------------ */
+
+#define STORE_PEERS 8
+
+typedef struct FileStore
+{
+    const char *path;
+    uint16_t peer[STORE_PEERS];
+    uint16_t next[STORE_PEERS];
+    int count;
+} FileStore;
+
+static void store_read(FileStore *st)
+{
+    FILE *f = fopen(st->path, "r");
+    unsigned p;
+    unsigned v;
+    st->count = 0;
+    if (f == NULL)
+    {
+        return;
+    }
+    while (st->count < STORE_PEERS && fscanf(f, "%u %u", &p, &v) == 2)
+    {
+        st->peer[st->count] = (uint16_t)p;
+        st->next[st->count] = (uint16_t)v;
+        st->count++;
+    }
+    fclose(f);
+}
+
+static int store_load(void *ctx, uint16_t peer, uint16_t *next)
+{
+    FileStore *st = (FileStore *)ctx;
+    for (int i = 0; i < st->count; i++)
+    {
+        if (st->peer[i] == peer)
+        {
+            *next = st->next[i];
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int store_save(void *ctx, uint16_t peer, uint16_t next)
+{
+    FileStore *st = (FileStore *)ctx;
+    int i;
+    FILE *f;
+    for (i = 0; i < st->count && st->peer[i] != peer; i++)
+    {
+    }
+    if (i == st->count)
+    {
+        if (st->count >= STORE_PEERS)
+        {
+            return -1;
+        }
+        st->count++;
+        st->peer[i] = peer;
+    }
+    st->next[i] = next;
+    f = fopen(st->path, "w");
+    if (f == NULL)
+    {
+        return -1;
+    }
+    for (i = 0; i < st->count; i++)
+    {
+        fprintf(f, "%u %u\n", st->peer[i], st->next[i]);
+    }
+    return (fclose(f) == 0) ? 0 : -1;
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* Telnet clients                                                                             */
+/* ------------------------------------------------------------------------------------------ */
+
+#define TN_IAC  0xFFu
+#define TN_WILL 0xFBu
+#define TN_DO   0xFDu
+#define TN_SB   0xFAu
+#define TN_SE   0xF0u
+#define TN_ECHO 0x01u
+#define TN_SGA  0x03u
+
+typedef enum TelnetRx
+{
+    TN_DATA = 0,
+    TN_GOT_IAC,
+    TN_GOT_VERB,
+    TN_IN_SB,
+    TN_IN_SB_IAC
+} TelnetRx;
+
+typedef struct Client
+{
+    bool used;
+    Sock sock;
+    TadAsker asker;
+    bool connect_pending; /* waiting for the link before the letter can go */
+    TelnetRx tn;
+    bool skip_lf;      /* a CR was just taken: drop the LF or NUL that follows */
+    bool echo;         /* the host's ECKM: echo typed characters */
+    uint8_t line[255]; /* the line being edited */
+    size_t line_len;
+    uint8_t ready[1024]; /* finished lines waiting for an input grant */
+    size_t ready_len;
+    uint8_t out[16384]; /* bytes for the client socket */
+    size_t out_len;
+    bool closing; /* flush and close */
+    int index;
+} Client;
+
+static Client s_clients[XMSG_MAX_SESSIONS];
+static XmsgNode s_node;
+static uint16_t s_peer;
+static const char *s_system;
+
+static void client_put(Client *c, const uint8_t *b, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+    {
+        if (c->out_len + 2 > sizeof c->out)
+        {
+            return; /* the client is not reading; drop rather than block the line */
+        }
+        if (b[i] == TN_IAC)
+        {
+            c->out[c->out_len++] = TN_IAC;
+        }
+        c->out[c->out_len++] = b[i];
+    }
+}
+
+static void client_say(Client *c, const char *fmt, ...)
+{
+    char text[256];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(text, sizeof text, fmt, ap);
+    va_end(ap);
+    if (n > 0)
+    {
+        client_put(c, (const uint8_t *)text,
+                   (size_t)((n < (int)sizeof text) ? n : (int)sizeof text - 1));
+    }
+}
+
+static void cb_text(void *ctx, const uint8_t *bytes, size_t len)
+{
+    client_put((Client *)ctx, bytes, len);
+}
+
+static void cb_state(void *ctx, TadAskerState st, int error)
+{
+    Client *c = (Client *)ctx;
+    printf("client %d: session %s", c->index, tad_asker_state_name(st));
+    if (st == TAD_ASKER_FAILED)
+    {
+        printf(" (error %d%s%s)", error, (error > 0) ? ": " : "",
+               (error > 0) ? xrout_error_name((uint8_t)error) : "");
+    }
+    printf("\n");
+    if (st == TAD_ASKER_CLOSED || st == TAD_ASKER_FAILED)
+    {
+        client_say(c, "\r\n[session %s]\r\n", tad_asker_state_name(st));
+        c->closing = true;
+    }
+}
+
+static void cb_echo(void *ctx, uint8_t eckm)
+{
+    ((Client *)ctx)->echo = (eckm == 0x01);
+}
+
+static void client_start(Client *c, uint32_t now)
+{
+    TadAskerConfig cfg;
+    TadAskerCallbacks cb = {c, cb_text, cb_state, NULL, cb_echo};
+    tad_asker_config_default(&cfg, s_peer, s_system);
+    if (tad_asker_init(&c->asker, &cfg, &cb) != XMSG_OK)
+    {
+        client_say(c, "bad system name\r\n");
+        c->closing = true;
+        return;
+    }
+    c->connect_pending = true;
+    (void)now;
+}
+
+/* Finish the edited line: it waits in `ready` until the host grants input. */
+static void line_done(Client *c)
+{
+    if (c->ready_len + c->line_len <= sizeof c->ready)
+    {
+        memcpy(c->ready + c->ready_len, c->line, c->line_len);
+        c->ready_len += c->line_len;
+    }
+    c->line_len = 0;
+}
+
+static void client_key(Client *c, uint8_t k)
+{
+    if (c->skip_lf)
+    {
+        c->skip_lf = false;
+        if (k == '\n' || k == 0x00)
+        {
+            return;
+        }
+    }
+    if (k == '\r' || k == '\n')
+    {
+        c->line[c->line_len++] = '\r';
+        c->skip_lf = (k == '\r');
+        line_done(c);
+        return;
+    }
+    if (k == 0x08 || k == 0x7F)
+    {
+        if (c->line_len > 0)
+        {
+            c->line_len--;
+            if (c->echo)
+            {
+                client_put(c, (const uint8_t *)"\b \b", 3);
+            }
+        }
+        return;
+    }
+    c->line[c->line_len++] = k;
+    if (c->echo && k >= 0x20)
+    {
+        client_put(c, &k, 1);
+    }
+    if (c->line_len >= sizeof c->line - 1)
+    {
+        line_done(c); /* a full line goes as it is */
+    }
+}
+
+/* Strip telnet commands; hand data bytes to the line editor. */
+static void client_rx(Client *c, const uint8_t *b, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+    {
+        uint8_t x = b[i];
+        switch (c->tn)
+        {
+        case TN_DATA:
+            if (x == TN_IAC)
+            {
+                c->tn = TN_GOT_IAC;
+            }
+            else
+            {
+                client_key(c, x);
+            }
+            break;
+        case TN_GOT_IAC:
+            if (x == TN_IAC)
+            {
+                client_key(c, x);
+                c->tn = TN_DATA;
+            }
+            else if (x == TN_SB)
+            {
+                c->tn = TN_IN_SB;
+            }
+            else if (x >= TN_WILL)
+            {
+                c->tn = TN_GOT_VERB; /* WILL, WONT, DO, DONT: one option byte follows */
+            }
+            else
+            {
+                c->tn = TN_DATA;
+            }
+            break;
+        case TN_GOT_VERB:
+            c->tn = TN_DATA;
+            break;
+        case TN_IN_SB:
+            c->tn = (x == TN_IAC) ? TN_IN_SB_IAC : TN_IN_SB;
+            break;
+        default: /* TN_IN_SB_IAC */
+            c->tn = (x == TN_SE) ? TN_DATA : TN_IN_SB;
+            break;
+        }
+    }
+}
+
+/* Send the first ready line (up to and including its CR) when the host lets us type. */
+static void client_feed_host(Client *c, uint32_t now)
+{
+    size_t n = 0;
+    if (c->ready_len == 0 || !tad_asker_may_type(&c->asker))
+    {
+        return;
+    }
+    while (n < c->ready_len && n < TAD_MAX_DATA)
+    {
+        if (c->ready[n++] == '\r')
+        {
+            break;
+        }
+    }
+    int took = tad_asker_write(&c->asker, c->ready, n, now);
+    if (took > 0)
+    {
+        memmove(c->ready, c->ready + took, c->ready_len - (size_t)took);
+        c->ready_len -= (size_t)took;
+    }
+}
+
+static void client_drop(Client *c)
+{
+    printf("client %d: gone\n", c->index);
+    tad_asker_abort(&c->asker);
+    sock_close(c->sock);
+    c->used = false;
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* The node                                                                                   */
+/* ------------------------------------------------------------------------------------------ */
+
+static Sock s_line = SOCK_NONE;
+
+static int line_write(void *ctx, const uint8_t *b, size_t n)
+{
+    (void)ctx;
+    if (s_line == SOCK_NONE)
+    {
+        return XMSG_ESTATE;
+    }
+    int r = sock_send(s_line, b, n);
+    return (r < 0) ? XMSG_ESTATE : r;
+}
+
+static void log_line(void *ctx, XmsgLogCategory cat, XmsgLogLevel lvl, const char *line)
+{
+    static const char *const names[] = {"ERROR", "WARN", "INFO", "DEBUG", "TRACE"};
+    (void)ctx;
+    printf("[%u %s] %s\n", (unsigned)cat, names[(unsigned)lvl < 5 ? (unsigned)lvl : 4], line);
+}
+
+static void on_link(void *ctx, LapbState st, bool up, bool ready, const char *reason)
+{
+    (void)ctx;
+    printf("link %s up=%d ready=%d (%s)\n", lapb_state_name(st), up ? 1 : 0, ready ? 1 : 0,
+           (reason != NULL) ? reason : "");
+}
+
+static void usage(void)
+{
+    printf("usage: host_tad_telnet --hdlc HOST:PORT --node N --peer N --system NAME\n"
+           "                       [--listen PORT] [--flags1 FILE] [--log "
+           "error|warn|info|debug|trace]\n");
+}
+
+static bool parse_u16(const char *s, uint16_t *out)
+{
+    char *end = NULL;
+    long v = strtol(s, &end, 10);
+    if (end == s || *end != '\0' || v < 0 || v > 65535)
+    {
+        return false;
+    }
+    *out = (uint16_t)v;
+    return true;
+}
+
+int main(int argc, char **argv)
+{
+    const char *hdlc = NULL;
+    uint16_t own = 0;
+    uint16_t listen_port = 2300;
+    XmsgLogLevel level = XMSG_LOG_INFO;
+    FileStore store = {"host_tad_telnet.flags1", {0}, {0}, 0};
+    char host[128];
+    char port[16];
+
+    for (int i = 1; i + 1 < argc; i += 2)
+    {
+        const char *k = argv[i];
+        const char *v = argv[i + 1];
+        bool ok = true;
+        if (strcmp(k, "--hdlc") == 0)
+        {
+            hdlc = v;
+        }
+        else if (strcmp(k, "--node") == 0)
+        {
+            ok = parse_u16(v, &own);
+        }
+        else if (strcmp(k, "--peer") == 0)
+        {
+            ok = parse_u16(v, &s_peer);
+        }
+        else if (strcmp(k, "--system") == 0)
+        {
+            s_system = v;
+        }
+        else if (strcmp(k, "--listen") == 0)
+        {
+            ok = parse_u16(v, &listen_port);
+        }
+        else if (strcmp(k, "--flags1") == 0)
+        {
+            store.path = v;
+        }
+        else if (strcmp(k, "--log") == 0)
+        {
+            static const char *const lv[] = {"error", "warn", "info", "debug", "trace"};
+            ok = false;
+            for (int j = 0; j < 5; j++)
+            {
+                if (strcmp(v, lv[j]) == 0)
+                {
+                    level = (XmsgLogLevel)j;
+                    ok = true;
+                }
+            }
+        }
+        else
+        {
+            ok = false;
+        }
+        if (!ok)
+        {
+            usage();
+            return 1;
+        }
+    }
+    const char *colon = (hdlc != NULL) ? strrchr(hdlc, ':') : NULL;
+    if (colon == NULL || own == 0 || s_peer == 0 || s_system == NULL ||
+        (size_t)(colon - hdlc) >= sizeof host || strlen(colon + 1) >= sizeof port)
+    {
+        usage();
+        return 1;
+    }
+    memcpy(host, hdlc, (size_t)(colon - hdlc));
+    host[colon - hdlc] = '\0';
+    snprintf(port, sizeof port, "%s", colon + 1);
+
+#ifdef _WIN32
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+    {
+        printf("Winsock did not start\n");
+        return 1;
+    }
+#endif
+    setvbuf(stdout, NULL, _IONBF, 0);
+    store_read(&store);
+
+    XmsgNodeConfig cfg;
+    XmsgPorts ports;
+    XmsgNodeCallbacks cb;
+    xmsg_node_config_default(&cfg, own);
+    memset(&ports, 0, sizeof ports);
+    ports.transport.write = line_write;
+    ports.flags1.ctx = &store;
+    ports.flags1.load = store_load;
+    ports.flags1.save = store_save;
+    ports.log.write = log_line;
+    memset(&cb, 0, sizeof cb);
+    cb.link_state = on_link;
+    xmsg_log_set_all_levels(level);
+    if (xmsg_node_init(&s_node, &cfg, &ports, &cb) != XMSG_OK)
+    {
+        printf("node set-up failed\n");
+        return 1;
+    }
+
+    Sock lsock = sock_listen(listen_port);
+    if (lsock == SOCK_NONE)
+    {
+        printf("cannot listen on port %u\n", listen_port);
+        return 1;
+    }
+    printf("telnet to port %u; line %s:%s, we are node %u, host node %u (%s)\n", listen_port, host,
+           port, own, s_peer, s_system);
+
+    uint32_t next_dial = 0;
+    for (;;)
+    {
+        uint32_t now = now_ms();
+        uint8_t buf[2048];
+
+        /* The line: dial, and dial again after a loss. */
+        if (s_line == SOCK_NONE && (int32_t)(now - next_dial) >= 0)
+        {
+            s_line = sock_dial(host, port);
+            next_dial = now + 2000;
+            if (s_line != SOCK_NONE)
+            {
+                printf("line connected\n");
+                xmsg_node_link_start(&s_node, now);
+            }
+        }
+
+        fd_set rd;
+        FD_ZERO(&rd);
+        FD_SET(lsock, &rd);
+        Sock maxs = lsock;
+        if (s_line != SOCK_NONE)
+        {
+            FD_SET(s_line, &rd);
+            maxs = (s_line > maxs) ? s_line : maxs;
+        }
+        for (int i = 0; i < XMSG_MAX_SESSIONS; i++)
+        {
+            if (s_clients[i].used)
+            {
+                FD_SET(s_clients[i].sock, &rd);
+                maxs = (s_clients[i].sock > maxs) ? s_clients[i].sock : maxs;
+            }
+        }
+        struct timeval tv = {0, 10000};
+        (void)select((int)maxs + 1, &rd, NULL, NULL, &tv);
+        now = now_ms();
+
+        if (s_line != SOCK_NONE && FD_ISSET(s_line, &rd))
+        {
+            int n = sock_recv(s_line, buf, sizeof buf);
+            if (n > 0)
+            {
+                xmsg_node_feed(&s_node, buf, (size_t)n, now);
+            }
+            else if (n < 0)
+            {
+                printf("line lost\n");
+                sock_close(s_line);
+                s_line = SOCK_NONE;
+                xmsg_node_transport_lost(&s_node);
+                for (int i = 0; i < XMSG_MAX_SESSIONS; i++)
+                {
+                    if (s_clients[i].used)
+                    {
+                        client_say(&s_clients[i], "\r\n[line lost]\r\n");
+                        tad_asker_abort(&s_clients[i].asker);
+                        s_clients[i].closing = true;
+                    }
+                }
+            }
+        }
+
+        if (FD_ISSET(lsock, &rd))
+        {
+            Sock cs = accept(lsock, NULL, NULL);
+            if (cs != SOCK_NONE)
+            {
+                int i;
+                for (i = 0; i < XMSG_MAX_SESSIONS && s_clients[i].used; i++)
+                {
+                }
+                if (i == XMSG_MAX_SESSIONS)
+                {
+                    static const char full[] = "all sessions in use\r\n";
+                    (void)send(cs, full, (int)sizeof full - 1, 0);
+                    sock_close(cs);
+                }
+                else
+                {
+                    Client *c = &s_clients[i];
+                    static const uint8_t neg[] = {TN_IAC, TN_WILL, TN_ECHO, TN_IAC, TN_WILL,
+                                                  TN_SGA, TN_IAC,  TN_DO,   TN_SGA};
+                    memset(c, 0, sizeof *c);
+                    c->used = true;
+                    c->sock = cs;
+                    c->index = i;
+                    c->echo = true;
+                    sock_nonblocking(cs);
+                    memcpy(c->out, neg, sizeof neg);
+                    c->out_len = sizeof neg;
+                    printf("client %d: connected\n", i);
+                    client_start(c, now);
+                }
+            }
+        }
+
+        for (int i = 0; i < XMSG_MAX_SESSIONS; i++)
+        {
+            Client *c = &s_clients[i];
+            if (!c->used)
+            {
+                continue;
+            }
+            if (FD_ISSET(c->sock, &rd))
+            {
+                int n = sock_recv(c->sock, buf, sizeof buf);
+                if (n < 0)
+                {
+                    client_drop(c);
+                    continue;
+                }
+                if (!c->closing)
+                {
+                    client_rx(c, buf, (size_t)n);
+                }
+            }
+            if (c->connect_pending && xmsg_node_is_ready(&s_node))
+            {
+                int rc = tad_asker_connect(&c->asker, &s_node, now);
+                if (rc == XMSG_OK)
+                {
+                    c->connect_pending = false;
+                }
+                else if (rc != XMSG_ESTATE)
+                {
+                    client_say(c, "no free session on the node (%d)\r\n", rc);
+                    c->connect_pending = false;
+                    c->closing = true;
+                }
+            }
+            client_feed_host(c, now);
+        }
+
+        xmsg_node_tick(&s_node, now);
+
+        for (int i = 0; i < XMSG_MAX_SESSIONS; i++)
+        {
+            Client *c = &s_clients[i];
+            if (!c->used)
+            {
+                continue;
+            }
+            if (c->out_len > 0)
+            {
+                int n = sock_send(c->sock, c->out, c->out_len);
+                if (n < 0)
+                {
+                    client_drop(c);
+                    continue;
+                }
+                memmove(c->out, c->out + n, c->out_len - (size_t)n);
+                c->out_len -= (size_t)n;
+            }
+            if (c->closing && c->out_len == 0)
+            {
+                client_drop(c);
+            }
+        }
+    }
+}

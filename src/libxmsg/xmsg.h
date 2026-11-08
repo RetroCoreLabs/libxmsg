@@ -37,6 +37,9 @@
 #include "libxmsg/xmsg/xmsg_portword.h"
 #include "libxmsg/xmsg/xmsg_session.h"
 #include "libxmsg/xmsg/xmsg_subhdr.h"
+#include "libxmsg/xrout/xrout_letter.h"
+#include "libxmsg/tad/tad_codec.h"
+#include "libxmsg/tad/tad_asker.h"
 
 #include "libxmsg/gen/sintran_wire.h"
 #include "libxmsg/gen/tad_wire.h"

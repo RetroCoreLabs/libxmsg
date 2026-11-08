@@ -56,13 +56,20 @@ transport.
 
 ## Status
 
-Version 0.1.0 - the repository skeleton. Nothing talks to a machine yet.
+Version 0.1.0 - the link, the datagrams and the terminal session are written and tested against
+captured traffic. **Not yet run against a live machine:** the nd100x integration tests exist and
+skip until one is reachable.
 
-- Build, test harness, CI and the generated protocol headers are in place; the smoke test reads a
-  real captured frame through the generated accessors.
-- The link layer, datagram layer, terminal session and file access follow in the phases listed in
-  [Documentation](#documentation). Each lands with unit tests against captured bytes and a
-  peer-to-peer test before it is run against nd100x.
+- **Framing and link:** the RFC 1662 byte framer with FCS-16, and LAPB in the ND dialect (node
+  number in every U and S frame, balanced bring-up, the 0x89 address for odd-length frames).
+- **Datagrams:** the SINTRAN header and checksum, the sub-header, fragmentation, one Flags1 count
+  per peer kept across restarts, the reachability handshake, and an ACK for every data frame.
+- **Terminal session (TAD):** the CONNECT-TO ladder from the connect letter to the host's
+  "session over". Replayed against a complete session captured between two real SINTRAN
+  machines, every frame the library sends is byte-identical to the one the real asker sent.
+- **Telnet tool:** `examples/host_tad_telnet` gives each telnet client its own session.
+- **Still to come:** several sessions on microcontrollers, then COSMOS file access and the FTP
+  bridge.
 
 ## Prerequisites
 
@@ -81,6 +88,14 @@ cd libxmsg
 cmake -S src -B build -DXMSG_BUILD_TESTS=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
+```
+
+To telnet to a SINTRAN machine, start nd100x with `--hdlc=1:1362`, define a link there for node
+19999, and run the tool. Then `telnet localhost 2300`:
+
+```bash
+build/examples/host_tad_telnet/host_tad_telnet --hdlc 127.0.0.1:1362 --node 19999 \
+    --peer 100 --system D100 --listen 2300
 ```
 
 ## Building from source

@@ -17,12 +17,13 @@ extern "C"
 {
 #endif
 
-#define XMSG_OK     0    /**< done */
-#define XMSG_EINVAL (-1) /**< a NULL pointer, a zero length, a value out of range */
-#define XMSG_EAGAIN (-2) /**< not now: the window is full, a slot is busy, the peer is busy */
-#define XMSG_ESTATE (-3) /**< the call is not allowed in the current state (link down, ...) */
-#define XMSG_ENOSPC (-4) /**< a fixed-size table or buffer is full */
-#define XMSG_EPROTO (-5) /**< the bytes do not form a valid frame or message */
+#define XMSG_OK        0    /**< done */
+#define XMSG_EINVAL    (-1) /**< a NULL pointer, a zero length, a value out of range */
+#define XMSG_EAGAIN    (-2) /**< not now: the window is full, a slot is busy, the peer is busy */
+#define XMSG_ESTATE    (-3) /**< the call is not allowed in the current state (link down, ...) */
+#define XMSG_ENOSPC    (-4) /**< a fixed-size table or buffer is full */
+#define XMSG_EPROTO    (-5) /**< the bytes do not form a valid frame or message */
+#define XMSG_ETIMEDOUT (-6) /**< an answer did not come in time */
 
 #ifdef __cplusplus
 }

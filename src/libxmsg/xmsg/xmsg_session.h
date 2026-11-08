@@ -56,6 +56,8 @@ struct XmsgSession
     uint16_t peer_system; /**< its XMSG system number; 0 = accept any */
     uint16_t local_port;  /**< our port word, minted at attach */
     uint16_t peer_port;   /**< its port word once learned; 0 = not yet, accept any */
+    bool any_peer_port;   /**< take frames from every port of the peer and learn none (a TAD
+                           *   host answers from its *TADADM port AND its session port) */
     bool attached;
     bool wants_tx; /**< set by the session when it has something to send */
 };
