@@ -113,6 +113,7 @@ static void reset_variables(LapbLink *l)
     l->reject_condition = false;
     l->poll_outstanding = false;
     l->poll_outstanding_marker = false;
+    l->own_busy = false;
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -163,6 +164,12 @@ static void queue_supervisory(LapbLink *l, uint8_t s_type, bool pf)
     f[2] = (uint8_t)(l->cfg.own_node >> 8);
     f[3] = (uint8_t)(l->cfg.own_node & 0xFFu);
     queue_ctl(l, f, sizeof f);
+}
+
+/* The acknowledgement we send for received I-frames: RR normally, RNR while we are busy. */
+static uint8_t ack_type(const LapbLink *l)
+{
+    return l->own_busy ? (uint8_t)LAPB_S_RNR : (uint8_t)LAPB_S_RR;
 }
 
 /* FRMR: address 0x01, control, the 3-byte diagnostic (spec 2.3.3). */
@@ -519,7 +526,7 @@ static void handle_supervisory(LapbLink *l, const LapbFrameView *v, uint32_t now
              * extra RR per poll of ours, but between two of these stations it is an endless
              * exchange. Unverified against a real machine whether skipping that RR changes
              * anything; the P2 integration test watches for it. */
-            queue_supervisory(l, (uint8_t)LAPB_S_RR, true);
+            queue_supervisory(l, ack_type(l), true);
         }
     }
 }
@@ -545,13 +552,13 @@ static void handle_information(LapbLink *l, const LapbFrameView *v, uint32_t now
         {
             l->on_info(l->cb_ctx, v->info, v->info_len);
         }
-        queue_supervisory(l, (uint8_t)LAPB_S_RR, v->pf);
+        queue_supervisory(l, ack_type(l), v->pf);
     }
     else if (is_duplicate(l, v->ns))
     {
         /* Already accepted and retransmitted: discard, re-acknowledge V(R) (4.5). */
         l->stats.duplicates++;
-        queue_supervisory(l, (uint8_t)LAPB_S_RR, v->pf);
+        queue_supervisory(l, ack_type(l), v->pf);
     }
     else if (!l->reject_condition)
     {
@@ -694,6 +701,17 @@ bool lapb_tx_pending(const LapbLink *l)
     return false;
 }
 
+void lapb_set_busy(LapbLink *l, bool busy)
+{
+    if (l->own_busy == busy || l->state != LAPB_CONNECTED)
+    {
+        return;
+    }
+    l->own_busy = busy;
+    XMSG_LOG(XMSG_LOG_LAPB, XMSG_LOG_DEBUG, "flow control: %s", busy ? "RNR (busy)" : "RR (ready)");
+    queue_supervisory(l, busy ? (uint8_t)LAPB_S_RNR : (uint8_t)LAPB_S_RR, false);
+}
+
 int lapb_pull_tx(LapbLink *l, uint8_t *out, size_t cap)
 {
     if (l->ctl_count > 0)
@@ -791,7 +809,7 @@ static int on_t1_expiry(LapbLink *l, uint32_t now)
     case LAPB_CONNECTED:
         /* Poll-first recovery (spec 5.1): RR with P=1; the peer's N(R) or REJ drives go-back-N. */
         l->poll_outstanding_marker = true;
-        queue_supervisory(l, (uint8_t)LAPB_S_RR, true);
+        queue_supervisory(l, ack_type(l), true);
         start_t1(l, now);
         return 1;
     case LAPB_SABM_SENT:
@@ -829,7 +847,7 @@ int lapb_tick(LapbLink *l, uint32_t now_ms)
          * ignored idle poll must not turn into a re-poll cascade that reaches N2 and resets a
          * healthy link. T3 re-arms when the peer answers (acknowledge_through). */
         l->poll_outstanding_marker = true;
-        queue_supervisory(l, (uint8_t)LAPB_S_RR, true);
+        queue_supervisory(l, ack_type(l), true);
         l->stats.t3_polls++;
         l->retry = 0;
         stop_t3(l);

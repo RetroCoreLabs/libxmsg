@@ -638,6 +638,30 @@ static void frame_helpers_decode_every_kind(void)
     CHECK_EQ(lapb_frame_u_control(LAPB_U_SABM, true), 0x3F);
 }
 
+static void busy_sends_rnr_and_acks_as_rnr_until_released(void)
+{
+    LapbLink l;
+    new_connected_initiator(&l, NULL);
+    lapb_set_busy(&l, true);
+    drain(&l);
+    CHECK_EQ(s_c.sent_count, 1);
+    CHECK_BYTES(s_c.sent[0], s_c.sent_len[0], "09 05 " L100); /* RNR N(R)=0 */
+    clear_sent();
+    deliver(&l, 0, "09 00 21 13"); /* an in-window I-frame is still accepted ... */
+    CHECK_EQ(s_c.got_count, 1);
+    CHECK_BYTES(s_c.sent[0], s_c.sent_len[0], "09 25 " L100); /* ... and acknowledged with RNR */
+    clear_sent();
+    deliver(&l, 0, "09 11 " P102); /* a poll is answered RNR F=1 */
+    CHECK_BYTES(s_c.sent[0], s_c.sent_len[0], "09 35 " L100);
+    clear_sent();
+    lapb_set_busy(&l, true); /* no change: nothing sent */
+    drain(&l);
+    CHECK_EQ(s_c.sent_count, 0);
+    lapb_set_busy(&l, false);
+    drain(&l);
+    CHECK_BYTES(s_c.sent[0], s_c.sent_len[0], "09 21 " L100); /* RR N(R)=1 releases the peer */
+}
+
 static void init_rejects_bad_config(void)
 {
     LapbLink l;
@@ -680,6 +704,7 @@ int main(void)
     frames_outside_connected_draw_dm_or_silence();
     unknown_address_is_ignored_and_counted();
     frame_helpers_decode_every_kind();
+    busy_sends_rnr_and_acks_as_rnr_until_released();
     init_rejects_bad_config();
     TEST_DONE();
 }

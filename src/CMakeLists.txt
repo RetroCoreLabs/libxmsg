@@ -39,7 +39,14 @@ include(cmake/house_standard.cmake)
 set(XMSG_SOURCES
     libxmsg/log/xmsg_log.c
     libxmsg/hdlc/fcs16.c
-    libxmsg/lapb/lapb.c)
+    libxmsg/lapb/lapb.c
+    libxmsg/sintran/sintran_hdr.c
+    libxmsg/xmsg/xmsg_subhdr.c
+    libxmsg/xmsg/xmsg_dg.c
+    libxmsg/xmsg/xmsg_flags1.c
+    libxmsg/xmsg/xmsg_portword.c
+    libxmsg/xmsg/xmsg_frag.c
+    libxmsg/xmsg/xmsg_node.c)
 if(XMSG_WITH_ASYNC_FRAMER)
     list(APPEND XMSG_SOURCES libxmsg/hdlc/hdlc_async.c)
 endif()

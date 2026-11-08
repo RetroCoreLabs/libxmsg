@@ -140,6 +140,7 @@ typedef struct LapbLink
     uint8_t va;                   /**< V(A): oldest unacknowledged I-frame */
     bool peer_busy;               /**< RNR received, not yet cleared by RR/REJ */
     bool reject_condition;        /**< one REJ per gap */
+    bool own_busy;                /**< we told the peer RNR; acks go out as RNR */
     bool poll_outstanding;        /**< we sent an RR P=1 and its F=1 answer has not arrived */
     bool poll_outstanding_marker; /**< internal: the next queued RR P=1 is a poll of ours */
     bool t1_running;
@@ -278,6 +279,20 @@ int lapb_pull_tx(LapbLink *l, uint8_t *out, size_t cap);
  * @param l The link.
  */
 bool lapb_tx_pending(const LapbLink *l);
+
+/**
+ * @brief Flow control towards the peer: tell it to stop sending I-frames (busy) or resume.
+ *
+ * Sends RNR when becoming busy and RR when clearing it; while busy every acknowledgement goes out
+ * as RNR instead of RR, so the peer keeps seeing the condition. The layer above uses this when it
+ * cannot absorb more datagrams - for instance when its queue of acknowledgements to send is
+ * filling because its own window is stuck behind lost frames.
+ *
+ * @param l    The link.
+ * @param busy true to stop the peer, false to release it. A no-op when nothing changes or the
+ *             link is not connected.
+ */
+void lapb_set_busy(LapbLink *l, bool busy);
 
 /**
  * @brief Run the timers.
