@@ -27,7 +27,20 @@ add_library(hdlc STATIC
     libhdlc/spsc_ring.c)
 target_include_directories(hdlc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(hdlc PRIVATE house_warnings)
-if(NOT WIN32)
+if(PICO_SDK_VERSION_STRING)
+    # Raspberry Pi Pico SDK build. pico_platform_headers carries PICO_BUILD / PICO_ON_DEVICE
+    # (so ring_buffer.c compiles to nothing and HOT_PATH_CODE becomes __not_in_flash) and the
+    # header that defines __not_in_flash. Without it both would silently take the host path.
+    # The header-only target, not pico_platform: that one adds the SDK's platform.c to this
+    # library, where the house warnings then flag the SDK's own code (-Wundef, SDK 1.5.1).
+    # No pthreads here: the Pico uses spsc_ring.
+    if(NOT TARGET pico_platform_headers)
+        message(FATAL_ERROR "libhdlc: Pico SDK ${PICO_SDK_VERSION_STRING} has no pico_platform_headers target; "
+                            "libhdlc needs it for PICO_ON_DEVICE and __not_in_flash.")
+    endif()
+    target_link_libraries(hdlc PUBLIC pico_platform_headers)
+elseif(NOT WIN32)
+    # Linux and other POSIX hosts: ring_buffer.c locks with a pthread mutex.
     find_package(Threads REQUIRED)
     target_link_libraries(hdlc PUBLIC Threads::Threads)
 endif()
