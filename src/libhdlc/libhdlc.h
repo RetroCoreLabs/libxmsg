@@ -20,7 +20,11 @@
 #include "libhdlc/control_frame.h"
 #include "libhdlc/hdlc.h"
 #include "libhdlc/hot_path.h"
+/* ring_buffer has no lock on the Raspberry Pi Pico and stops a build that includes it there
+ * (BUGS.md L-PICO); the Pico uses spsc_ring. Left out here so the umbrella works on the Pico. */
+#if !(defined(ARDUINO_ARCH_RP2040) || defined(PICO_BUILD))
 #include "libhdlc/ring_buffer.h"
+#endif
 #include "libhdlc/spsc_ring.h"
 
 #endif /* LIBHDLC_H */

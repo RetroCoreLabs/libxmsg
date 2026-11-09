@@ -29,10 +29,18 @@
 /** Put a table or variable in internal data RAM, also when it is const. */
 #define HOT_PATH_DATA DRAM_ATTR
 #elif defined(PICO_ON_DEVICE)
-#include <pico/platform.h>
+/* pico.h, not pico/platform.h: SDK 2.x refuses a direct include of the latter
+ * (#error, reported by RC422Dev on SDK 2.3.0), and pico.h pulls it and
+ * __not_in_flash in on 1.5.1 and 2.x alike. Its config header tests a macro
+ * the SDK never defines (LIB_CMSIS_CORE, SDK 1.5.1), which -Wundef in this
+ * library's warnings flags; the exception covers the SDK header only. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wundef"
+#include <pico.h>
+#pragma GCC diagnostic pop
 /** Raspberry Pi Pico: run from RAM, not from flash through the XIP cache.
- *  __not_in_flash(group) is the Pico SDK section attribute (pico/platform.h,
- *  checked in SDK 1.5.1). Same no-inline reason as above. A build that runs
+ *  __not_in_flash(group) is the Pico SDK section attribute (checked in SDK
+ *  1.5.1, and by RC422Dev in 2.3.0). Same no-inline reason as above. A build that runs
  *  everything from RAM anyway (copy_to_ram, as RC422Dev does) loses nothing. */
 #define HOT_PATH_CODE __not_in_flash("libhdlc") __attribute__((noinline))
 /** Tables stay in flash on the Pico: no RAM section for constant data has
