@@ -485,7 +485,12 @@ static void window_full_refuses_until_acknowledged(void)
     size_t cap;
     CHECK_EQ(lapb_tx_reserve(&l, &info, &cap), XMSG_EAGAIN);
     CHECK_EQ(s_c.sent_count, 7);
-    deliver(&l, 0, "09 61 " P102); /* RR N(R)=3: three acknowledged */
+    /* RR N(R)=3 with address 0x09: three acknowledged, and the peer's window is 4 (see
+     * peer_window_in_the_address_limits_sending). Four are still out, so nothing is free. */
+    deliver(&l, 0, "09 61 " P102);
+    CHECK_EQ(lapb_tx_free_slots(&l), 0);
+    CHECK_EQ(lapb_tx_reserve(&l, &info, &cap), XMSG_EAGAIN);
+    deliver(&l, 0, "09 C1 " P102); /* RR N(R)=6: one still out, window 4 */
     CHECK_EQ(lapb_tx_free_slots(&l), 3);
     CHECK_EQ(lapb_tx_reserve(&l, &info, &cap), XMSG_OK);
     CHECK_EQ(cap, XMSG_LAPB_N1);
@@ -628,8 +633,9 @@ static void frames_outside_connected_draw_dm_or_silence(void)
 }
 
 /* RetroCore D100 sometimes sends an I-frame with address 0x07 (0x87 when the info length is
- * odd) instead of 0x09/0x89 - MEASURED 2026-11-09, twice in one TADA run. The C# takes any
- * address; so do we, and count it. Dropping them cost a 1 s T1 resend each time. */
+ * odd) instead of 0x09/0x89 - MEASURED 2026-11-09, twice in one TADA run. That is the peer's
+ * receive window (3), a normal SINTRAN address. The C# takes any address; so do we, and an
+ * address that does not have the SINTRAN shape (0x11 here) is taken and counted. */
 static void unusual_address_is_taken_and_counted(void)
 {
     LapbLink l;
@@ -639,15 +645,68 @@ static void unusual_address_is_taken_and_counted(void)
     CHECK_EQ(lapb_rx_frame(&l, even, sizeof even, 0), XMSG_OK);
     uint8_t odd[] = {0x87, 0x02, 0xCC}; /* I, N(S)=1, one info byte */
     CHECK_EQ(lapb_rx_frame(&l, odd, sizeof odd, 0), XMSG_OK);
-    CHECK_EQ(s_c.got_count, before + 2);
-    CHECK_EQ(l.stats.unusual_address, 2);
-    if (s_c.got_count == before + 2)
+    uint8_t odd_shape[] = {0x11, 0x04, 0xDD}; /* I, N(S)=2, address bit 4 set */
+    CHECK_EQ(lapb_rx_frame(&l, odd_shape, sizeof odd_shape, 0), XMSG_OK);
+    CHECK_EQ(s_c.got_count, before + 3);
+    CHECK_EQ(l.stats.unusual_address, 1);
+    if (s_c.got_count == before + 3)
     {
         CHECK_BYTES(s_c.got[before], s_c.got_len[before], "AA BB");
         CHECK_BYTES(s_c.got[before + 1], s_c.got_len[before + 1], "CC");
+        CHECK_BYTES(s_c.got[before + 2], s_c.got_len[before + 2], "DD");
     }
     uint8_t runt[] = {0x09};
     CHECK_EQ(lapb_rx_frame(&l, runt, 1, 0), XMSG_EPROTO);
+}
+
+/* SINTRAN puts its receive window in the address of every I, RR and REJ:
+ * window * 2 + 1 (+0x80 for an odd I-frame), window = free receive buffers - 1 (kernel routine
+ * XHSTR, read from the carved code 2026-11-09). We keep no more unacknowledged I-frames out
+ * than the last window the peer announced. */
+static void peer_window_in_the_address_limits_sending(void)
+{
+    LapbLink l;
+    uint8_t *info;
+    size_t cap;
+    new_connected_initiator(&l, NULL);
+    CHECK_EQ(lapb_tx_free_slots(&l), 7); /* no window heard yet: only ours */
+
+    deliver(&l, 0, "07 01 " P102); /* RR N(R)=0, window 3 */
+    CHECK_EQ(lapb_tx_free_slots(&l), 3);
+    for (int i = 0; i < 3; i++)
+    {
+        CHECK_EQ(send_info(&l, 0, "22"), XMSG_OK);
+    }
+    CHECK_EQ(lapb_tx_free_slots(&l), 0);
+    CHECK_EQ(lapb_tx_reserve(&l, &info, &cap), XMSG_EAGAIN);
+    CHECK_EQ(l.stats.window_waits, 1);
+
+    deliver(&l, 0, "01 61 " P102); /* RR N(R)=3, window 0: all acked, but no room */
+    CHECK_EQ(lapb_outstanding(&l), 0);
+    CHECK_EQ(lapb_tx_free_slots(&l), 0);
+    CHECK_EQ(lapb_tx_reserve(&l, &info, &cap), XMSG_EAGAIN);
+
+    deliver(&l, 0, "09 61 " P102); /* the machine reopens with a fresh RR: window 4 */
+    CHECK_EQ(lapb_tx_free_slots(&l), 4);
+
+    deliver(&l, 0, "87 60 AA"); /* I-frame N(S)=0 N(R)=3, odd length, window 3 */
+    CHECK_EQ(lapb_tx_free_slots(&l), 3);
+
+    deliver(&l, 0, "05 61 " P102); /* RR N(R)=3, window 2 */
+    CHECK_EQ(lapb_tx_free_slots(&l), 2);
+
+    LapbConfig small;
+    lapb_config_default(&small, 100);
+    small.window = 2; /* our own window stays the upper limit */
+    new_connected_initiator(&l, &small);
+    deliver(&l, 0, "09 01 " P102);
+    CHECK_EQ(lapb_tx_free_slots(&l), 2);
+
+    CHECK(lapb_frame_address_fits(0x09) && lapb_frame_address_fits(0x89));
+    CHECK(lapb_frame_address_fits(0x03) && lapb_frame_address_fits(0x01));
+    CHECK(!lapb_frame_address_fits(0x11) && !lapb_frame_address_fits(0x08));
+    CHECK_EQ(lapb_frame_peer_window(0x07), 3);
+    CHECK_EQ(lapb_frame_peer_window(0x89), 4);
 }
 
 static void frame_helpers_decode_every_kind(void)
@@ -744,6 +803,7 @@ int main(void)
     sabm_burst_is_answered_in_full_and_the_link_stays_consistent();
     frames_outside_connected_draw_dm_or_silence();
     unusual_address_is_taken_and_counted();
+    peer_window_in_the_address_limits_sending();
     frame_helpers_decode_every_kind();
     busy_sends_rnr_and_acks_as_rnr_until_released();
     init_rejects_bad_config();

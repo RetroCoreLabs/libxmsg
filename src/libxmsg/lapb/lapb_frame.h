@@ -121,13 +121,27 @@ static inline bool lapb_frame_parse(const uint8_t *frame, size_t len, LapbFrameV
 }
 
 /**
- * @brief Whether an address byte is one we send (01, 09, 89). A received frame with another
- *        address is still taken, as the C# does; see lapb_rx_frame().
+ * @brief Whether an address byte has the shape a SINTRAN machine builds: bit 0 set, bits 4..6
+ *        clear, bit 7 the odd-length marker, bits 1..3 the sender's receive window.
+ *
+ * SINTRAN's XMSG kernel routine XHSTR (143630 octal, carved segment 076-S3XMK of L-VSX-500)
+ * builds the address of every I, RR and REJ frame as ((max(XLRMR - 1, 0) & 7) << 1) | 1, where
+ * XLRMR is the number of empty frame buffers queued to its HDLC receiver, and ORs in 0x80 when
+ * an I-frame's byte count is odd; SABM and UA get 0x01. So 0x09 = window 4 (all 5 buffers free,
+ * the normal case), 0x07 = window 3, 0x05 = 2, 0x03 = 1, 0x01 = 0. Read from the code and
+ * checked against every capture, 2026-11-09 (NDInsight
+ * SINTRAN/XMSG/DOC/HDLC-ADDRESS-BYTE-ANALYSIS-2026-11-09.md). A frame with another address is
+ * still taken, as the C# does; see lapb_rx_frame().
  */
-static inline bool lapb_frame_address_known(uint8_t address)
+static inline bool lapb_frame_address_fits(uint8_t address)
 {
-    return address == LAPB_ADDR_LINK || address == LAPB_ADDR_DATA ||
-           address == (LAPB_ADDR_DATA | LAPB_ADDR_ODD_BIT);
+    return (address & 0x71u) == 0x01u;
+}
+
+/** @brief The receive window a peer announces in the address of an I or S frame: bits 1..3. */
+static inline uint8_t lapb_frame_peer_window(uint8_t address)
+{
+    return (uint8_t)((address >> 1) & 0x07u);
 }
 
 /** @brief The address byte for an I-frame carrying `info_len` bytes: 0x09 even, 0x89 odd. */

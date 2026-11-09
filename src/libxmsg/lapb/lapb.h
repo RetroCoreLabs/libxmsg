@@ -116,7 +116,8 @@ typedef struct LapbStats
     uint32_t t1_timeouts;
     uint32_t t3_polls;
     uint32_t duplicates;      /**< I-frames already received, re-acknowledged */
-    uint32_t unusual_address; /**< frames taken with an address other than 01/09/89 */
+    uint32_t unusual_address; /**< frames taken with an address not of the SINTRAN shape */
+    uint32_t window_waits;    /**< reserves refused only because the peer's window was full */
     uint32_t ctl_queue_full;  /**< control frames that could not be queued (should stay 0) */
 } LapbStats;
 
@@ -157,6 +158,7 @@ typedef struct LapbLink
     uint8_t frmr_info[3]; /**< the last FRMR diagnostic, for resending in FRMR_SENT */
     bool frmr_valid;
     uint8_t reserved_slot; /**< slot handed out by lapb_tx_reserve(), or 0xFF */
+    uint8_t peer_window;   /**< receive window from the peer's last I/S address; 7 until known */
     LapbStats stats;
     LapbInfoCallback on_info;
     LapbStateCallback on_state;

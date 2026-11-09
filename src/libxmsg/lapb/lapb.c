@@ -109,6 +109,9 @@ static void reset_variables(LapbLink *l)
         l->slots[i].due = false;
     }
     l->reserved_slot = NO_SLOT;
+    /* No window known until the peer's first I or S frame after the reset; only our own
+     * configured window limits us until then. */
+    l->peer_window = LAPB_MAX_WINDOW;
     l->peer_busy = false;
     l->reject_condition = false;
     l->poll_outstanding = false;
@@ -596,13 +599,13 @@ int lapb_rx_frame(LapbLink *l, const uint8_t *frame, size_t len, uint32_t now_ms
     {
         return XMSG_EPROTO;
     }
-    if (!lapb_frame_address_known(v.address))
+    if (!lapb_frame_address_fits(v.address))
     {
         /* Taken like any other frame: the C# reference (RetroIO LapbLayer.OnFrameReceived)
          * never looks at the address of a received frame. MEASURED 2026-11-09 on RetroCore D100:
-         * it sometimes sends an I-frame with address 0x07, or 0x87 when the info length is odd,
-         * instead of 0x09/0x89; dropping those cost a T1 resend (about 1 s) each time and, in
-         * one run, a REJ. What 0x07 means is not known; it is counted and logged. */
+         * dropping its 0x07/0x87 frames cost a T1 resend each time and, in one run, a REJ.
+         * 0x07 is now known to be the peer's receive window (lapb_frame_address_fits); an
+         * address that does not fit that shape is counted and logged. */
         l->stats.unusual_address++;
         XMSG_LOG(XMSG_LOG_LAPB, XMSG_LOG_INFO, "frame with address 0x%02X taken (unusual)",
                  v.address);
@@ -630,6 +633,15 @@ int lapb_rx_frame(LapbLink *l, const uint8_t *frame, size_t len, uint32_t now_ms
         break;
     }
 
+    /* Every I, RR and REJ from a SINTRAN machine carries its current receive window in the
+     * address (lapb_frame_address_fits). We send no more unacknowledged I-frames than that;
+     * the machine sends a new RR as soon as the window or N(R) changes (XHSTR, 143702..143705),
+     * so a closed window reopens without a poll from us. */
+    if (lapb_frame_address_fits(v.address))
+    {
+        l->peer_window = lapb_frame_peer_window(v.address);
+    }
+
     if (v.kind == LAPB_FRAME_INFORMATION)
     {
         handle_information(l, &v, now_ms);
@@ -645,6 +657,14 @@ int lapb_rx_frame(LapbLink *l, const uint8_t *frame, size_t len, uint32_t now_ms
 /* Sending                                                                                    */
 /* ------------------------------------------------------------------------------------------ */
 
+/* The most I-frames we may have unacknowledged: our own window, or less if the peer said so. */
+static int send_window(const LapbLink *l)
+{
+    int ours = (int)l->cfg.window;
+    int peers = (int)l->peer_window;
+    return (peers < ours) ? peers : ours;
+}
+
 int lapb_tx_free_slots(const LapbLink *l)
 {
     if (!lapb_is_up(l))
@@ -652,7 +672,8 @@ int lapb_tx_free_slots(const LapbLink *l)
         return 0;
     }
     int used = lapb_outstanding(l) + ((l->reserved_slot != NO_SLOT) ? 1 : 0);
-    return (int)l->cfg.window - used;
+    int free_slots = send_window(l) - used;
+    return (free_slots > 0) ? free_slots : 0;
 }
 
 int lapb_tx_reserve(LapbLink *l, uint8_t **info, size_t *cap)
@@ -663,6 +684,11 @@ int lapb_tx_reserve(LapbLink *l, uint8_t **info, size_t *cap)
     }
     if (l->reserved_slot != NO_SLOT || lapb_outstanding(l) >= (int)l->cfg.window)
     {
+        return XMSG_EAGAIN;
+    }
+    if (lapb_outstanding(l) >= (int)l->peer_window)
+    {
+        l->stats.window_waits++;
         return XMSG_EAGAIN;
     }
     l->reserved_slot = l->vs;
