@@ -181,6 +181,7 @@ typedef struct TadAskerStats
     uint32_t host_notices;    /**< 0xFD notices from the host's *TADADM port */
     uint32_t restart_resends; /**< frames sent again after the host restarted its count */
     uint32_t who_answers;     /**< 7WHO questions answered with 7IAM */
+    uint32_t resyncs;         /**< unanswered letters that drew a resync */
     uint32_t text_bytes_in;
     uint32_t text_bytes_out;
 } TadAskerStats;
@@ -202,6 +203,7 @@ typedef struct TadAsker
     bool rfi_open;         /**< input granted and not yet used */
     bool hangup_wanted;    /**< tad_asker_hangup() came before the session port was known */
     uint16_t who_port;     /**< the port the last 7WHO came from: where 7IAM goes */
+    bool resync_tried;     /**< the unanswered letter has already drawn one resync */
     /* Frames waiting to go, oldest first. */
     uint8_t queue[TAD_ASKER_QUEUE];
     uint8_t q_head;

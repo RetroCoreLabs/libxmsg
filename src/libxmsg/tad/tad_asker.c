@@ -432,6 +432,23 @@ static void asker_tick(XmsgSession *s, uint32_t now_ms)
         fail(a, XMSG_ETIMEDOUT, now_ms);
         return;
     }
+    if (a->inflight == TAD_SEND_LETTER && !a->resync_tried &&
+        (uint32_t)(now_ms - a->inflight_since_ms) >= a->cfg.ack_timeout_ms)
+    {
+        /* The host dropped our first frame in silence: its count for us is ahead of ours (see
+         * xmsg_node_resync). Ask it to start again at 0; when it replies, the node calls
+         * asker_on_peer_restart and the letter goes again at the new number. Once only. */
+        a->resync_tried = true;
+        a->stats.resyncs++;
+        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_WARN,
+                 "connect letter 0x%04X not acknowledged in %u ms: resync with the host",
+                 a->inflight_flags1, (unsigned)a->cfg.ack_timeout_ms);
+        if (xmsg_node_resync(a->base.node, a->base.peer_node, now_ms) == XMSG_OK)
+        {
+            a->inflight_since_ms = now_ms;
+            return;
+        }
+    }
     if (a->inflight != TAD_SEND_NONE &&
         (uint32_t)(now_ms - a->inflight_since_ms) >= a->cfg.ack_timeout_ms)
     {
@@ -766,6 +783,9 @@ int tad_asker_connect(TadAsker *a, XmsgNode *node, uint32_t now_ms)
     a->tadadm_port = 0;
     a->session_port = 0;
     a->error = 0;
+    a->who_port = 0;
+    a->resync_tried = false;
+    a->hangup_wanted = false;
     rc = xmsg_node_attach(node, &a->base);
     if (rc != XMSG_OK)
     {

@@ -139,11 +139,18 @@ static const char *env_str(const char *name, const char *fallback)
 
 static TestSocket s_sock;
 
-/* The Flags1 file: "peer next" for the one host this test talks to, and "seed N" for the
- * port-word generator. Both are read at start and the whole file is written on every change. */
+/* The Flags1 file: "node N" (our own node number), "peer next" for the one host this test talks
+ * to, and "seed N" for the port-word generator. All are read at start and the whole file is
+ * written on every change.
+ * The first line, "node N", names OUR node number. The counts are a host's view of US, so a file
+ * written while we were another node number must not be used: on 2026-11-09 a count kept for
+ * node 19999 was used for node 101 and D100 then dropped node 101's frames in silence. A file
+ * with another node number is ignored (with a message); a file with no "node" line is taken
+ * as ours. */
 typedef struct FileStore
 {
     const char *path;
+    unsigned own;
     unsigned peer;
     unsigned next;
     unsigned seed;
@@ -162,7 +169,18 @@ static void store_read(FileStore *st)
     }
     while (fscanf(f, "%15s %u", word, &v) == 2)
     {
-        if (strcmp(word, "seed") == 0)
+        if (strcmp(word, "node") == 0)
+        {
+            if (v != st->own)
+            {
+                printf("  %s was written for node %u, we are node %u: its counts are not used\n",
+                       st->path, v, st->own);
+                st->has_next = false;
+                st->has_seed = false;
+                break;
+            }
+        }
+        else if (strcmp(word, "seed") == 0)
         {
             st->seed = v;
             st->has_seed = true;
@@ -184,6 +202,7 @@ static int store_write(const FileStore *st)
     {
         return -1;
     }
+    fprintf(f, "node %u\n", st->own);
     if (st->has_next)
     {
         fprintf(f, "%u %u\n", st->peer, st->next);
@@ -292,6 +311,7 @@ int main(void)
     ports.transport.write = line_write;
     static FileStore store;
     store.path = env_str("ND100X_FLAGS1_FILE", "nd100x_tad.flags1");
+    store.own = own;
     store_read(&store);
     ports.flags1.ctx = &store;
     ports.flags1.load = store_load;

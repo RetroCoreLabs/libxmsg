@@ -124,6 +124,7 @@ typedef struct XmsgNodeStats
     uint32_t xense_in;
     uint32_t innak_in;
     uint32_t reach_in;
+    uint32_t resyncs; /**< our own count reset after a resync (xmsg_node_resync) */
     uint32_t unhandled;
     uint32_t short_queue_full;
 } XmsgNodeStats;
@@ -172,6 +173,10 @@ struct XmsgNode
     bool ready;
     uint32_t quiet_since_ms; /**< last LAPB frame of any kind, for the settle timer */
     bool quiet_valid;
+
+    /* xmsg_node_resync(): our reachability request is out, waiting for the reply */
+    bool resync_pending;
+    uint16_t resync_peer;
 
     XmsgNodeStats stats;
 };
@@ -265,6 +270,26 @@ void xmsg_node_send_cancel(XmsgNode *n);
 
 /** @brief Send a reachability request (our restart announcement). Does not touch our count. */
 int xmsg_node_send_reach(XmsgNode *n, uint16_t peer_node, uint32_t now_ms);
+
+/**
+ * @brief Start our count to a peer again at 0, the way the peer will: send a reachability
+ *        request, and when the peer's reply comes, set our Flags1 to it back to 0 (saved), then
+ *        tell every session to that peer (on_peer_restart) so it sends its unacknowledged
+ *        frame again at the new number.
+ *
+ * For a peer that drops our frames in silence: a SINTRAN host does that when the Flags1 we
+ * send is BEHIND what it expects from us (it takes them for old repeats). MEASURED 2026-11-09
+ * on RetroCore D100, node 101: letters at 0x0079, 0x04E2 and 0x0000 drew no answer at all; after
+ * a reachability request from node 101, a letter at 0x0000 was accepted and the whole session
+ * ran. (Ahead is the other case: the host answers XENSE and the count steps down.)
+ *
+ * @param n         Node.
+ * @param peer_node The peer.
+ * @param now_ms    Time.
+ * @return XMSG_OK (also when one is already waiting for its reply), XMSG_ESTATE when the link
+ *         is not up.
+ */
+int xmsg_node_resync(XmsgNode *n, uint16_t peer_node, uint32_t now_ms);
 
 #ifdef __cplusplus
 }

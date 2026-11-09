@@ -29,7 +29,8 @@
  *    off so each typed byte leaves exactly as typed.
  *
  * The Flags1 count to each peer is kept in a small text file (--flags1, default
- * host_tad_telnet.flags1), with the port-word seed on a line "seed N", so a restart of the
+ * host_tad_telnet.flags1): "node N" (our own node number, see store_read), one "peer next"
+ * line per host, and the port-word seed on a line "seed N", so a restart of the
  * tool continues where it stopped and does not reopen the port words of its last run.
  *
  * This is a host program, so it may print, allocate and use sockets; the library does none of
@@ -205,6 +206,7 @@ static Sock sock_listen(uint16_t port)
 typedef struct FileStore
 {
     const char *path;
+    uint16_t own; /* our node number: the line "node N" */
     uint16_t peer[STORE_PEERS];
     uint16_t next[STORE_PEERS];
     int count;
@@ -212,6 +214,12 @@ typedef struct FileStore
     bool has_seed;
 } FileStore;
 
+/*
+ * The first line, "node N", names OUR node number. The counts are a host's view of US, so a file
+ * written while we were another node number must not be used: on 2026-11-09 a count kept for
+ * node 19999 was used for node 101 and D100 then dropped node 101's frames in silence. A file
+ * with another node number is ignored (with a message); a file with no "node" line is taken
+ * as ours. */
 static void store_read(FileStore *st)
 {
     FILE *f = fopen(st->path, "r");
@@ -225,7 +233,18 @@ static void store_read(FileStore *st)
     }
     while (fscanf(f, "%15s %u", word, &v) == 2)
     {
-        if (strcmp(word, "seed") == 0)
+        if (strcmp(word, "node") == 0)
+        {
+            if (v != st->own)
+            {
+                printf("%s was written for node %u, we are node %u: its counts are not used\n",
+                       st->path, v, (unsigned)st->own);
+                st->count = 0;
+                st->has_seed = false;
+                break;
+            }
+        }
+        else if (strcmp(word, "seed") == 0)
         {
             st->seed = (uint16_t)v;
             st->has_seed = true;
@@ -261,6 +280,7 @@ static int store_write(const FileStore *st)
     {
         return -1;
     }
+    fprintf(f, "node %u\n", (unsigned)st->own);
     for (int i = 0; i < st->count; i++)
     {
         fprintf(f, "%u %u\n", st->peer[i], st->next[i]);
@@ -684,7 +704,7 @@ int main(int argc, char **argv)
     uint16_t own = 0;
     uint16_t listen_port = 2300;
     XmsgLogLevel level = XMSG_LOG_INFO;
-    FileStore store = {"host_tad_telnet.flags1", {0}, {0}, 0, 0, false};
+    FileStore store = {"host_tad_telnet.flags1", 0, {0}, {0}, 0, 0, false};
     char host[128];
     char port[16];
 
@@ -771,6 +791,7 @@ int main(int argc, char **argv)
     }
 #endif
     setvbuf(stdout, NULL, _IONBF, 0);
+    store.own = own;
     store_read(&store);
 
     XmsgNodeConfig cfg;

@@ -357,6 +357,8 @@ static void handle_datagram(XmsgNode *n, const XmsgDatagram *in, uint32_t now_ms
 
     case SINTRAN_SUBTYPE_REACH_REQUEST:
         n->stats.reach_in++;
+        XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_INFO, "reachability request from node %u",
+                 in->hdr.src_node);
         xmsg_flags1_reset(&n->flags1, in->hdr.src_node);
         /* The reply carries the request's own Flags1. RetroIO pcap-decode-sample.json: request
          * 342 (FFFF) -> reply 360 (FFFF), and request 1379 (0028, the sender's next number) ->
@@ -379,6 +381,23 @@ static void handle_datagram(XmsgNode *n, const XmsgDatagram *in, uint32_t now_ms
 
     case SINTRAN_SUBTYPE_REACH_REPLY:
         XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_INFO, "reachability reply from node %u", in->hdr.src_node);
+        if (n->resync_pending && in->hdr.src_node == n->resync_peer)
+        {
+            /* The peer has started its count for us again at 0 (see xmsg_node_resync): ours
+             * follows, and every session to it sends its unacknowledged frame again. */
+            n->resync_pending = false;
+            n->stats.resyncs++;
+            xmsg_flags1_reset(&n->flags1, in->hdr.src_node);
+            for (int i = 0; i < XMSG_MAX_SESSIONS; i++)
+            {
+                XmsgSession *s = n->sessions[i];
+                if (s != NULL && s->peer_node == in->hdr.src_node &&
+                    s->ops->on_peer_restart != NULL)
+                {
+                    s->ops->on_peer_restart(s);
+                }
+            }
+        }
         return;
 
     case SINTRAN_SUBTYPE_INNAK:
@@ -708,6 +727,28 @@ int xmsg_node_send_reach(XmsgNode *n, uint16_t peer_node, uint32_t now_ms)
                 0x0001);
     node_pump(n, now_ms);
     return XMSG_OK;
+}
+
+int xmsg_node_resync(XmsgNode *n, uint16_t peer_node, uint32_t now_ms)
+{
+    if (n == NULL)
+    {
+        return XMSG_EINVAL;
+    }
+    if (!n->link_up)
+    {
+        return XMSG_ESTATE;
+    }
+    if (n->resync_pending && n->resync_peer == peer_node)
+    {
+        return XMSG_OK;
+    }
+    XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_WARN,
+             "node %u drops our frames in silence: asking it to start its count for us again",
+             peer_node);
+    n->resync_pending = true;
+    n->resync_peer = peer_node;
+    return xmsg_node_send_reach(n, peer_node, now_ms);
 }
 
 /* ------------------------------------------------------------------------------------------ */

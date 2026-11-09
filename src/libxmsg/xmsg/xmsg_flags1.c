@@ -130,7 +130,7 @@ void xmsg_flags1_reset(XmsgFlags1Table *t, uint16_t node)
         return;
     }
     XMSG_LOG(XMSG_LOG_FLAGS1, XMSG_LOG_INFO,
-             "node %u: reachability request received, Flags1 reset 0x%04X -> 0", node, e->next);
+             "node %u: Flags1 reset 0x%04X -> 0 (reachability handshake)", node, e->next);
     e->next = 0;
     e->xense_steps = 0;
     save_bound(t, e, 0);

@@ -862,6 +862,53 @@ static void who_are_you_default_name_and_limits(void)
     CHECK_EQ(tad_asker_init(&a, &cfg, NULL), XMSG_EINVAL);
 }
 
+/* The host drops our connect letter in silence (as SINTRAN does when its count for us is ahead
+ * of ours): after ack_timeout_ms the asker asks the node to resync, the host replies, and the
+ * letter goes again at Flags1 0. Here the host node is simply not run while the letter is due,
+ * so the letter's acknowledgement is late; the resync then starts both counts again at 0. */
+static void unanswered_letter_draws_one_resync(void)
+{
+    TadAskerConfig cfg;
+    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo, NULL};
+    uint8_t chunk[256];
+    size_t n;
+
+    uint32_t now = bring_up(0x00F8);
+    tad_asker_config_default(&cfg, 102, "D102");
+    cfg.ack_timeout_ms = 40; /* below the LAPB T1 x N2 of the test link (50 ms x 10) */
+    CHECK_EQ(tad_asker_init(&s_asker, &cfg, &cb), XMSG_OK);
+    CHECK_EQ(tad_asker_connect(&s_asker, &s_a, now), XMSG_OK);
+    /* Run only our side for 60 ms: the host hears nothing, so nothing is acknowledged. */
+    for (int i = 0; i < 60; i++)
+    {
+        now++;
+        xmsg_node_tick(&s_a, now);
+        while ((n = test_pair_read(&s_pair, 0, chunk, sizeof chunk)) > 0)
+        {
+            xmsg_node_feed(&s_a, chunk, n, now);
+        }
+    }
+    CHECK_EQ(s_asker.stats.resyncs, 1);
+    CHECK(s_a.resync_pending);
+    CHECK_EQ(s_asker.state, TAD_ASKER_CONNECTING);
+    /* Now both sides run: the host takes the letter and the request, replies to both. */
+    for (int i = 0; i < 400; i++)
+    {
+        pump(++now);
+    }
+    CHECK_EQ(s_a.stats.resyncs, 1);
+    CHECK(!s_a.resync_pending);
+    CHECK_EQ(s_asker.stats.resyncs, 1); /* once only */
+    /* The late ACK took the letter before the reply came, so there was nothing left to send
+     * again and the count simply starts at 0 (saved). Sending the unacknowledged frame again on
+     * the reply is the on_peer_restart path, tested in letter_is_sent_again_after_a_host_restart;
+     * our own node always ACKs, so this test cannot build a host that stays silent for good. */
+    CHECK_EQ(s_store_a.next_to_102, 0);
+    CHECK_EQ(s_asker.stats.restart_resends, 0);
+    CHECK(s_asker.state == TAD_ASKER_CONNECTING);
+    CHECK(s_host.count >= 1); /* the letter */
+}
+
 static void typing_rules(void)
 {
     TadAsker a;
@@ -918,5 +965,6 @@ int main(void)
     hangup_while_running_drops_what_waits();
     who_are_you_is_answered_like_the_real_asker();
     who_are_you_default_name_and_limits();
+    unanswered_letter_draws_one_resync();
     TEST_DONE();
 }

@@ -442,6 +442,58 @@ static void repeat_is_flagged_and_restart_continues_the_sequence(void)
     CHECK(again.base.local_port != old_port);
 }
 
+/* xmsg_node_resync: A asks B to start its count for A again; when B's reply comes, A's own count
+ * to B goes back to 0 (and is saved), and A's session to B is told so it can send again. A plain
+ * xmsg_node_send_reach, by contrast, touches nothing of ours (test above). */
+static void resync_starts_both_counts_again_at_zero(void)
+{
+    memset(&s_store_a, 0, sizeof s_store_a);
+    memset(&s_store_b, 0, sizeof s_store_b);
+    uint32_t now = bring_up(0, NULL, NULL);
+    session_init(&s_sess_a, &s_a, 102, 3);
+    session_init(&s_sess_b, &s_b, 100, 0);
+    s_sess_a.base.peer_port = s_sess_b.base.local_port;
+    s_sess_b.base.peer_port = s_sess_a.base.local_port;
+    s_sess_a.base.wants_tx = true;
+    for (int i = 0; i < 3000 && s_sess_a.delivered < 3; i++)
+    {
+        now++;
+        pump_pair(now);
+    }
+    CHECK_EQ(s_sess_a.delivered, 3);
+    CHECK_EQ(xmsg_flags1_peek(&s_a.flags1, 102), 3);
+
+    int saves_before = s_store_a.saves;
+    int reach_before = s_reach_seen_b;
+    CHECK_EQ(xmsg_node_resync(&s_a, 102, now), XMSG_OK);
+    CHECK_EQ(xmsg_node_resync(&s_a, 102, now), XMSG_OK); /* already waiting: nothing more sent */
+    CHECK_EQ(xmsg_flags1_peek(&s_a.flags1, 102), 3);     /* not before the reply */
+    for (int i = 0; i < 200; i++)
+    {
+        now++;
+        pump_pair(now);
+    }
+    CHECK_EQ(s_reach_seen_b, reach_before + 1); /* one request went out */
+    CHECK_EQ(s_a.stats.resyncs, 1);
+    CHECK_EQ(xmsg_flags1_peek(&s_a.flags1, 102), 0);
+    CHECK_EQ(xmsg_flags1_peek(&s_b.flags1, 100), 0);
+    CHECK(s_store_a.saves > saves_before); /* the 0 is saved, so a restart resumes at 0 */
+    CHECK_EQ(s_sess_a.restarts, 1);        /* A's session is told */
+    CHECK(!s_a.resync_pending);
+
+    /* A reply nobody asked for changes nothing. */
+    CHECK_EQ(xmsg_node_send_reach(&s_b, 100, now), XMSG_OK);
+    for (int i = 0; i < 200; i++)
+    {
+        now++;
+        pump_pair(now);
+    }
+    CHECK_EQ(s_b.stats.resyncs, 0);
+
+    xmsg_node_link_stop(&s_a, now);
+    CHECK_EQ(xmsg_node_resync(NULL, 102, now), XMSG_EINVAL);
+}
+
 static void nothing_is_sent_before_the_link_settles(void)
 {
     XmsgTransportPort ta;
@@ -551,6 +603,7 @@ int main(void)
     clean_wire_traffic();
     faulty_wire_traffic();
     repeat_is_flagged_and_restart_continues_the_sequence();
+    resync_starts_both_counts_again_at_zero();
     nothing_is_sent_before_the_link_settles();
     over_loopback_tcp();
     TEST_DONE();
