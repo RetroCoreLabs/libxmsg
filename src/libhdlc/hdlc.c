@@ -12,6 +12,8 @@
 #include "libhdlc/hdlc.h"
 #include "libhdlc/hot_path.h"
 
+#include <stddef.h>
+
 /* Reflected CRC-16 table for poly 0x1021 (0x8408 reflected). Same table as
  * RFC 1662 Appendix C; the bit-serial loop in SDLCBridge.ino
  * (calculateCrcChar) computes exactly the same function. */
@@ -364,6 +366,9 @@ void hdlc_decoder_reset(hdlc_decoder *dec)
     dec->overflow = false;
     dec->byte_count = 0;
     dec->max_bytes = 0;
+    dec->buf = NULL;
+    dec->buf_size = 0;
+    dec->limit = 0;
     dec->shifter = 0;
     dec->bit_count = 0;
     /* Unknown history counts as idle ones: a flag needs a zero first. */
@@ -378,9 +383,39 @@ void hdlc_decoder_reset(hdlc_decoder *dec)
     dec->stats.bytes = 0;
 }
 
+/**
+ * @brief Work out the per-frame byte limit from max_bytes and the buffer.
+ * @param[in,out] dec  Decoder.
+ */
+static void update_limit(hdlc_decoder *dec)
+{
+    int limit = dec->max_bytes;
+    if (dec->buf != NULL && (limit == 0 || dec->buf_size < limit))
+    {
+        limit = dec->buf_size;
+    }
+    dec->limit = limit;
+}
+
 void hdlc_decoder_set_max_bytes(hdlc_decoder *dec, int max_bytes)
 {
     dec->max_bytes = (max_bytes > 0) ? max_bytes : 0;
+    update_limit(dec);
+}
+
+void HOT_PATH_CODE hdlc_decoder_set_buffer(hdlc_decoder *dec, uint8_t *buf, int size)
+{
+    if (buf == NULL || size <= 0)
+    {
+        dec->buf = NULL;
+        dec->buf_size = 0;
+    }
+    else
+    {
+        dec->buf = buf;
+        dec->buf_size = size;
+    }
+    update_limit(dec);
 }
 
 /**
@@ -406,16 +441,24 @@ static HOT_PATH_CODE void frame_restart(hdlc_decoder *dec)
 static HOT_PATH_CODE void deliver(hdlc_decoder *dec, uint8_t data, const hdlc_frame_sink *sink)
 {
     dec->have_data = true;
-    if (dec->max_bytes != 0 && dec->byte_count >= dec->max_bytes)
+    if (dec->limit != 0 && dec->byte_count >= dec->limit)
     {
         dec->overflow = true;
         dec->byte_count++;
         return;
     }
-    dec->byte_count++;
     dec->crc = hdlc_crc_byte(dec->crc, data);
     dec->stats.bytes++;
-    sink->on_byte(sink->ctx, data);
+    if (dec->buf != NULL)
+    {
+        /* Per-frame mode: byte_count < limit <= buf_size, so this fits. */
+        dec->buf[dec->byte_count] = data;
+    }
+    else
+    {
+        sink->on_byte(sink->ctx, data);
+    }
+    dec->byte_count++;
 }
 
 /**
@@ -478,7 +521,17 @@ static HOT_PATH_CODE void frame_end(hdlc_decoder *dec, const hdlc_frame_sink *si
             status = HDLC_RX_OK;
             dec->stats.ok++;
         }
-        sink->on_end(sink->ctx, status);
+        if (dec->buf != NULL)
+        {
+            /* What is in the buffer: all of it, or up to the limit when the
+             * frame was cut. Read before the callback, which may swap buf. */
+            int length = dec->overflow ? dec->limit : dec->byte_count;
+            sink->on_frame(sink->ctx, length, status);
+        }
+        else
+        {
+            sink->on_end(sink->ctx, status);
+        }
     }
     else if (dec->have_data)
     {

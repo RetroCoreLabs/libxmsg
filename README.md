@@ -12,7 +12,7 @@ host tools and unit tests.
 
 | Part | Header | What it does |
 |---|---|---|
-| Bit-level HDLC | `libhdlc/hdlc.h` | Bit stuffing, opening/closing flags, aborts, CRC-16/X.25 frame check, control-field decode. The encoder gives packed line bytes (for SPI) or groups of 8-10 bits (for a Pico PIO). The decoder takes line bytes, handles a whole byte at once when it holds no stuffing, flag or abort, and reports each frame as OK / CRC error / odd bit count / too long, with counters. |
+| Bit-level HDLC | `libhdlc/hdlc.h` | Bit stuffing, opening/closing flags, aborts, CRC-16/X.25 frame check, control-field decode. The encoder gives packed line bytes (for SPI) or groups of 8-10 bits (for a Pico PIO). The decoder takes line bytes, handles a whole byte at once when it holds no stuffing, flag or abort, and reports each frame as OK / CRC error / odd bit count / too long, with counters. Frame bytes go to a callback one at a time, or straight into a caller's buffer with one callback per frame (`hdlc_decoder_set_buffer`). |
 | Host framing | `libhdlc/byte_frame.h` | RFC 1662 byte stuffing between the gateway and the PC over USB serial or TCP. |
 | Control frames | `libhdlc/control_frame.h` | Messages between the PC and the gateway firmware on the same channel as line frames: commands, replies, log, statistics, events. Described in full in [extras/docs/control-frames.md](extras/docs/control-frames.md). |
 | Ring buffer | `libhdlc/ring_buffer.h` | A byte ring guarded by a mutex, for passing bytes between tasks or threads, any number of writers. FreeRTOS on ESP32, SRWLOCK on Windows, pthread elsewhere. Not on the Pico ([BUGS.md](BUGS.md) L-PICO). |

@@ -73,6 +73,7 @@ static void sink_discard(void *ctx)
 static hdlc_frame_sink make_sink(Sink *s)
 {
     hdlc_frame_sink k;
+    memset(&k, 0, sizeof k);
     memset(s, 0, sizeof *s);
     k.ctx = s;
     k.on_byte = sink_byte;
@@ -654,6 +655,53 @@ static void lib_discard(void *ctx)
     c->count = 0;
 }
 
+/**
+ * Fill line with a random mix of flags, aborts, raw bit noise and stuffed data runs.
+ * The same seed gives the same line.
+ */
+static void random_line(uint8_t *line, int size, uint32_t *seed)
+{
+    int pos = 0;
+    int ones = 0;
+    memset(line, 0xFF, (size_t)size);
+    /* Random mix: flags, aborts, raw bit noise, and stuffed data runs. */
+    while (pos < size * 8 - 400)
+    {
+        uint32_t r;
+        *seed = *seed * 1103515245u + 12345u;
+        r = *seed >> 16u;
+        switch (r % 8u)
+        {
+        case 0:
+        case 1:
+            bits_put(line, &pos, 0x7Eu, 8);
+            ones = 0;
+            break;
+        case 2:
+            bits_put(line, &pos, 0x7Fu, 8);
+            ones = 0;
+            break;
+        case 3:
+            bits_put(line, &pos, r >> 3u, (int)(r % 7u));
+            ones = 0;
+            break;
+        default:
+        {
+            int n = 1 + (int)((r >> 4u) % 40u);
+            for (int i = 0; i < n; i++)
+            {
+                uint32_t v;
+                *seed = *seed * 1103515245u + 12345u;
+                /* Leans towards ones so runs of 4..6 and stuffing are common. */
+                v = (*seed >> 16u) | (*seed >> 9u);
+                bits_put_stuffed(line, &pos, &ones, v & 0xFFu, 8);
+            }
+            break;
+        }
+        }
+    }
+}
+
 static void fast_path_matches_reference(void)
 {
     static Events ref;
@@ -664,48 +712,10 @@ static void fast_path_matches_reference(void)
 
     for (int round = 0; round < 2000; round++)
     {
-        int pos = 0;
-        int ones = 0;
         LibCtx ctx;
         hdlc_frame_sink sink;
         hdlc_decoder dec;
-        memset(line, 0xFF, sizeof line);
-        /* Random mix: flags, aborts, raw bit noise, and stuffed data runs. */
-        while (pos < (int)sizeof line * 8 - 400)
-        {
-            uint32_t r;
-            seed = seed * 1103515245u + 12345u;
-            r = seed >> 16u;
-            switch (r % 8u)
-            {
-            case 0:
-            case 1:
-                bits_put(line, &pos, 0x7Eu, 8);
-                ones = 0;
-                break;
-            case 2:
-                bits_put(line, &pos, 0x7Fu, 8);
-                ones = 0;
-                break;
-            case 3:
-                bits_put(line, &pos, r >> 3u, (int)(r % 7u));
-                ones = 0;
-                break;
-            default:
-            {
-                int n = 1 + (int)((r >> 4u) % 40u);
-                for (int i = 0; i < n; i++)
-                {
-                    uint32_t v;
-                    seed = seed * 1103515245u + 12345u;
-                    /* Leans towards ones so runs of 4..6 and stuffing are common. */
-                    v = (seed >> 16u) | (seed >> 9u);
-                    bits_put_stuffed(line, &pos, &ones, v & 0xFFu, 8);
-                }
-                break;
-            }
-            }
-        }
+        random_line(line, (int)sizeof line, &seed);
         ref.n = 0;
         lib.n = 0;
         ref_decode(line, (int)sizeof line * 8, &ref);
@@ -740,6 +750,249 @@ static void fast_path_matches_reference(void)
     CHECK(s_ref_bytes > 100000);
     CHECK(s_ref_ends > 1000);
     CHECK(s_ref_aborts > 0);
+}
+
+/* ------------------------------------------ per-frame (buffer) mode */
+
+/*
+ * Per-frame mode must give exactly what per-byte mode gives: the same frames, the same bytes,
+ * the same lengths and statuses, the same aborts and short runs, in the same order. Both
+ * decoders read the random lines of fast_path_matches_reference, with and without a length
+ * limit. The per-frame side swaps between two buffers inside every callback, the way the Pico
+ * hands over frame slots.
+ */
+typedef struct
+{
+    Events *e;
+    uint8_t frame[1024];    /* per-byte side: bytes of the frame so far */
+    int count;
+    hdlc_decoder *dec;      /* per-frame side: decoder to give the next buffer */
+    uint8_t slot[2][1024];
+    int size;
+    int next;
+    uint8_t *current;
+} ModeCtx;
+
+/** Record one finished frame as F<length>:<hex bytes>/<status>. */
+static void record_frame(Events *e, const uint8_t *data, int length, hdlc_rx_status status)
+{
+    size_t room;
+    if (e->n >= (int)sizeof e->log - 64 - (2 * length))
+    {
+        return;
+    }
+    room = sizeof e->log - (size_t)e->n;
+    e->n += snprintf(&e->log[e->n], room, "F%d:", length);
+    for (int i = 0; i < length; i++)
+    {
+        ev(e, 'x', data[i]);
+    }
+    room = sizeof e->log - (size_t)e->n;
+    e->n += snprintf(&e->log[e->n], room, "/%d ", (int)status);
+}
+
+static void pb_byte(void *ctx, uint8_t data)
+{
+    ModeCtx *c = (ModeCtx *)ctx;
+    if (c->count < (int)sizeof c->frame)
+    {
+        c->frame[c->count] = data;
+    }
+    c->count++;
+}
+
+static void pb_end(void *ctx, hdlc_rx_status status)
+{
+    ModeCtx *c = (ModeCtx *)ctx;
+    record_frame(c->e, c->frame, c->count, status);
+    c->count = 0;
+}
+
+static void pb_abort(void *ctx)
+{
+    ModeCtx *c = (ModeCtx *)ctx;
+    ev(c->e, 'A', 0);
+    c->count = 0;
+}
+
+static void pb_discard(void *ctx)
+{
+    ModeCtx *c = (ModeCtx *)ctx;
+    ev(c->e, 's', 0);
+    c->count = 0;
+}
+
+/** Per-frame side: hand the decoder the other slot, poisoned so stale bytes would show. */
+static void pf_swap(ModeCtx *c)
+{
+    c->next ^= 1;
+    c->current = c->slot[c->next];
+    memset(c->current, 0xA5, sizeof c->slot[0]);
+    hdlc_decoder_set_buffer(c->dec, c->current, c->size);
+}
+
+static void pf_frame(void *ctx, int length, hdlc_rx_status status)
+{
+    ModeCtx *c = (ModeCtx *)ctx;
+    record_frame(c->e, c->current, length, status);
+    pf_swap(c);
+}
+
+static void pf_abort(void *ctx)
+{
+    ModeCtx *c = (ModeCtx *)ctx;
+    ev(c->e, 'A', 0);
+    pf_swap(c);
+}
+
+static void pf_discard(void *ctx)
+{
+    ModeCtx *c = (ModeCtx *)ctx;
+    ev(c->e, 's', 0);
+    pf_swap(c);
+}
+
+/** Run both modes over 1000 random lines; limit = 0 means a 1024-byte buffer and no limit. */
+static void per_frame_run(int limit)
+{
+    static Events by_byte;
+    static Events by_frame;
+    static ModeCtx a;
+    static ModeCtx b;
+    static uint8_t line[2048];
+    uint32_t seed = 4242u;
+    int mismatches = 0;
+    long frames = 0;
+    long too_long = 0;
+
+    for (int round = 0; round < 1000; round++)
+    {
+        hdlc_decoder da;
+        hdlc_decoder db;
+        hdlc_frame_sink sa;
+        hdlc_frame_sink sb;
+        random_line(line, (int)sizeof line, &seed);
+
+        by_byte.n = 0;
+        a.e = &by_byte;
+        a.count = 0;
+        memset(&sa, 0, sizeof sa);
+        sa.ctx = &a;
+        sa.on_byte = pb_byte;
+        sa.on_end = pb_end;
+        sa.on_abort = pb_abort;
+        sa.on_discard = pb_discard;
+        hdlc_decoder_reset(&da);
+        hdlc_decoder_set_max_bytes(&da, limit);
+
+        by_frame.n = 0;
+        b.e = &by_frame;
+        b.dec = &db;
+        b.size = (limit != 0) ? limit : (int)sizeof b.slot[0];
+        b.next = 0;
+        memset(&sb, 0, sizeof sb);       /* on_byte and on_end stay NULL: must not be called */
+        sb.ctx = &b;
+        sb.on_frame = pf_frame;
+        sb.on_abort = pf_abort;
+        sb.on_discard = pf_discard;
+        hdlc_decoder_reset(&db);
+        pf_swap(&b);
+
+        for (int i = 0; i < (int)sizeof line; i++)
+        {
+            hdlc_decoder_feed(&da, line[i], &sa);
+            hdlc_decoder_feed(&db, line[i], &sb);
+        }
+        frames += (long)(da.stats.ok + da.stats.bad_crc + da.stats.odd_bits + da.stats.too_long);
+        too_long += (long)da.stats.too_long;
+        if (by_byte.n != by_frame.n || memcmp(by_byte.log, by_frame.log, (size_t)by_byte.n) != 0
+            || memcmp(&da.stats, &db.stats, sizeof da.stats) != 0)
+        {
+            if (mismatches == 0)
+            {
+                int k = 0;
+                while (k < by_byte.n && k < by_frame.n && by_byte.log[k] == by_frame.log[k])
+                {
+                    k++;
+                }
+                printf("  limit %d round %d differs at %d\n  byte:  %.120s\n  frame: %.120s\n",
+                       limit, round, k, &by_byte.log[k > 40 ? k - 40 : 0],
+                       &by_frame.log[k > 40 ? k - 40 : 0]);
+            }
+            mismatches++;
+        }
+    }
+    CHECK_EQ(mismatches, 0);
+    CHECK(frames > 1000);
+    if (limit != 0)
+    {
+        CHECK(too_long > 100);
+    }
+    else
+    {
+        CHECK_EQ(too_long, 0);
+    }
+}
+
+static void per_frame_equals_per_byte(void)
+{
+    per_frame_run(0);
+    per_frame_run(12);
+    per_frame_run(HDLC_MIN_FRAME_BYTES);
+}
+
+/** A good frame lands in the buffer whole, FCS last, length reported; then back to per-byte. */
+static void per_frame_basic(void)
+{
+    static const uint8_t payload[] = { 0x01, 0x3F, 0xAA, 0x55, 0x7E, 0xFF };
+    Line l;
+    ModeCtx c;
+    hdlc_decoder dec;
+    hdlc_frame_sink sink;
+    Events e;
+    Sink s;
+
+    memset(&l, 0, sizeof l);
+    encode_frame(&l, payload, (int)sizeof payload);
+    e.n = 0;
+    c.e = &e;
+    c.dec = &dec;
+    c.size = 8;                          /* exactly payload + FCS */
+    c.next = 0;
+    memset(&sink, 0, sizeof sink);
+    sink.ctx = &c;
+    sink.on_frame = pf_frame;
+    sink.on_abort = pf_abort;
+    sink.on_discard = pf_discard;
+    hdlc_decoder_reset(&dec);
+    pf_swap(&c);
+    feed_line(&l, &dec, &sink);
+    CHECK_EQ(dec.stats.ok, 1u);
+    CHECK_EQ(dec.stats.bytes, 8u);
+    CHECK(strncmp(e.log, "F8:013FAA557EFF", 15) == 0);
+    CHECK(strstr(e.log, "/0 ") != NULL);
+
+    /* One byte too small: cut, TOO_LONG, length = buffer size, nothing written past it. */
+    e.n = 0;
+    c.size = 7;
+    pf_swap(&c);
+    feed_line(&l, &dec, &sink);
+    CHECK_EQ(dec.stats.too_long, 1u);
+    /* The same line again: its leading idle ones plus the opening flag follow the
+     * previous closing flag, a short run (" s0 ") first - as in per-byte mode. */
+    CHECK(strstr(e.log, "F7:013FAA557EFFE8/1 ") != NULL);
+    CHECK(strstr(e.log, "/1 ") != NULL);
+    CHECK_EQ(c.slot[c.next ^ 1][7], 0xA5);
+
+    /* NULL buffer: per-byte mode again, exactly as before. */
+    hdlc_decoder_set_buffer(&dec, NULL, 0);
+    CHECK(dec.buf == NULL);
+    CHECK_EQ(dec.limit, 0);
+    {
+        hdlc_frame_sink k = make_sink(&s);
+        feed_line(&l, &dec, &k);
+        CHECK_EQ(s.good, 1);
+    }
 }
 
 /* ------------------------------------------------ bit-group encoder */
@@ -805,6 +1058,8 @@ int main(void)
     odd_bits_reported();
     too_long_cut_and_counted();
     fast_path_matches_reference();
+    per_frame_basic();
+    per_frame_equals_per_byte();
     idle_then_six_ones_is_not_a_flag();
     crc_vectors();
     round_trip_every_offset();

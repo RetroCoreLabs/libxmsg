@@ -228,10 +228,14 @@ typedef struct
 {
     /** Handed to every callback unchanged. */
     void *ctx;
-    /** One un-stuffed frame byte, in order. The FCS bytes come last. */
+    /** Per-byte mode (no buffer set): one un-stuffed frame byte, in order.
+     *  The FCS bytes come last. Not called in per-frame mode, may be NULL
+     *  there. */
     void (*on_byte)(void *ctx, uint8_t data);
-    /** Closing flag after at least HDLC_MIN_FRAME_BYTES bytes. status says
-     *  whether the frame is good; anything but HDLC_RX_OK means drop it. */
+    /** Per-byte mode: closing flag after at least HDLC_MIN_FRAME_BYTES
+     *  bytes. status says whether the frame is good; anything but
+     *  HDLC_RX_OK means drop it. Not called in per-frame mode, may be NULL
+     *  there. */
     void (*on_end)(void *ctx, hdlc_rx_status status);
     /** Seven or more ones inside a frame; the frame is dropped. */
     void (*on_abort)(void *ctx);
@@ -240,6 +244,15 @@ typedef struct
      *  Without this the sink kept a padding byte and the next frame arrived
      *  with it stuck on the front (bench 2026-11-08, 91 of 155 frames). */
     void (*on_discard)(void *ctx);
+    /** Per-frame mode (a buffer set with hdlc_decoder_set_buffer()): closing
+     *  flag after at least HDLC_MIN_FRAME_BYTES bytes. The frame is in the
+     *  buffer, length bytes from the start, FCS included as its last two
+     *  bytes; for HDLC_RX_TOO_LONG length is the buffer size and the rest
+     *  of the frame was not kept. Same status meaning as on_end. The buffer
+     *  stays the decoder's until this returns: give it the next one here
+     *  (or right after) with hdlc_decoder_set_buffer(), or it reuses this
+     *  one. Not called in per-byte mode, may be NULL there. */
+    void (*on_frame)(void *ctx, int length, hdlc_rx_status status);
 } hdlc_frame_sink;
 
 /**
@@ -256,7 +269,7 @@ typedef struct
     uint32_t too_long;      /**< frames ended HDLC_RX_TOO_LONG */
     uint32_t aborts;        /**< frames of HDLC_MIN_FRAME_BYTES or more cut by seven ones */
     uint32_t short_frames;  /**< flag-to-flag runs of 1..3 bytes, ignored (see feed) */
-    uint32_t bytes;         /**< bytes passed to on_byte() */
+    uint32_t bytes;         /**< bytes passed on: to on_byte(), or stored in the buffer */
 } hdlc_rx_stats;
 
 /**
@@ -272,6 +285,10 @@ typedef struct
     bool overflow;      /**< this frame passed max_bytes */
     int byte_count;     /**< bytes assembled for this frame, kept or not */
     int max_bytes;      /**< longest frame passed on, FCS included; 0 = no limit */
+    uint8_t *buf;       /**< per-frame mode: where frame bytes go; NULL = per-byte mode */
+    int buf_size;       /**< size of buf in bytes */
+    int limit;          /**< bytes kept per frame: the smaller of max_bytes and
+                             buf_size, 0 = none; worked out once, used per byte */
     uint8_t shifter;    /**< input byte being built, filled from bit 7 down */
     int bit_count;      /**< bits in shifter, 0..7 */
     int one_count;      /**< ones in a row seen so far, capped at 8 */
@@ -286,7 +303,8 @@ typedef struct
 
 /**
  * @brief Return a decoder to the idle, waiting-for-flag state, clear its
- *        counters and remove any length limit.
+ *        counters, remove any length limit and any buffer (back to
+ *        per-byte mode).
  *
  * The line before the reset is taken to have been idle (all ones), so the
  * first flag is only recognised after a zero has been seen. Starting the
@@ -310,6 +328,28 @@ void hdlc_decoder_reset(hdlc_decoder *dec);
 void hdlc_decoder_set_max_bytes(hdlc_decoder *dec, int max_bytes);
 
 /**
+ * @brief Switch to per-frame mode: frame bytes go straight into buf, and the
+ *        sink hears once per frame (on_frame) instead of once per byte.
+ *
+ * At 983000 bit/s the per-byte callback runs up to about 123000 times a
+ * second; in this mode a whole data byte costs a table lookup, a CRC step and
+ * one store. Asked for by RC422Dev, 2026-11-09.
+ *
+ * Never writes past size bytes: a longer frame ends HDLC_RX_TOO_LONG, so size
+ * also works as a length limit (the smaller of size and the max_bytes limit
+ * wins). May be called at any time, also from inside on_frame, on_abort and
+ * on_discard to hand over the next buffer; a frame already in progress keeps
+ * its bytes in the old buffer and continues in the new one at the same
+ * offset, so swap only at a frame boundary (inside those callbacks).
+ * buf = NULL or size <= 0 goes back to per-byte mode, exactly as before.
+ *
+ * @param[in,out] dec   Decoder; must not be NULL.
+ * @param[in]     buf   Frame buffer, or NULL; must outlive its use.
+ * @param[in]     size  Bytes in buf.
+ */
+void hdlc_decoder_set_buffer(hdlc_decoder *dec, uint8_t *buf, int size);
+
+/**
  * @brief Feed one byte as read from the line (LSB first on the wire).
  *
  * Idle bytes (0xFF) outside a frame return at once. Inside a frame a byte
@@ -329,7 +369,8 @@ void hdlc_decoder_set_max_bytes(hdlc_decoder *dec, int max_bytes);
  * @param[in,out] dec   Decoder; must not be NULL.
  * @param[in]     data  Byte from the line.
  * @param[in]     sink  Callbacks for frame bytes and frame ends; must not be
- *                      NULL and all four function pointers must be set.
+ *                      NULL. on_abort and on_discard must be set; on_byte and
+ *                      on_end in per-byte mode, on_frame in per-frame mode.
  */
 void hdlc_decoder_feed(hdlc_decoder *dec, uint8_t data, const hdlc_frame_sink *sink);
 
