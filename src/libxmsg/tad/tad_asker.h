@@ -20,8 +20,8 @@
  *                            (0x86, 0x84, 0x0108), then ESCA (0x82, 0x94, 0x0008)
  *   host                     ESRS, RESE, RESE, then the banner ending in RFI
  *   asker                    keystrokes as BDAT (0x96, 0x84, 0x0108) once input is granted
- *   host                     0xFD from the *TADADM port: the session is over
- *   asker -> session port    DCON (0x82, 0x94, 0x0008)
+ *   host                     0xFD from the *TADADM port: a session notice (see below)
+ *   asker -> session port    DCON (0x82, 0x94, 0x0008) when the asker's user is done
  *
  * How the asker answers each host terminal frame (MEASURED: the rule below predicts the asker's
  * control replies exactly, in order, in 9 of the 10 sessions in that capture file; the tenth has
@@ -51,10 +51,18 @@
  * frame the host refuses with XENSE is simply rebuilt and sent again at the stepped-down number
  * (the node steps the count down; up to 8 tries). Any other refusal ends the session.
  *
- * NOT ESTABLISHED, so not offered: what an asker sends to end a session on its own. The only
- * measured ending is the host's 0xFD (the user typed LOGOUT) answered with DCON.
- * tad_asker_abort() drops the session locally and sends nothing; the host keeps its side until
- * it gives up on its own.
+ * The host's 0xFD is a NOTICE, not the end. MEASURED in RetroIO pcap-decode-sample.json, every
+ * complete session: the host sends 0xFD after "--EXIT--" (LOGOUT), and in 2 of 7 sessions ALSO
+ * right after the login is accepted (asker 100 port 02E3: FD at record 1327, then the session
+ * goes on, more text, LOGOUT, a second FD at 1341). The two are byte-identical. Every session
+ * ends with the asker's DCON to the session port (records 1260, 803, 1296, 1519), sent when its
+ * user is done. Live on RetroCore D100 (2026-11-09) the notice came ~3 s after connect, once in
+ * the middle of a listing; ending the session on it cut a working login off. So the asker only
+ * reports the notice (`host_notice`) and ends the session when the application calls
+ * tad_asker_hangup(). The RetroIO C# asker answered every 0xFD with DCON; that was the fault.
+ *
+ * tad_asker_abort() drops the session locally and sends nothing, for when the line itself is
+ * gone; the host keeps its side until it gives up on its own.
  */
 #ifndef XMSG_TAD_ASKER_H
 #define XMSG_TAD_ASKER_H
@@ -101,8 +109,8 @@ typedef enum TadAskerState
     TAD_ASKER_PORT_ASSIGNED,  /**< waiting for the host's DUMM on the session port */
     TAD_ASKER_TERMINAL_SETUP, /**< terminal setup and ESCA sent, waiting for the first RFI */
     TAD_ASKER_RUNNING,        /**< text flows */
-    TAD_ASKER_CLOSING,        /**< the host ended the session; DCON being sent */
-    TAD_ASKER_CLOSED,         /**< DCON acknowledged; detached from the node */
+    TAD_ASKER_CLOSING,        /**< tad_asker_hangup() was called; DCON being sent */
+    TAD_ASKER_CLOSED,         /**< DCON acknowledged, or aborted; detached from the node */
     TAD_ASKER_FAILED          /**< refused or timed out; detached from the node */
 } TadAskerState;
 
@@ -119,6 +127,10 @@ typedef struct TadAskerCallbacks
     void (*input_gate)(void *ctx, bool may_type);
     /** The host's echo instruction: the ECKM byte (0x01 echo locally, 0xFF do not). */
     void (*echo_mode)(void *ctx, uint8_t eckm);
+    /** The host sent its session notice (0xFD from *TADADM). It does NOT end the session: it
+     *  comes after LOGOUT, and on some hosts also right after login (see the file comment). An
+     *  application that has seen its user log out calls tad_asker_hangup() on it. */
+    void (*host_notice)(void *ctx);
 } TadAskerCallbacks;
 
 /** Settings; tad_asker_config_default() fills the measured values. */
@@ -158,6 +170,8 @@ typedef struct TadAskerStats
     uint32_t frames_out;
     uint32_t repeats_in; /**< host frames seen again (already answered once) */
     uint32_t xense_resends;
+    uint32_t host_notices;    /**< 0xFD notices from the host's *TADADM port */
+    uint32_t restart_resends; /**< frames sent again after the host restarted its count */
     uint32_t text_bytes_in;
     uint32_t text_bytes_out;
 } TadAskerStats;
@@ -236,7 +250,19 @@ bool tad_asker_may_type(const TadAsker *a);
 TadAskerState tad_asker_state(const TadAsker *a);
 
 /**
- * @brief Drop the session here and detach from the node. Sends NOTHING (see the file comment).
+ * @brief End the session: send DCON to the host's session port, as a real asker does when its
+ *        user is done. The state goes to CLOSING, then CLOSED (and the session detaches) once
+ *        the host acknowledges the DCON.
+ * @param a      Session.
+ * @param now_ms Current time.
+ * @return XMSG_OK, or XMSG_ESTATE when there is no session port yet (before the port
+ *         assignment there is nothing to hang up; use tad_asker_abort()).
+ */
+int tad_asker_hangup(TadAsker *a, uint32_t now_ms);
+
+/**
+ * @brief Drop the session here and detach from the node. Sends NOTHING: for when the line is
+ *        gone and nothing can be sent (see the file comment).
  * @param a Session.
  */
 void tad_asker_abort(TadAsker *a);

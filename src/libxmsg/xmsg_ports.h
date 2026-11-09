@@ -56,6 +56,17 @@ typedef struct XmsgFlags1Port
     void *ctx;
     int (*load)(void *ctx, uint16_t peer_node, uint16_t *next);
     int (*save)(void *ctx, uint16_t peer_node, uint16_t next);
+    /**
+     * The seed of the port-word generator, kept by the same store. The random low seven bits of
+     * a port word are what stop a reopened port reusing its old identifier, so a restarted node
+     * must continue the draws, not repeat them (RetroIO XmsgPortWordAllocator). Without it every
+     * run opens the same port word, and a frame the machine still sends to an old session reaches
+     * the new one: measured 2026-11-09, an FD for a session of an earlier run ended a fresh login.
+     * Both may be NULL: the node then starts from XmsgNodeConfig.portword_seed every time.
+     * `load_port_seed` returns 0 and fills `seed` when one is stored, -1 otherwise.
+     */
+    int (*load_port_seed)(void *ctx, uint16_t *seed);
+    int (*save_port_seed)(void *ctx, uint16_t seed);
 } XmsgFlags1Port;
 
 /** Log categories, one per subsystem. The minimum level is set per category at run time. */

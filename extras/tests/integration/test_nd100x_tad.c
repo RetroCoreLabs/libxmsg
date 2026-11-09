@@ -12,12 +12,18 @@
  *   ND100X_SYSTEM      its system name as XROUT knows it (default D100)
  *   ND100X_USER        user to log in as (default SYSTEM)
  *   ND100X_PASSWORD    password (default empty)
+ *   ND100X_FLAGS1_FILE where our Flags1 count to the host is kept between runs (default
+ *                      nd100x_tad.flags1 in the working directory; a line "peer next" and a
+ *                      line "seed N" for the port-word generator, as host_tad_telnet keeps). Without it every run starts at 0, the
+ *                      host still expects the number after our last frame, and it drops the
+ *                      connect letter in silence (measured on RetroCore D100, 2026-11-09).
  *
  * What it types, one line per input grant, as the real D100 user did in the captured session
  * (record 257 onward in RetroIO pcap-decode-sample.json): the user name, the password, then
  * LIST-FILES,,, and LOGOUT. What is checked: the session reaches RUNNING, every line goes out,
- * text comes back, and the host ends the session after LOGOUT, which our DCON answers (state
- * CLOSED). The whole run must finish within two minutes.
+ * text comes back, the host sends its session notice (0xFD) after LOGOUT, and we then hang up
+ * with DCON, as a real asker does (state CLOSED). A notice that comes BEFORE LOGOUT (D100 sends
+ * one ~3 s after connect) must not end anything. The whole run must finish within two minutes.
  */
 #include "libxmsg/log/xmsg_log.h"
 #include "libxmsg/tad/tad_asker.h"
@@ -39,6 +45,15 @@ static void on_text(void *ctx, const uint8_t *bytes, size_t len)
     (void)ctx;
     s_text_len += len;
     fwrite(bytes, 1, len, stdout);
+}
+
+static unsigned s_notices;
+
+static void on_notice(void *ctx)
+{
+    (void)ctx;
+    s_notices++;
+    printf("\n  host session notice %u\n", s_notices);
 }
 
 static void on_state(void *ctx, TadAskerState st, int error)
@@ -80,6 +95,101 @@ static const char *env_str(const char *name, const char *fallback)
 }
 
 static TestSocket s_sock;
+
+/* The Flags1 file: "peer next" for the one host this test talks to, and "seed N" for the
+ * port-word generator. Both are read at start and the whole file is written on every change. */
+typedef struct FileStore
+{
+    const char *path;
+    unsigned peer;
+    unsigned next;
+    unsigned seed;
+    bool has_next;
+    bool has_seed;
+} FileStore;
+
+static void store_read(FileStore *st)
+{
+    FILE *f = fopen(st->path, "r");
+    char word[16];
+    unsigned v;
+    if (f == NULL)
+    {
+        return;
+    }
+    while (fscanf(f, "%15s %u", word, &v) == 2)
+    {
+        if (strcmp(word, "seed") == 0)
+        {
+            st->seed = v;
+            st->has_seed = true;
+        }
+        else
+        {
+            st->peer = (unsigned)strtoul(word, NULL, 10);
+            st->next = v;
+            st->has_next = true;
+        }
+    }
+    fclose(f);
+}
+
+static int store_write(const FileStore *st)
+{
+    FILE *f = fopen(st->path, "w");
+    if (f == NULL)
+    {
+        return -1;
+    }
+    if (st->has_next)
+    {
+        fprintf(f, "%u %u\n", st->peer, st->next);
+    }
+    if (st->has_seed)
+    {
+        fprintf(f, "seed %u\n", st->seed);
+    }
+    return (fclose(f) == 0) ? 0 : -1;
+}
+
+static int store_load(void *ctx, uint16_t peer, uint16_t *next)
+{
+    const FileStore *st = (const FileStore *)ctx;
+    if (!st->has_next || st->peer != peer)
+    {
+        return -1;
+    }
+    *next = (uint16_t)st->next;
+    return 0;
+}
+
+static int store_save(void *ctx, uint16_t peer, uint16_t next)
+{
+    FileStore *st = (FileStore *)ctx;
+    st->peer = peer;
+    st->next = next;
+    st->has_next = true;
+    return store_write(st);
+}
+
+static int store_load_seed(void *ctx, uint16_t *seed)
+{
+    const FileStore *st = (const FileStore *)ctx;
+    if (!st->has_seed)
+    {
+        return -1;
+    }
+    *seed = (uint16_t)st->seed;
+    return 0;
+}
+
+static int store_save_seed(void *ctx, uint16_t seed)
+{
+    FileStore *st = (FileStore *)ctx;
+    st->seed = seed;
+    st->has_seed = true;
+    return store_write(st);
+}
 
 static int line_write(void *ctx, const uint8_t *b, size_t n)
 {
@@ -129,13 +239,21 @@ int main(void)
     xmsg_node_config_default(&cfg, own);
     memset(&ports, 0, sizeof ports);
     ports.transport.write = line_write;
+    static FileStore store;
+    store.path = env_str("ND100X_FLAGS1_FILE", "nd100x_tad.flags1");
+    store_read(&store);
+    ports.flags1.ctx = &store;
+    ports.flags1.load = store_load;
+    ports.flags1.save = store_save;
+    ports.flags1.load_port_seed = store_load_seed;
+    ports.flags1.save_port_seed = store_save_seed;
     ports.log = sink;
     memset(&cb, 0, sizeof cb);
     CHECK_EQ(xmsg_node_init(&node, &cfg, &ports, &cb), XMSG_OK);
 
     static TadAsker asker;
     TadAskerConfig acfg;
-    TadAskerCallbacks acb = {NULL, on_text, on_state, NULL, NULL};
+    TadAskerCallbacks acb = {NULL, on_text, on_state, NULL, NULL, on_notice};
     tad_asker_config_default(&acfg, peer, system);
     CHECK_EQ(tad_asker_init(&asker, &acfg, &acb), XMSG_OK);
 
@@ -143,6 +261,7 @@ int main(void)
     uint32_t now = start;
     bool connected = false;
     int next_line = 0;
+    unsigned notices_at_logout = 0;
     uint8_t chunk[2048];
     xmsg_node_link_start(&node, now);
 
@@ -170,6 +289,15 @@ int main(void)
             size_t n = strlen(lines[next_line]);
             CHECK_EQ(tad_asker_write(&asker, (const uint8_t *)lines[next_line], n, now), (int)n);
             next_line++;
+            if (next_line == 4)
+            {
+                notices_at_logout = s_notices;
+            }
+        }
+        /* After LOGOUT, the host's notice says the login is over: our user is done, hang up. */
+        if (next_line == 4 && asker.state == TAD_ASKER_RUNNING && s_notices > notices_at_logout)
+        {
+            CHECK_EQ(tad_asker_hangup(&asker, now), XMSG_OK);
         }
         if (asker.state == TAD_ASKER_CLOSED || asker.state == TAD_ASKER_FAILED)
         {

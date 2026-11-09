@@ -356,8 +356,13 @@ static bool acknowledge_through(LapbLink *l, uint8_t nr, uint8_t rejected_contro
     }
     if (l->va == l->vs)
     {
-        /* Everything acknowledged: stop retransmitting, start the idle keepalive. */
-        stop_t1(l);
+        /* Everything acknowledged: stop retransmitting, start the idle keepalive. While our own
+         * SABM is unanswered T1 belongs to it and keeps its deadline (an RR from the peer is no
+         * answer to a SABM). */
+        if (l->our_sabm_acked)
+        {
+            stop_t1(l);
+        }
         start_t3(l, now);
     }
     else
@@ -393,6 +398,14 @@ static void handle_unnumbered(LapbLink *l, const LapbFrameView *v, uint32_t now)
         stop_t1(l);
         set_state(l, LAPB_CONNECTED, "SABM received");
         start_t3(l, now);
+        if (!l->our_sabm_acked)
+        {
+            /* Our own SABM is still unanswered, and the link is not up until it is. Keep T1
+             * running so it is sent again. Measured 2026-11-09 on RetroCore D100: its SABM
+             * crossed ours and it answered ours with an RR instead of a UA; with T1 stopped here
+             * (as the C# LapbLayer does) nothing was ever resent and the link stayed half up. */
+            start_t1(l, now);
+        }
         queue_unnumbered(l, (uint8_t)LAPB_U_UA, true);
         queue_supervisory(l, (uint8_t)LAPB_S_RR, false);
         break;
@@ -418,7 +431,12 @@ static void handle_unnumbered(LapbLink *l, const LapbFrameView *v, uint32_t now)
         }
         else
         {
-            /* Already connected through the peer's SABM: just tell the owner we are now up. */
+            /* Already connected through the peer's SABM: just tell the owner we are now up. T1
+             * was kept running only for our SABM; nothing else can be outstanding before up. */
+            if (lapb_outstanding(l) == 0)
+            {
+                stop_t1(l);
+            }
             notify_state(l, "late UA completed our half");
         }
         break;
@@ -807,6 +825,14 @@ static int on_t1_expiry(LapbLink *l, uint32_t now)
     switch (l->state)
     {
     case LAPB_CONNECTED:
+        if (!l->our_sabm_acked)
+        {
+            /* The peer's half is done, ours is not: send our SABM again. No I-frame has gone out
+             * (the owner sends only once the link is up), so this resets nothing in use. */
+            queue_unnumbered(l, (uint8_t)LAPB_U_SABM, true);
+            start_t1(l, now);
+            return 1;
+        }
         /* Poll-first recovery (spec 5.1): RR with P=1; the peer's N(R) or REJ drives go-back-N. */
         l->poll_outstanding_marker = true;
         queue_supervisory(l, ack_type(l), true);

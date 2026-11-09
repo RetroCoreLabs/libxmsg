@@ -10,9 +10,15 @@
  * which CTest treats as a skip. Our node number is ND100X_OUR_NODE (default 19999, the number
  * D100 knows the runner by). Nothing above LAPB is sent: this test proves the link only.
  *
- * What is checked: the link comes up within 30 seconds; it then stays up through two T3 polls
- * (70 seconds with the default timers, or ND100X_HOLD_MS) with zero retransmissions; a DISC is
- * answered.
+ * What is checked: the link comes up within 30 seconds; it then stays up for 70 seconds (or
+ * ND100X_HOLD_MS) with zero retransmissions, and in that time exactly one T3 keep-alive poll goes
+ * out. The ND machine does not answer an idle RR poll, so T3 is not re-armed and no second poll
+ * follows (measured on RetroCore D100 port 10362 on 2026-11-09: poll at 30.3 s, nothing back in
+ * the next 40 s; the C# RetroIO.Lapb LapbLayer records the same live observation). Last, the
+ * DISC: it is sent again every T1, and the link must reach DISCONNECTED. The ND machine does not
+ * answer a DISC at all - measured on RetroCore D100 on 2026-11-09: eleven DISCs, 3 s apart, no
+ * UA and no DM - so our side gets there by N2 running out ("N2 exhausted during teardown"),
+ * which is the ordinary LAPB rule for an unanswered DISC.
  */
 #include "libxmsg/hdlc/hdlc_async.h"
 #include "libxmsg/lapb/lapb.h"
@@ -189,7 +195,8 @@ int main(void)
     {
         CHECK(lapb_is_up(&link));
         CHECK_EQ(link.stats.retransmissions, 0);
-        CHECK(link.stats.t3_polls >= (hold_ms >= 70000 ? 2 : 0));
+        /* One poll per idle T3 period, and none after it: the machine ignores the poll. */
+        CHECK_EQ(link.stats.t3_polls, (hold_ms > 30000) ? 1 : 0);
         printf("  held %u ms: %u frames in, %u out, %u T3 polls, %u retransmissions, %u info\n",
                (unsigned)(now - up_at), link.stats.frames_in, link.stats.frames_out,
                link.stats.t3_polls, link.stats.retransmissions, (unsigned)s_infos);
@@ -201,9 +208,18 @@ int main(void)
             size_t w = hdlc_encode(frame, (size_t)n, HDLC_ACCM_NONE, true, wire, sizeof wire);
             (void)test_tcp_write(sock, wire, w);
         }
+        /* Wait with T1 running, so the DISC is sent again every T1 as LAPB (and the C#
+         * LapbLayer.Disconnect) does, up to N2 times. */
         uint32_t t0 = test_now_ms();
-        while (lapb_state(&link) != LAPB_DISCONNECTED && test_now_ms() - t0 < 5000)
+        uint32_t wait_ms = link.cfg.t1_ms * (uint32_t)(link.cfg.n2 + 2u);
+        while (lapb_state(&link) != LAPB_DISCONNECTED && test_now_ms() - t0 < wait_ms)
         {
+            lapb_tick(&link, test_now_ms());
+            while ((n = lapb_pull_tx(&link, frame, sizeof frame)) > 0)
+            {
+                size_t w = hdlc_encode(frame, (size_t)n, HDLC_ACCM_NONE, true, wire, sizeof wire);
+                (void)test_tcp_write(sock, wire, w);
+            }
             test_tcp_wait_readable(sock, 50);
             int r = test_tcp_read(sock, chunk, sizeof chunk);
             size_t off = 0;
@@ -220,6 +236,8 @@ int main(void)
                 off += used;
             }
         }
+        printf("  after DISC: %s, %u frames in\n", lapb_state_name(lapb_state(&link)),
+               link.stats.frames_in);
         CHECK_EQ(lapb_state(&link), LAPB_DISCONNECTED);
     }
     test_tcp_close(sock);

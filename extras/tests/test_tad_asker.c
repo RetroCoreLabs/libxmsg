@@ -389,7 +389,7 @@ static uint32_t bring_up(uint16_t first_flags1)
 static void asker_start(uint32_t now)
 {
     TadAskerConfig cfg;
-    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo};
+    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo, NULL};
     tad_asker_config_default(&cfg, 102, "D102");
     CHECK_EQ(tad_asker_init(&s_asker, &cfg, &cb), XMSG_OK);
     CHECK_EQ(tad_asker_connect(&s_asker, &s_a, now), XMSG_OK);
@@ -449,14 +449,20 @@ static void replay_of_a_real_session(bool over_tcp)
     size_t checked = 0;
     size_t host_next = 0;
     bool repeated_accept = false;
+    bool early_notice = false;
     uint8_t want[640];
     size_t host_text_len = 0;
     uint8_t host_text[8192];
 
     asker_start(now);
     uint32_t start = now;
+    /* Until the capture is used up: every host frame sent, every asker frame compared, the
+     * closing notice taken and nothing of ours left unacknowledged. The session itself stays
+     * open (a notice ends nothing); the hang-up below ends it. */
     while (now - start < 20000 && s_asker.state != TAD_ASKER_CLOSED &&
-           s_asker.state != TAD_ASKER_FAILED)
+           s_asker.state != TAD_ASKER_FAILED &&
+           !(host_next == N_HOST && checked == N_ASKER && s_asker.stats.host_notices == 2 &&
+             s_asker.inflight == TAD_SEND_NONE))
     {
         now = step(now);
         pump(now);
@@ -491,6 +497,15 @@ static void replay_of_a_real_session(bool over_tcp)
                 host_send_hex(k_tad_host_frames[0].hex, k_tad_host_frames[0].flags1, 0, now);
                 repeated_accept = true;
             }
+            /* Once, right after the prompt that follows the login OK, send the host's session
+             * notice (its 0xFD frame) at a number of its own: another captured session has one
+             * exactly there (asker 100 port 02E3, record 1327) and goes on. It must end nothing
+             * and draw no reply, so every later asker frame still matches the capture. */
+            if (k_tad_host_frames[host_next - 1].flags1 == 0x0139 && !early_notice)
+            {
+                host_send_hex(k_tad_host_frames[N_HOST - 1].hex, 0x0200, 0, now);
+                early_notice = true;
+            }
         }
 
         /* Type what the D100 user typed, when the next captured asker frame is text. */
@@ -506,6 +521,19 @@ static void replay_of_a_real_session(bool over_tcp)
 
     CHECK_EQ(checked, N_ASKER);
     CHECK_EQ(host_next, N_HOST);
+    /* The host's last frame is its session notice (0xFD after --EXIT--). It ends nothing: the
+     * session is still running and nothing more was sent. */
+    CHECK(early_notice);
+    CHECK_EQ(s_asker.stats.host_notices, 2); /* the early one and the one after --EXIT-- */
+    CHECK_EQ(s_asker.state, TAD_ASKER_RUNNING);
+    CHECK_EQ(s_host.count, N_ASKER);
+    /* The user is done: hang up. The DCON is acknowledged and the session closes. */
+    CHECK_EQ(tad_asker_hangup(&s_asker, now), XMSG_OK);
+    for (int i = 0; i < 2000 && s_asker.state != TAD_ASKER_CLOSED; i++)
+    {
+        now = step(now);
+        pump(now);
+    }
     CHECK_EQ(s_asker.state, TAD_ASKER_CLOSED);
     CHECK_EQ(s_asker.stats.repeats_in, 1);
     CHECK_EQ(s_asker.session_port, 0x04C2);
@@ -513,7 +541,8 @@ static void replay_of_a_real_session(bool over_tcp)
     CHECK_EQ(s_asker.lun[1], 0x04);
     CHECK(!s_asker.base.attached);
 
-    /* The last frame is our DCON, answering the host's 0xFD, at the next number. */
+    /* The last frame is our DCON, at the next number, in the shape of the captured asker DCONs
+     * (records 1260, 803, 1296, 1519 of the capture file: 0x82, role 0x94, XMCSM 0008, 09 00). */
     CHECK_EQ(s_host.count, N_ASKER + 1);
     if (s_host.count == N_ASKER + 1)
     {
@@ -625,7 +654,7 @@ static void xense_resends_and_other_errors_fail(void)
     uint32_t now = bring_up(0x00F8);
     /* Hold the host's ACKs back by not pumping, so the letter stays unacknowledged. */
     TadAskerConfig cfg;
-    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo};
+    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo, NULL};
     tad_asker_config_default(&cfg, 102, "D102");
     CHECK_EQ(tad_asker_init(&s_asker, &cfg, &cb), XMSG_OK);
     CHECK_EQ(tad_asker_connect(&s_asker, &s_a, now), XMSG_OK);
@@ -648,6 +677,30 @@ static void xense_resends_and_other_errors_fail(void)
     CHECK_EQ(s_asker.state, TAD_ASKER_FAILED);
     CHECK_EQ(s_asker.error, -19);
     CHECK(!s_asker.base.attached);
+}
+
+/* Measured 2026-11-09 against RetroCore D100: a host that does not know us yet answers our
+ * first letter with a reachability request instead of an ACK, and drops the letter. Both sides
+ * restart their count; the asker must send the letter again, now at 0000. */
+static void letter_is_sent_again_after_a_host_restart(void)
+{
+    uint32_t now = bring_up(0x00F8);
+    asker_start(now);
+    CHECK_EQ(s_asker.inflight_flags1, 0x00F8);
+    /* The host's request goes out before it has seen our letter. */
+    CHECK_EQ(xmsg_node_send_reach(&s_b, 100, now), XMSG_OK);
+    for (int i = 0; i < 400; i++)
+    {
+        pump(++now);
+    }
+    CHECK_EQ(s_asker.stats.restart_resends, 1);
+    CHECK_EQ(s_host.count, 2);
+    CHECK_EQ(s_host.flags1[0], 0x00F8);
+    CHECK_EQ(s_host.flags1[1], 0x0000);
+    CHECK_BYTES(s_host.frames[1] + 28, s_host.lens[1] - 28, k_tad_asker_frames[0].hex + 56);
+    CHECK_EQ(s_asker.inflight, TAD_SEND_NONE); /* the resent letter was acknowledged */
+    CHECK_EQ(s_asker.state, TAD_ASKER_CONNECTING);
+    CHECK_EQ(xmsg_flags1_peek(&s_a.flags1, 102), 1);
 }
 
 static void typing_rules(void)
@@ -701,5 +754,6 @@ int main(void)
     refused_letter_fails_with_the_xrout_code();
     silent_host_times_out();
     xense_resends_and_other_errors_fail();
+    letter_is_sent_again_after_a_host_restart();
     TEST_DONE();
 }

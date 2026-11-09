@@ -291,6 +291,33 @@ static void asker_on_delivered(XmsgSession *s, uint16_t flags1)
     update_wants_tx(a);
 }
 
+/* Put the frame in flight back at the head of the queue, to be committed again (and numbered
+ * again by the node). */
+static void requeue_inflight(TadAsker *a)
+{
+    a->q_head = (uint8_t)((a->q_head + TAD_ASKER_QUEUE - 1u) % TAD_ASKER_QUEUE);
+    a->queue[a->q_head] = (uint8_t)a->inflight;
+    a->q_count++;
+    a->inflight = TAD_SEND_NONE;
+    update_wants_tx(a);
+}
+
+static void asker_on_peer_restart(XmsgSession *s)
+{
+    TadAsker *a = (TadAsker *)s;
+
+    if (a->inflight == TAD_SEND_NONE)
+    {
+        return;
+    }
+    /* Measured 2026-11-09 against RetroCore D100: our first letter (Flags1 0000) drew a
+     * reachability request instead of an ACK and was never acknowledged. */
+    XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_INFO, "host restarted its count; frame 0x%04X sent again",
+             a->inflight_flags1);
+    a->stats.restart_resends++;
+    requeue_inflight(a);
+}
+
 static void asker_on_error(XmsgSession *s, int16_t code, uint16_t flags1)
 {
     TadAsker *a = (TadAsker *)s;
@@ -304,11 +331,7 @@ static void asker_on_error(XmsgSession *s, int16_t code, uint16_t flags1)
         /* The node has stepped the count down; send the same frame again at the new number. */
         a->xense_tries++;
         a->stats.xense_resends++;
-        a->q_head = (uint8_t)((a->q_head + TAD_ASKER_QUEUE - 1u) % TAD_ASKER_QUEUE);
-        a->queue[a->q_head] = (uint8_t)a->inflight;
-        a->q_count++;
-        a->inflight = TAD_SEND_NONE;
-        update_wants_tx(a);
+        requeue_inflight(a);
         return;
     }
     XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_ERROR, "asker frame 0x%04X refused by the host: error %d",
@@ -398,9 +421,15 @@ static void answer_terminal_frame(TadAsker *a, const uint8_t *chain, size_t clen
 
     if (has_fd)
     {
-        set_rfi(a, false);
-        set_state(a, TAD_ASKER_CLOSING, 0, now_ms);
-        enqueue(a, TAD_SEND_DCON, now_ms);
+        /* A notice, not the end: see the file comment in tad_asker.h. Nothing is sent back;
+         * the node has already acknowledged the frame. */
+        a->stats.host_notices++;
+        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_INFO, "host session notice (0xFD) number %u",
+                 (unsigned)a->stats.host_notices);
+        if (a->cb.host_notice != NULL)
+        {
+            a->cb.host_notice(a->cb.ctx);
+        }
         return;
     }
     if (has_rese)
@@ -533,6 +562,7 @@ static const XmsgSessionOps s_asker_ops = {
     .tick = asker_tick,
     .on_delivered = asker_on_delivered,
     .on_error = asker_on_error,
+    .on_peer_restart = asker_on_peer_restart,
 };
 
 /* ------------------------------------------------------------------------------------------ */
@@ -669,6 +699,23 @@ bool tad_asker_may_type(const TadAsker *a)
 TadAskerState tad_asker_state(const TadAsker *a)
 {
     return (a == NULL) ? TAD_ASKER_IDLE : a->state;
+}
+
+int tad_asker_hangup(TadAsker *a, uint32_t now_ms)
+{
+    if (a == NULL)
+    {
+        return XMSG_EINVAL;
+    }
+    if (a->state != TAD_ASKER_PORT_ASSIGNED && a->state != TAD_ASKER_TERMINAL_SETUP &&
+        a->state != TAD_ASKER_RUNNING)
+    {
+        return XMSG_ESTATE;
+    }
+    set_rfi(a, false);
+    set_state(a, TAD_ASKER_CLOSING, 0, now_ms);
+    enqueue(a, TAD_SEND_DCON, now_ms);
+    return XMSG_OK;
 }
 
 void tad_asker_abort(TadAsker *a)

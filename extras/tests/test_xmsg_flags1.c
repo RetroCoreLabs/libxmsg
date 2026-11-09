@@ -65,7 +65,7 @@ static void fresh_peer_counts_from_zero_and_saves_every_frame(void)
 {
     FakeStore store;
     memset(&store, 0, sizeof store);
-    XmsgFlags1Port port = {&store, fake_load, fake_save};
+    XmsgFlags1Port port = {&store, fake_load, fake_save, NULL, NULL};
     XmsgFlags1Table t;
     xmsg_flags1_init(&t, &port, 1);
     uint16_t f;
@@ -84,7 +84,7 @@ static void restart_resumes_from_the_store(void)
 {
     FakeStore store;
     memset(&store, 0, sizeof store);
-    XmsgFlags1Port port = {&store, fake_load, fake_save};
+    XmsgFlags1Port port = {&store, fake_load, fake_save, NULL, NULL};
     XmsgFlags1Table t;
     uint16_t f;
     xmsg_flags1_init(&t, &port, 1);
@@ -103,7 +103,7 @@ static void persist_every_n_saves_a_bound_ahead(void)
 {
     FakeStore store;
     memset(&store, 0, sizeof store);
-    XmsgFlags1Port port = {&store, fake_load, fake_save};
+    XmsgFlags1Port port = {&store, fake_load, fake_save, NULL, NULL};
     XmsgFlags1Table t;
     uint16_t f;
     xmsg_flags1_init(&t, &port, 8);
@@ -125,7 +125,7 @@ static void reachability_resets_to_zero_and_saves(void)
 {
     FakeStore store;
     memset(&store, 0, sizeof store);
-    XmsgFlags1Port port = {&store, fake_load, fake_save};
+    XmsgFlags1Port port = {&store, fake_load, fake_save, NULL, NULL};
     XmsgFlags1Table t;
     uint16_t f;
     xmsg_flags1_init(&t, &port, 1);
@@ -143,7 +143,7 @@ static void xense_steps_down_then_gives_up(void)
 {
     FakeStore store;
     memset(&store, 0, sizeof store);
-    XmsgFlags1Port port = {&store, fake_load, fake_save};
+    XmsgFlags1Port port = {&store, fake_load, fake_save, NULL, NULL};
     XmsgFlags1Table t;
     uint16_t f;
     xmsg_flags1_init(&t, &port, 1);
@@ -178,7 +178,7 @@ static void peers_are_independent_and_0xffff_is_skipped(void)
     store.has[0] = true;
     store.node[0] = 102;
     store.value[0] = 0xFFFE;
-    XmsgFlags1Port port = {&store, fake_load, fake_save};
+    XmsgFlags1Port port = {&store, fake_load, fake_save, NULL, NULL};
     XmsgFlags1Table t;
     uint16_t f;
     xmsg_flags1_init(&t, &port, 1);

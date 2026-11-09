@@ -22,7 +22,8 @@
  *  - host text goes to the client byte for byte (0xFF doubled, as telnet needs).
  *
  * The Flags1 count to each peer is kept in a small text file (--flags1, default
- * host_tad_telnet.flags1) so a restart of the tool continues where it stopped.
+ * host_tad_telnet.flags1), with the port-word seed on a line "seed N", so a restart of the
+ * tool continues where it stopped and does not reopen the port words of its last run.
  *
  * This is a host program, so it may print, allocate and use sockets; the library does none of
  * those.
@@ -200,23 +201,34 @@ typedef struct FileStore
     uint16_t peer[STORE_PEERS];
     uint16_t next[STORE_PEERS];
     int count;
+    uint16_t seed; /* the port-word generator, line "seed N" */
+    bool has_seed;
 } FileStore;
 
 static void store_read(FileStore *st)
 {
     FILE *f = fopen(st->path, "r");
-    unsigned p;
+    char word[16];
     unsigned v;
     st->count = 0;
+    st->has_seed = false;
     if (f == NULL)
     {
         return;
     }
-    while (st->count < STORE_PEERS && fscanf(f, "%u %u", &p, &v) == 2)
+    while (fscanf(f, "%15s %u", word, &v) == 2)
     {
-        st->peer[st->count] = (uint16_t)p;
-        st->next[st->count] = (uint16_t)v;
-        st->count++;
+        if (strcmp(word, "seed") == 0)
+        {
+            st->seed = (uint16_t)v;
+            st->has_seed = true;
+        }
+        else if (st->count < STORE_PEERS)
+        {
+            st->peer[st->count] = (uint16_t)strtoul(word, NULL, 10);
+            st->next[st->count] = (uint16_t)v;
+            st->count++;
+        }
     }
     fclose(f);
 }
@@ -235,11 +247,28 @@ static int store_load(void *ctx, uint16_t peer, uint16_t *next)
     return -1;
 }
 
+static int store_write(const FileStore *st)
+{
+    FILE *f = fopen(st->path, "w");
+    if (f == NULL)
+    {
+        return -1;
+    }
+    for (int i = 0; i < st->count; i++)
+    {
+        fprintf(f, "%u %u\n", st->peer[i], st->next[i]);
+    }
+    if (st->has_seed)
+    {
+        fprintf(f, "seed %u\n", st->seed);
+    }
+    return (fclose(f) == 0) ? 0 : -1;
+}
+
 static int store_save(void *ctx, uint16_t peer, uint16_t next)
 {
     FileStore *st = (FileStore *)ctx;
     int i;
-    FILE *f;
     for (i = 0; i < st->count && st->peer[i] != peer; i++)
     {
     }
@@ -253,16 +282,26 @@ static int store_save(void *ctx, uint16_t peer, uint16_t next)
         st->peer[i] = peer;
     }
     st->next[i] = next;
-    f = fopen(st->path, "w");
-    if (f == NULL)
+    return store_write(st);
+}
+
+static int store_load_seed(void *ctx, uint16_t *seed)
+{
+    const FileStore *st = (const FileStore *)ctx;
+    if (!st->has_seed)
     {
         return -1;
     }
-    for (i = 0; i < st->count; i++)
-    {
-        fprintf(f, "%u %u\n", st->peer[i], st->next[i]);
-    }
-    return (fclose(f) == 0) ? 0 : -1;
+    *seed = st->seed;
+    return 0;
+}
+
+static int store_save_seed(void *ctx, uint16_t seed)
+{
+    FileStore *st = (FileStore *)ctx;
+    st->seed = seed;
+    st->has_seed = true;
+    return store_write(st);
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -370,7 +409,7 @@ static void cb_echo(void *ctx, uint8_t eckm)
 static void client_start(Client *c, uint32_t now)
 {
     TadAskerConfig cfg;
-    TadAskerCallbacks cb = {c, cb_text, cb_state, NULL, cb_echo};
+    TadAskerCallbacks cb = {c, cb_text, cb_state, NULL, cb_echo, NULL};
     tad_asker_config_default(&cfg, s_peer, s_system);
     if (tad_asker_init(&c->asker, &cfg, &cb) != XMSG_OK)
     {
@@ -506,10 +545,15 @@ static void client_feed_host(Client *c, uint32_t now)
     }
 }
 
-static void client_drop(Client *c)
+static void client_drop(Client *c, uint32_t now)
 {
     printf("client %d: gone\n", c->index);
-    tad_asker_abort(&c->asker);
+    /* Hang up as a real asker does when its user is done: DCON to the session port. Before
+     * there is a session port there is nothing to hang up, so drop it locally. */
+    if (tad_asker_hangup(&c->asker, now) != XMSG_OK)
+    {
+        tad_asker_abort(&c->asker);
+    }
     sock_close(c->sock);
     c->used = false;
 }
@@ -570,7 +614,7 @@ int main(int argc, char **argv)
     uint16_t own = 0;
     uint16_t listen_port = 2300;
     XmsgLogLevel level = XMSG_LOG_INFO;
-    FileStore store = {"host_tad_telnet.flags1", {0}, {0}, 0};
+    FileStore store = {"host_tad_telnet.flags1", {0}, {0}, 0, 0, false};
     char host[128];
     char port[16];
 
@@ -657,6 +701,8 @@ int main(int argc, char **argv)
     ports.flags1.ctx = &store;
     ports.flags1.load = store_load;
     ports.flags1.save = store_save;
+    ports.flags1.load_port_seed = store_load_seed;
+    ports.flags1.save_port_seed = store_save_seed;
     ports.log.write = log_line;
     memset(&cb, 0, sizeof cb);
     cb.link_state = on_link;
@@ -746,7 +792,11 @@ int main(int argc, char **argv)
             if (cs != SOCK_NONE)
             {
                 int i;
-                for (i = 0; i < XMSG_MAX_SESSIONS && s_clients[i].used; i++)
+                /* A slot is free once its client is gone AND its session has let go of the
+                 * node: after a hang-up the DCON is still in flight on that session. */
+                for (i = 0; i < XMSG_MAX_SESSIONS &&
+                            (s_clients[i].used || s_clients[i].asker.base.attached);
+                     i++)
                 {
                 }
                 if (i == XMSG_MAX_SESSIONS)
@@ -786,7 +836,7 @@ int main(int argc, char **argv)
                 int n = sock_recv(c->sock, buf, sizeof buf);
                 if (n < 0)
                 {
-                    client_drop(c);
+                    client_drop(c, now);
                     continue;
                 }
                 if (!c->closing)
@@ -825,7 +875,7 @@ int main(int argc, char **argv)
                 int n = sock_send(c->sock, c->out, c->out_len);
                 if (n < 0)
                 {
-                    client_drop(c);
+                    client_drop(c, now);
                     continue;
                 }
                 memmove(c->out, c->out + n, c->out_len - (size_t)n);
@@ -833,7 +883,7 @@ int main(int argc, char **argv)
             }
             if (c->closing && c->out_len == 0)
             {
-                client_drop(c);
+                client_drop(c, now);
             }
         }
     }

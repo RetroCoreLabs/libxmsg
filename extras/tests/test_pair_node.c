@@ -24,7 +24,28 @@ typedef struct Store
     uint16_t value[4];
     bool has[4];
     int saves;
+    uint16_t port_seed;
+    bool has_port_seed;
 } Store;
+
+static int store_load_seed(void *ctx, uint16_t *seed)
+{
+    Store *s = (Store *)ctx;
+    if (!s->has_port_seed)
+    {
+        return -1;
+    }
+    *seed = s->port_seed;
+    return 0;
+}
+
+static int store_save_seed(void *ctx, uint16_t seed)
+{
+    Store *s = (Store *)ctx;
+    s->port_seed = seed;
+    s->has_port_seed = true;
+    return 0;
+}
 
 static int store_load(void *ctx, uint16_t node, uint16_t *next)
 {
@@ -78,7 +99,8 @@ typedef struct TestSession
     unsigned bad_bodies;
     unsigned delivered; /* ACKs seen for our frames */
     unsigned errors;
-    unsigned limit; /* how many to send */
+    unsigned restarts; /* reachability requests from our peer */
+    unsigned limit;    /* how many to send */
     uint16_t last_flags1;
 } TestSession;
 
@@ -169,8 +191,13 @@ static void ts_on_error(XmsgSession *s, int16_t code, uint16_t flags1)
     ((TestSession *)s)->errors++;
 }
 
-static const XmsgSessionOps TS_OPS = {ts_on_datagram, ts_poll_tx, NULL, ts_on_delivered,
-                                      ts_on_error};
+static void ts_on_peer_restart(XmsgSession *s)
+{
+    ((TestSession *)s)->restarts++;
+}
+
+static const XmsgSessionOps TS_OPS = {ts_on_datagram,  ts_poll_tx,  NULL,
+                                      ts_on_delivered, ts_on_error, ts_on_peer_restart};
 
 /* ------------------------------------------------------------------ nodes on the pair */
 
@@ -207,6 +234,8 @@ static void node_init(XmsgNode *n, uint16_t node, Store *store, XmsgTransportPor
     ports.flags1.ctx = store;
     ports.flags1.load = store_load;
     ports.flags1.save = store_save;
+    ports.flags1.load_port_seed = store_load_seed;
+    ports.flags1.save_port_seed = store_save_seed;
     memset(&cb, 0, sizeof cb);
     cb.peer_reach = reach;
     CHECK_EQ(xmsg_node_init(n, &cfg, &ports, &cb), XMSG_OK);
@@ -393,14 +422,24 @@ static void repeat_is_flagged_and_restart_continues_the_sequence(void)
         pump_pair(now);
     }
     CHECK_EQ(s_reach_seen_b, 1);
+    CHECK_EQ(s_sess_b.restarts, 1); /* B's session on A is told */
+    CHECK_EQ(s_sess_a.restarts, 0); /* the reply restarts nothing */
     CHECK_EQ(xmsg_flags1_peek(&s_b.flags1, 100), 0);
     CHECK_EQ(xmsg_flags1_peek(&s_a.flags1, 102), 3); /* our own request touches nothing */
 
     /* "Restart" node A over the same store: its next number to B is 3, not 0. */
     XmsgTransportPort ta;
     test_pair_transport(&s_pair, 0, &s_port_a, &ta);
+    uint16_t old_port = s_sess_a.base.local_port;
     node_init(&s_a, 100, &s_store_a, &ta, NULL);
     CHECK_EQ(xmsg_flags1_peek(&s_a.flags1, 102), 3);
+    /* The port-word draws continue too: the same port index gets a NEW word after the restart,
+     * so frames the peer still sends to the old session do not reach the new one. */
+    CHECK(s_store_a.has_port_seed);
+    TestSession again;
+    session_init(&again, &s_a, 102, 0);
+    CHECK_EQ(again.base.local_port >> 7, old_port >> 7);
+    CHECK(again.base.local_port != old_port);
 }
 
 static void nothing_is_sent_before_the_link_settles(void)

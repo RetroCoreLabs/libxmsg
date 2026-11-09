@@ -93,7 +93,13 @@ int xmsg_node_init(XmsgNode *n, const XmsgNodeConfig *cfg, const XmsgPorts *port
         return XMSG_EINVAL;
     }
     xmsg_flags1_init(&n->flags1, &n->ports.flags1, n->cfg.persist_every);
-    xmsg_portword_init(&n->portwords, n->cfg.portword_seed);
+    uint16_t seed = n->cfg.portword_seed;
+    if (n->ports.flags1.load_port_seed != NULL &&
+        n->ports.flags1.load_port_seed(n->ports.flags1.ctx, &seed) != 0)
+    {
+        seed = n->cfg.portword_seed;
+    }
+    xmsg_portword_init(&n->portwords, seed);
     xmsg_reasm_init(&n->reasm);
     return XMSG_OK;
 }
@@ -159,6 +165,11 @@ int xmsg_node_attach(XmsgNode *n, XmsgSession *s)
             s->attached = true;
             /* Port index i + 1: one-based, and index 0 is XROUT's. */
             s->local_port = xmsg_portword_next(&n->portwords, (uint16_t)(i + 1));
+            if (n->ports.flags1.save_port_seed != NULL &&
+                n->ports.flags1.save_port_seed(n->ports.flags1.ctx, n->portwords.seed) != 0)
+            {
+                XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_WARN, "port seed not saved");
+            }
             XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_DEBUG, "session %d attached, port word 0x%04X", i,
                      s->local_port);
             return XMSG_OK;
@@ -347,8 +358,19 @@ static void handle_datagram(XmsgNode *n, const XmsgDatagram *in, uint32_t now_ms
     case SINTRAN_SUBTYPE_REACH_REQUEST:
         n->stats.reach_in++;
         xmsg_flags1_reset(&n->flags1, in->hdr.src_node);
-        queue_short(n, (uint8_t)SINTRAN_SUBTYPE_REACH_REPLY, in->hdr.src_node,
-                    (uint16_t)XMSG_FLAGS1_REACH, 0x0001);
+        /* The reply carries the request's own Flags1. RetroIO pcap-decode-sample.json: request
+         * 342 (FFFF) -> reply 360 (FFFF), and request 1379 (0028, the sender's next number) ->
+         * reply 1451 (0028). A fixed FFFF is right only for the first kind; D100 sends 0000. */
+        queue_short(n, (uint8_t)SINTRAN_SUBTYPE_REACH_REPLY, in->hdr.src_node, in->hdr.flags1,
+                    0x0001);
+        for (int i = 0; i < XMSG_MAX_SESSIONS; i++)
+        {
+            XmsgSession *s = n->sessions[i];
+            if (s != NULL && s->peer_node == in->hdr.src_node && s->ops->on_peer_restart != NULL)
+            {
+                s->ops->on_peer_restart(s);
+            }
+        }
         if (n->cb.peer_reach != NULL)
         {
             n->cb.peer_reach(n->cb.ctx, in->hdr.src_node);

@@ -45,6 +45,10 @@ typedef struct XmsgSessionOps
     void (*on_delivered)(XmsgSession *s, uint16_t flags1);
     /** The peer refused a datagram: `code` is the XMSG error (XENSE -34, XEIMA -19, ...). */
     void (*on_error)(XmsgSession *s, int16_t code, uint16_t flags1);
+    /** The peer sent a reachability request: its XMSG (re)started, its count of our frames is
+     *  back at zero, and so is ours. A datagram it has not acknowledged yet was dropped by it and
+     *  must be sent again; the node gives it the new number at commit. */
+    void (*on_peer_restart)(XmsgSession *s);
 } XmsgSessionOps;
 
 /** The part of a session the node sees. */

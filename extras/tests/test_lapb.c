@@ -310,6 +310,34 @@ static void peer_sabm_alone_does_not_bring_the_link_up(void)
     CHECK_EQ(lapb_tx_free_slots(&l), 7);
 }
 
+static void unanswered_sabm_is_resent_after_the_peer_sabm(void)
+{
+    /* Measured 2026-11-09 on RetroCore D100: the SABMs crossed, D100 answered ours with an RR
+     * instead of a UA. Our SABM must be sent again on T1 until a UA arrives. */
+    LapbLink l;
+    new_link(&l, 101, NULL);
+    lapb_connect(&l, 0);
+    drain(&l);
+    deliver(&l, 10, "01 3F 00 64");
+    drain(&l); /* our UA and RR */
+    deliver(&l, 20, "09 01 00 64");
+    CHECK(!lapb_is_up(&l));
+    clear_sent();
+    lapb_tick(&l, 3009);
+    drain(&l);
+    CHECK_EQ(s_c.sent_count, 0); /* T1 runs from the peer SABM at 10 ms */
+    lapb_tick(&l, 3010);
+    drain(&l);
+    CHECK_EQ(s_c.sent_count, 1);
+    CHECK_BYTES(s_c.sent[0], s_c.sent_len[0], "01 3F 00 65");
+    deliver(&l, 3050, "01 73 00 64");
+    CHECK(lapb_is_up(&l));
+    clear_sent();
+    lapb_tick(&l, 9000); /* T1 stopped by the UA: no more SABMs, no polls */
+    drain(&l);
+    CHECK_EQ(s_c.sent_count, 0);
+}
+
 static void passive_station_comes_up_on_the_peer_sabm_alone(void)
 {
     /* A station that never sent a SABM has no half of its own to wait for. */
@@ -688,6 +716,7 @@ int main(void)
     s6_poll_answered_with_final();
     s7_mid_session_sabm_reset();
     peer_sabm_alone_does_not_bring_the_link_up();
+    unanswered_sabm_is_resent_after_the_peer_sabm();
     passive_station_comes_up_on_the_peer_sabm_alone();
     up_callback_fires_once_per_change();
     n2_by_default_takes_the_link_down_with_no_sabm();

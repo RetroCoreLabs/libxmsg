@@ -56,16 +56,17 @@ transport.
 
 ## Status
 
-Version 0.1.0 - the link, the datagrams and the terminal session are written and tested against
-captured traffic. **Not yet run against a live machine:** the nd100x integration tests exist and
-skip until one is reachable.
+Version 0.1.0 - the link, the datagrams and the terminal session are written, tested against
+captured traffic, and run against a live SINTRAN III K machine (RetroCore's ND-100 emulator): link
+up and held, login, LIST-FILES, LOGOUT and hang-up. The integration tests skip when no machine is
+reachable.
 
 - **Framing and link:** the RFC 1662 byte framer with FCS-16, and LAPB in the ND dialect (node
   number in every U and S frame, balanced bring-up, the 0x89 address for odd-length frames).
 - **Datagrams:** the SINTRAN header and checksum, the sub-header, fragmentation, one Flags1 count
   per peer kept across restarts, the reachability handshake, and an ACK for every data frame.
-- **Terminal session (TAD):** the CONNECT-TO ladder from the connect letter to the host's
-  "session over". Replayed against a complete session captured between two real SINTRAN
+- **Terminal session (TAD):** the CONNECT-TO ladder from the connect letter to the hang-up.
+  Replayed against a complete session captured between two real SINTRAN
   machines, every frame the library sends is byte-identical to the one the real asker sent.
 - **Telnet tool:** `examples/host_tad_telnet` gives each telnet client its own session.
 - **Still to come:** several sessions on microcontrollers, then COSMOS file access and the FTP
