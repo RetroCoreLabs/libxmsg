@@ -283,6 +283,36 @@ bool auth_equal_ct(const uint8_t *a, const uint8_t *b, size_t len)
     return diff == 0u;
 }
 
+/* The chosen password hash port; a NULL function means the built-in one. */
+static AuthHashPort s_port;
+
+void auth_hash_set_port(const AuthHashPort *port)
+{
+    if (port == NULL)
+    {
+        s_port.ctx = NULL;
+        s_port.pbkdf2_sha256 = NULL;
+        return;
+    }
+    s_port = *port;
+}
+
+int auth_hash_pbkdf2(const uint8_t *pw, size_t pw_len, const uint8_t *salt, size_t salt_len,
+                     uint32_t iterations, uint8_t *out, size_t out_len)
+{
+    int rc;
+    if (out == NULL || iterations == 0u || out_len == 0u)
+    {
+        return -1;
+    }
+    if (s_port.pbkdf2_sha256 == NULL)
+    {
+        return auth_pbkdf2_sha256(pw, pw_len, salt, salt_len, iterations, out, out_len);
+    }
+    rc = s_port.pbkdf2_sha256(s_port.ctx, pw, pw_len, salt, salt_len, iterations, out, out_len);
+    return (rc == 0) ? 0 : -1;
+}
+
 void auth_wipe(void *p, size_t len)
 {
     /* A store through a volatile pointer may not be optimised away (C11 6.7.3). */

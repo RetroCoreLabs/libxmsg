@@ -151,7 +151,7 @@ static void user_records(void)
 
     int n = auth_user_format_line(&u, line, sizeof line);
     CHECK(strcmp(line, "ronny:pbkdf2-sha256:10:000102030405060708090a0b0c0d0e0f:"
-                       "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f") == 0);
+                       "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f:user") == 0);
     CHECK_EQ(n, (int)strlen(line));
     CHECK_EQ(auth_user_parse_line(line, &back), 0);
     CHECK(memcmp(&back, &u, sizeof u) == 0); /* round trip */
@@ -204,7 +204,7 @@ static void user_records(void)
 static void verify_through_a_store(void)
 {
     const AuthRandom rng = {NULL, fixed_salt};
-    const AuthUserStore store = {NULL, lookup};
+    const AuthUserStore store = {NULL, lookup, NULL};
     CHECK_EQ(auth_user_make(&s_users[0], "ronny", "secret", 10, &rng), 0);
     CHECK_EQ(auth_user_make(&s_users[1], "guest", "other", 10, &rng), 0);
     CHECK(auth_user_verify(&store, "ronny", "secret"));
@@ -217,11 +217,11 @@ static void verify_through_a_store(void)
 
 static void login_dialogue(void)
 {
-    const AuthUserStore store = {NULL, lookup};
+    const AuthUserStore store = {NULL, lookup, NULL};
     AuthLogin l;
     uint32_t now = 1000;
 
-    CHECK_EQ(auth_login_init(&l, &store, 3, 1000), 0);
+    CHECK_EQ(auth_login_init(&l, &store, NULL, 3, 1000), 0);
     CHECK(strcmp(auth_login_prompt(&l), "login: ") == 0);
     CHECK(auth_login_echo(&l));
     CHECK_EQ(auth_login_line(&l, "", now), AUTH_LOGIN_NAME); /* empty name: ask again */
@@ -260,7 +260,358 @@ static void login_dialogue(void)
     CHECK(!auth_login_tick(&l, now + 5000));
     CHECK_EQ(auth_login_line(&l, "ronny", now), AUTH_LOGIN_REFUSED);
 
-    CHECK_EQ(auth_login_init(&l, &store, 0, 1000), -1);
+    CHECK_EQ(auth_login_init(&l, &store, NULL, 0, 1000), -1);
+}
+
+/* ------------------------------------------------------------------ levels and changes */
+
+#define K_SALT "000102030405060708090a0b0c0d0e0f"
+#define K_HASH "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f"
+
+static void flags_field(void)
+{
+    static const struct
+    {
+        AuthLevel level;
+        bool must_change;
+        const char *flags;
+    } k_all[] = {
+        {AUTH_LEVEL_USER, false, "user"},
+        {AUTH_LEVEL_USER, true, "user,change"},
+        {AUTH_LEVEL_ADMIN, false, "admin"},
+        {AUTH_LEVEL_ADMIN, true, "admin,change"},
+    };
+    static const char *const k_bad[] = {"", "root", "Admin", "admin,", "change",
+                                        "user,change,change",
+                                        "user,Change", ",change", "admin change"};
+    const AuthRandom rng = {NULL, fixed_salt};
+    AuthUser u;
+    AuthUser back;
+    char line[AUTH_LINE_MAX];
+    char want[AUTH_LINE_MAX];
+
+    /* A five-field line from before the flags: level user, no change. */
+    memset(&back, 0x55, sizeof back);
+    CHECK_EQ(auth_user_parse_line("ronny:pbkdf2-sha256:10:" K_SALT ":" K_HASH, &back), 0);
+    CHECK_EQ(back.level, AUTH_LEVEL_USER);
+    CHECK(!back.must_change);
+    CHECK(auth_user_check(&back, "secret"));
+
+    CHECK_EQ(auth_user_make(&u, "ronny", "secret", 10, &rng), 0);
+    CHECK_EQ(u.level, AUTH_LEVEL_USER);
+    CHECK(!u.must_change);
+    for (size_t i = 0; i < sizeof k_all / sizeof k_all[0]; i++)
+    {
+        u.level = k_all[i].level;
+        u.must_change = k_all[i].must_change;
+        CHECK(auth_user_format_line(&u, line, sizeof line) > 0);
+        snprintf(want, sizeof want, "ronny:pbkdf2-sha256:10:" K_SALT ":" K_HASH ":%s",
+                 k_all[i].flags);
+        CHECK(strcmp(line, want) == 0);
+        CHECK_EQ(auth_user_parse_line(line, &back), 0);
+        CHECK(memcmp(&back, &u, sizeof u) == 0); /* round trip */
+        CHECK_EQ(back.level, k_all[i].level);
+        CHECK_EQ(back.must_change, k_all[i].must_change);
+    }
+    for (size_t i = 0; i < sizeof k_bad / sizeof k_bad[0]; i++)
+    {
+        snprintf(want, sizeof want, "ronny:pbkdf2-sha256:10:" K_SALT ":" K_HASH ":%s", k_bad[i]);
+        CHECK_EQ(auth_user_parse_line(want, &back), -1);
+    }
+    CHECK_EQ(auth_user_parse_line("ronny:pbkdf2-sha256:10:" K_SALT ":" K_HASH ":user:x", &back),
+             -1); /* a seventh field */
+
+    /* The longest line fits AUTH_LINE_MAX. */
+    memset(&u, 0, sizeof u);
+    memset(u.name, 'n', AUTH_NAME_MAX);
+    u.iterations = UINT32_MAX;
+    u.level = AUTH_LEVEL_ADMIN;
+    u.must_change = true;
+    CHECK(auth_user_format_line(&u, line, sizeof line) > 0);
+    u.level = (AuthLevel)7;
+    CHECK_EQ(auth_user_format_line(&u, line, sizeof line), -1);
+}
+
+static void verify_get_returns_the_record(void)
+{
+    const AuthRandom rng = {NULL, fixed_salt};
+    const AuthUserStore store = {NULL, lookup, NULL};
+    AuthUser got;
+    CHECK_EQ(auth_user_make(&s_users[0], "ronny", "secret", 10, &rng), 0);
+    s_users[0].level = AUTH_LEVEL_ADMIN;
+    s_users[0].must_change = true;
+    CHECK_EQ(auth_user_make(&s_users[1], "guest", "other", 10, &rng), 0);
+    CHECK(auth_user_verify_get(&store, "ronny", "secret", &got));
+    CHECK(memcmp(&got, &s_users[0], sizeof got) == 0);
+    CHECK_EQ(got.level, AUTH_LEVEL_ADMIN);
+    CHECK(got.must_change);
+    memset(&got, 0x55, sizeof got);
+    CHECK(!auth_user_verify_get(&store, "ronny", "wrong", &got));
+    CHECK_EQ(got.name[0] | got.hash[0] | (int)got.level, 0); /* zeroed on failure */
+    CHECK(!auth_user_verify_get(&store, "nobody", "secret", &got));
+    CHECK(!auth_user_verify_get(&store, "ronny", "secret", NULL));
+}
+
+static void change_and_reset(void)
+{
+    const AuthRandom rng = {NULL, fixed_salt};
+    const AuthRandom bad = {NULL, broken_random};
+    AuthUser u;
+    AuthUser before;
+    AuthUser admins[3];
+
+    CHECK_EQ(auth_user_make(&u, "ronny", "secret", 10, &rng), 0);
+    u.must_change = true;
+    before = u;
+    CHECK_EQ(auth_user_change_password(&u, "wrong", "new1", &rng), AUTH_CHANGE_WRONG_OLD);
+    CHECK_EQ(auth_user_change_password(&u, "secret", "", &rng), AUTH_CHANGE_EMPTY);
+    CHECK_EQ(auth_user_change_password(&u, "secret", "secret", &rng), AUTH_CHANGE_SAME);
+    CHECK_EQ(auth_user_change_password(&u, "secret", "new1", &bad), AUTH_CHANGE_RANDOM);
+    CHECK(memcmp(&u, &before, sizeof u) == 0); /* failures leave the record alone */
+    CHECK_EQ(auth_user_change_password(&u, "secret", "new1", &rng), AUTH_CHANGE_OK);
+    CHECK(auth_user_check(&u, "new1"));
+    CHECK(!auth_user_check(&u, "secret"));
+    CHECK(!u.must_change);
+    CHECK(strcmp(u.name, "ronny") == 0);
+    CHECK_EQ(u.iterations, 10);
+
+    /* Admin reset: new password, must_change set, level kept. */
+    u.level = AUTH_LEVEL_ADMIN;
+    CHECK_EQ(auth_user_reset_password(&u, "", &rng), AUTH_CHANGE_EMPTY);
+    CHECK_EQ(auth_user_reset_password(&u, "temp", &bad), AUTH_CHANGE_RANDOM);
+    CHECK(!u.must_change);
+    CHECK_EQ(auth_user_reset_password(&u, "temp", &rng), AUTH_CHANGE_OK);
+    CHECK(u.must_change);
+    CHECK(auth_user_check(&u, "temp"));
+    CHECK(!auth_user_check(&u, "new1"));
+    CHECK_EQ(u.level, AUTH_LEVEL_ADMIN);
+
+    /* The default admin. */
+    CHECK_EQ(auth_user_make_default_admin(&u, 10, &rng), 0);
+    CHECK(strcmp(u.name, "admin") == 0);
+    CHECK(auth_user_check(&u, "admin"));
+    CHECK_EQ(u.level, AUTH_LEVEL_ADMIN);
+    CHECK(u.must_change);
+    CHECK_EQ(u.iterations, 10);
+    CHECK_EQ(auth_user_make_default_admin(&u, 0, &rng), -1);
+
+    /* The last admin. */
+    memset(admins, 0, sizeof admins);
+    snprintf(admins[0].name, sizeof admins[0].name, "a");
+    snprintf(admins[1].name, sizeof admins[1].name, "b");
+    snprintf(admins[2].name, sizeof admins[2].name, "c");
+    admins[0].level = AUTH_LEVEL_ADMIN;
+    CHECK(auth_users_is_last_admin(admins, 3, "a"));
+    CHECK(!auth_users_is_last_admin(admins, 3, "b")); /* not an admin */
+    CHECK(!auth_users_is_last_admin(admins, 3, "x")); /* not there */
+    admins[2].level = AUTH_LEVEL_ADMIN;
+    CHECK(!auth_users_is_last_admin(admins, 3, "a")); /* another admin left */
+    CHECK(!auth_users_is_last_admin(NULL, 0, "a"));
+}
+
+/* A store whose save writes back into s_users and counts. */
+static int s_saves;
+static int s_save_result;
+
+static int save(void *ctx, const AuthUser *u)
+{
+    (void)ctx;
+    s_saves++;
+    if (s_save_result != 0)
+    {
+        return s_save_result;
+    }
+    for (int i = 0; i < N_USERS; i++)
+    {
+        if (strcmp(s_users[i].name, u->name) == 0)
+        {
+            s_users[i] = *u;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void must_change_login(void)
+{
+    const AuthRandom rng = {NULL, fixed_salt};
+    const AuthUserStore store = {NULL, lookup, save};
+    const AuthUserStore no_save = {NULL, lookup, NULL};
+    AuthLogin l;
+    AuthLogin start;
+    const AuthUser *u;
+
+    CHECK_EQ(auth_user_make(&s_users[0], "ronny", "secret", 10, &rng), 0);
+    s_users[0].must_change = true;
+    s_users[0].level = AUTH_LEVEL_ADMIN;
+    CHECK_EQ(auth_user_make(&s_users[1], "guest", "other", 10, &rng), 0);
+    s_saves = 0;
+    s_save_result = 0;
+
+    CHECK_EQ(auth_login_init(&l, &store, &rng, 3, 1000), 0);
+    CHECK_EQ(auth_login_line(&l, "ronny", 0), AUTH_LOGIN_PASSWORD);
+    CHECK_EQ(auth_login_line(&l, "secret", 0), AUTH_LOGIN_NEW_PASSWORD);
+    CHECK(auth_login_must_change(&l));
+    CHECK_EQ(auth_login_level(&l), AUTH_LEVEL_USER); /* not logged in yet */
+    CHECK(auth_login_user(&l) == NULL);
+    CHECK(strcmp(auth_login_prompt(&l), "new password: ") == 0);
+    CHECK(!auth_login_echo(&l));
+    start = l;
+
+    /* Empty, and the same as the old: refused, asked again. */
+    CHECK_EQ(auth_login_line(&l, "", 0), AUTH_LOGIN_NEW_PASSWORD);
+    CHECK_EQ(auth_login_take_note(&l), AUTH_NOTE_EMPTY);
+    CHECK_EQ(auth_login_line(&l, "secret", 0), AUTH_LOGIN_NEW_PASSWORD);
+    CHECK_EQ(auth_login_take_note(&l), AUTH_NOTE_SAME);
+    /* Mismatch: back to the first entry. */
+    CHECK_EQ(auth_login_line(&l, "fresh", 0), AUTH_LOGIN_NEW_AGAIN);
+    CHECK(strcmp(auth_login_prompt(&l), "again: ") == 0);
+    CHECK(!auth_login_echo(&l));
+    CHECK_EQ(auth_login_line(&l, "fresh2", 0), AUTH_LOGIN_NEW_PASSWORD);
+    CHECK_EQ(auth_login_take_note(&l), AUTH_NOTE_MISMATCH);
+    CHECK_EQ(s_saves, 0);
+    /* Right: new twice, saved, DONE. */
+    CHECK_EQ(auth_login_line(&l, "fresh", 0), AUTH_LOGIN_NEW_AGAIN);
+    CHECK_EQ(auth_login_line(&l, "fresh", 0), AUTH_LOGIN_DONE);
+    CHECK_EQ(auth_login_take_note(&l), AUTH_NOTE_CHANGED);
+    CHECK_EQ(s_saves, 1);
+    u = auth_login_user(&l);
+    CHECK(u != NULL);
+    CHECK(auth_user_check(u, "fresh"));
+    CHECK(!auth_user_check(u, "secret"));
+    CHECK(!u->must_change);
+    CHECK_EQ(u->level, AUTH_LEVEL_ADMIN);
+    CHECK_EQ(auth_login_level(&l), AUTH_LEVEL_ADMIN);
+    CHECK(!auth_login_must_change(&l));
+    CHECK(memcmp(&s_users[0], u, sizeof *u) == 0); /* the store got the same record */
+
+    /* A save that fails ends the forced change: refused. */
+    l = start;
+    s_save_result = -1;
+    CHECK_EQ(auth_login_line(&l, "x1", 0), AUTH_LOGIN_NEW_AGAIN);
+    CHECK_EQ(auth_login_line(&l, "x1", 0), AUTH_LOGIN_REFUSED);
+    CHECK_EQ(auth_login_take_note(&l), AUTH_NOTE_SAVE_FAILED);
+    s_save_result = 0;
+
+    /* No save in the store: the user who must change cannot log in. */
+    s_users[0].must_change = true;
+    CHECK_EQ(auth_login_init(&l, &no_save, &rng, 3, 1000), 0);
+    CHECK_EQ(auth_login_line(&l, "ronny", 0), AUTH_LOGIN_PASSWORD);
+    CHECK_EQ(auth_login_line(&l, "fresh", 0), AUTH_LOGIN_REFUSED);
+    CHECK_EQ(auth_login_take_note(&l), AUTH_NOTE_NO_SAVE);
+    CHECK(strlen(auth_login_note_text(AUTH_NOTE_NO_SAVE)) > 0);
+    /* ... nor with no random source. */
+    CHECK_EQ(auth_login_init(&l, &store, NULL, 3, 1000), 0);
+    CHECK_EQ(auth_login_line(&l, "ronny", 0), AUTH_LOGIN_PASSWORD);
+    CHECK_EQ(auth_login_line(&l, "fresh", 0), AUTH_LOGIN_REFUSED);
+    s_users[0].must_change = false;
+
+    /* A plain user logs in straight away, level user. */
+    CHECK_EQ(auth_login_init(&l, &store, &rng, 3, 1000), 0);
+    CHECK_EQ(auth_login_line(&l, "guest", 0), AUTH_LOGIN_PASSWORD);
+    CHECK_EQ(auth_login_line(&l, "other", 0), AUTH_LOGIN_DONE);
+    CHECK_EQ(auth_login_level(&l), AUTH_LEVEL_USER);
+
+    /* Voluntary change: old, new, again. */
+    start = l;
+    CHECK_EQ(auth_login_change_begin(&l), 0);
+    CHECK(strcmp(auth_login_prompt(&l), "old password: ") == 0);
+    CHECK(!auth_login_echo(&l));
+    CHECK_EQ(auth_login_line(&l, "wrong", 0), AUTH_LOGIN_DONE);
+    CHECK_EQ(auth_login_take_note(&l), AUTH_NOTE_WRONG_OLD);
+    CHECK_EQ(auth_login_change_begin(&l), 0);
+    CHECK_EQ(auth_login_line(&l, "other", 0), AUTH_LOGIN_NEW_PASSWORD);
+    CHECK_EQ(auth_login_level(&l), AUTH_LEVEL_USER);
+    CHECK_EQ(auth_login_line(&l, "other", 0), AUTH_LOGIN_NEW_PASSWORD);
+    CHECK_EQ(auth_login_take_note(&l), AUTH_NOTE_SAME);
+    CHECK_EQ(auth_login_line(&l, "guest2", 0), AUTH_LOGIN_NEW_AGAIN);
+    s_save_result = -1; /* a failed save keeps the old record and stays logged in */
+    CHECK_EQ(auth_login_line(&l, "guest2", 0), AUTH_LOGIN_DONE);
+    CHECK_EQ(auth_login_take_note(&l), AUTH_NOTE_SAVE_FAILED);
+    CHECK(auth_user_check(auth_login_user(&l), "other"));
+    s_save_result = 0;
+    CHECK_EQ(auth_login_change_begin(&l), 0);
+    CHECK_EQ(auth_login_line(&l, "other", 0), AUTH_LOGIN_NEW_PASSWORD);
+    CHECK_EQ(auth_login_line(&l, "guest2", 0), AUTH_LOGIN_NEW_AGAIN);
+    CHECK_EQ(auth_login_line(&l, "guest2", 0), AUTH_LOGIN_DONE);
+    CHECK_EQ(auth_login_take_note(&l), AUTH_NOTE_CHANGED);
+    CHECK(auth_user_check(&s_users[1], "guest2"));
+    CHECK(!auth_user_check(&s_users[1], "other"));
+
+    /* No change possible without a save. */
+    start.store.save = NULL;
+    CHECK_EQ(auth_login_change_begin(&start), -1);
+    CHECK_EQ(auth_login_take_note(&start), AUTH_NOTE_NO_SAVE);
+    CHECK_EQ(start.state, AUTH_LOGIN_DONE);
+}
+
+/* A hash port that counts its calls and hands them to the built-in function. */
+static int s_port_calls;
+
+static int counting_pbkdf2(void *ctx, const uint8_t *pw, size_t pw_len, const uint8_t *salt,
+                           size_t salt_len, uint32_t iterations, uint8_t *out, size_t out_len)
+{
+    (void)ctx;
+    s_port_calls++;
+    return auth_pbkdf2_sha256(pw, pw_len, salt, salt_len, iterations, out, out_len);
+}
+
+static int failing_pbkdf2(void *ctx, const uint8_t *pw, size_t pw_len, const uint8_t *salt,
+                          size_t salt_len, uint32_t iterations, uint8_t *out, size_t out_len)
+{
+    (void)ctx;
+    (void)pw;
+    (void)pw_len;
+    (void)salt;
+    (void)salt_len;
+    (void)iterations;
+    (void)out;
+    (void)out_len;
+    s_port_calls++;
+    return 5;
+}
+
+static void hash_port(void)
+{
+    const AuthRandom rng = {NULL, fixed_salt};
+    const AuthUserStore store = {NULL, lookup, save};
+    const AuthHashPort counting = {NULL, counting_pbkdf2};
+    const AuthHashPort failing = {NULL, failing_pbkdf2};
+    AuthUser u;
+    AuthUser got;
+    AuthLogin l;
+
+    s_port_calls = 0;
+    auth_hash_set_port(&counting);
+    CHECK_EQ(auth_user_make(&u, "ronny", "secret", 10, &rng), 0);
+    CHECK_EQ(s_port_calls, 1);
+    /* The same result as the built-in function (the vector of user_records). */
+    CHECK_BYTES(u.hash, 32, "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f");
+    CHECK(auth_user_check(&u, "secret"));
+    CHECK_EQ(s_port_calls, 2);
+    s_users[0] = u;
+    CHECK(auth_user_verify(&store, "ronny", "secret"));
+    CHECK_EQ(s_port_calls, 3);
+    CHECK(!auth_user_verify_get(&store, "nobody", "secret", &got)); /* the equal-time run too */
+    CHECK_EQ(s_port_calls, 4);
+    CHECK_EQ(auth_user_change_password(&u, "secret", "next", &rng), AUTH_CHANGE_OK);
+    CHECK_EQ(s_port_calls, 7); /* old check, same-check, new hash */
+    CHECK_EQ(auth_user_reset_password(&u, "temp", &rng), AUTH_CHANGE_OK);
+    CHECK_EQ(s_port_calls, 8);
+    CHECK_EQ(auth_login_init(&l, &store, &rng, 3, 0), 0);
+    CHECK_EQ(auth_login_line(&l, "ronny", 0), AUTH_LOGIN_PASSWORD);
+    CHECK_EQ(auth_login_line(&l, "secret", 0), AUTH_LOGIN_DONE);
+    CHECK_EQ(s_port_calls, 9);
+
+    /* A failing port makes every check fail; nothing falls back to the built-in one. */
+    auth_hash_set_port(&failing);
+    CHECK(!auth_user_check(&u, "temp"));
+    CHECK_EQ(auth_user_make(&got, "ronny", "secret", 10, &rng), -1);
+    CHECK_EQ(s_port_calls, 11);
+
+    auth_hash_set_port(NULL); /* back to the built-in */
+    CHECK(auth_user_check(&u, "temp"));
+    CHECK_EQ(s_port_calls, 11);
 }
 
 int main(void)
@@ -273,5 +624,10 @@ int main(void)
     user_records();
     verify_through_a_store();
     login_dialogue();
+    flags_field();
+    verify_get_returns_the_record();
+    change_and_reset();
+    must_change_login();
+    hash_port();
     TEST_DONE();
 }

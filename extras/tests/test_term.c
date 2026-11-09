@@ -221,6 +221,24 @@ static void command_words(void)
     CHECK_EQ(term_cmd_parse("exit now", arg, sizeof arg), TERM_CMD_UNKNOWN);
     CHECK_EQ(term_cmd_parse("frobnicate", arg, sizeof arg), TERM_CMD_UNKNOWN);
     CHECK_EQ(term_cmd_parse("", arg, sizeof arg), TERM_CMD_EMPTY);
+    /* User commands: the name keeps its case; ADDUSER may add ADMIN. */
+    CHECK_EQ(term_cmd_parse("password", arg, sizeof arg), TERM_CMD_PASSWORD);
+    CHECK_EQ(term_cmd_parse("password x", arg, sizeof arg), TERM_CMD_UNKNOWN);
+    CHECK_EQ(term_cmd_parse("Users", arg, sizeof arg), TERM_CMD_USERS);
+    CHECK_EQ(term_cmd_parse("adduser Ronny", arg, sizeof arg), TERM_CMD_ADDUSER);
+    CHECK(strcmp(arg, "Ronny") == 0);
+    CHECK_EQ(term_cmd_parse("ADDUSER kari admin", arg, sizeof arg), TERM_CMD_ADDADMIN);
+    CHECK(strcmp(arg, "kari") == 0);
+    CHECK_EQ(term_cmd_parse("adduser kari Admin", arg, sizeof arg), TERM_CMD_ADDADMIN);
+    CHECK_EQ(term_cmd_parse("adduser kari root", arg, sizeof arg), TERM_CMD_UNKNOWN);
+    CHECK_EQ(term_cmd_parse("adduser kari admin x", arg, sizeof arg), TERM_CMD_UNKNOWN);
+    CHECK_EQ(term_cmd_parse("adduser", arg, sizeof arg), TERM_CMD_UNKNOWN);
+    CHECK_EQ(term_cmd_parse("deluser Kari", arg, sizeof arg), TERM_CMD_DELUSER);
+    CHECK(strcmp(arg, "Kari") == 0);
+    CHECK_EQ(term_cmd_parse("deluser kari admin", arg, sizeof arg), TERM_CMD_UNKNOWN);
+    CHECK_EQ(term_cmd_parse("resetpw kari", arg, sizeof arg), TERM_CMD_RESETPW);
+    CHECK_EQ(term_cmd_parse("resetpw", arg, sizeof arg), TERM_CMD_UNKNOWN);
+    CHECK_EQ(term_cmd_parse("resetpw 12345678901234567890", arg, sizeof arg), TERM_CMD_UNKNOWN);
     CHECK_EQ(term_cmd_parse("   ", arg, sizeof arg), TERM_CMD_EMPTY);
 }
 

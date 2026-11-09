@@ -87,9 +87,9 @@ static char upper(char c)
     return (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
 }
 
-/* Copy the next blank-separated word, in upper case. Returns its length, or -1 when it does not
- * fit in cap - 1. *p is moved past it. */
-static int next_word(const char **p, char *out, size_t cap)
+/* Copy the next blank-separated word, in upper case unless keep_case. Returns its length, or -1
+ * when it does not fit in cap - 1. *p is moved past it. */
+static int next_word(const char **p, char *out, size_t cap, bool keep_case)
 {
     size_t n = 0;
     const char *s = *p;
@@ -104,12 +104,44 @@ static int next_word(const char **p, char *out, size_t cap)
         {
             return -1;
         }
-        out[n++] = upper(*s);
+        out[n++] = keep_case ? *s : upper(*s);
         s++;
     }
     out[n] = '\0';
     *p = s;
     return (int)n;
+}
+
+/* ADDUSER, DELUSER and RESETPW: one user name, case kept; ADDUSER may add ADMIN. Returns true
+ * when `word` is one of them, with the result in *cmd (TERM_CMD_UNKNOWN for a bad form). */
+static bool user_command(const char *word, const char **p, char *arg, size_t cap, TermCmd *cmd)
+{
+    char extra[8];
+    int al;
+    int el;
+    bool is_add = strcmp(word, "ADDUSER") == 0;
+    if (!is_add && strcmp(word, "DELUSER") != 0 && strcmp(word, "RESETPW") != 0)
+    {
+        return false;
+    }
+    *cmd = TERM_CMD_UNKNOWN;
+    al = next_word(p, arg, cap, true);
+    el = next_word(p, extra, sizeof extra, false);
+    if (al <= 0 || el < 0 || (el > 0 && (!is_add || strcmp(extra, "ADMIN") != 0)) ||
+        next_word(p, extra, sizeof extra, false) != 0)
+    {
+        arg[0] = '\0';
+        return true;
+    }
+    if (is_add)
+    {
+        *cmd = (el > 0) ? TERM_CMD_ADDADMIN : TERM_CMD_ADDUSER;
+    }
+    else
+    {
+        *cmd = (word[0] == 'D') ? TERM_CMD_DELUSER : TERM_CMD_RESETPW;
+    }
+    return true;
 }
 
 TermCmd term_cmd_parse(const char *line, char *arg, size_t cap)
@@ -121,20 +153,22 @@ TermCmd term_cmd_parse(const char *line, char *arg, size_t cap)
     } k_words[] = {
         {"LIST", TERM_CMD_LIST}, {"HELP", TERM_CMD_HELP},     {"?", TERM_CMD_HELP},
         {"WHO", TERM_CMD_WHO},   {"INFO", TERM_CMD_INFO},     {"EXIT", TERM_CMD_EXIT},
-        {"QUIT", TERM_CMD_EXIT}, {"LOGOUT", TERM_CMD_EXIT},
+        {"QUIT", TERM_CMD_EXIT}, {"LOGOUT", TERM_CMD_EXIT},     {"PASSWORD", TERM_CMD_PASSWORD},
+        {"USERS", TERM_CMD_USERS},
     };
     char word[16];
     char extra[2];
     const char *p = line;
     int wl;
     int al;
+    TermCmd cmd = TERM_CMD_UNKNOWN;
 
     if (line == NULL || arg == NULL || cap == 0)
     {
         return TERM_CMD_UNKNOWN;
     }
     arg[0] = '\0';
-    wl = next_word(&p, word, sizeof word);
+    wl = next_word(&p, word, sizeof word, false);
     if (wl == 0)
     {
         return TERM_CMD_EMPTY;
@@ -143,8 +177,12 @@ TermCmd term_cmd_parse(const char *line, char *arg, size_t cap)
     {
         return TERM_CMD_UNKNOWN;
     }
-    al = next_word(&p, arg, cap);
-    if (al < 0 || next_word(&p, extra, sizeof extra) != 0)
+    if (wl > 0 && user_command(word, &p, arg, cap, &cmd))
+    {
+        return cmd;
+    }
+    al = next_word(&p, arg, cap, false);
+    if (al < 0 || next_word(&p, extra, sizeof extra, false) != 0)
     {
         arg[0] = '\0';
         return TERM_CMD_UNKNOWN; /* an argument too long, or more words than any command takes */

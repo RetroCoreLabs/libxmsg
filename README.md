@@ -108,27 +108,44 @@ The tool has two modes, chosen with `--mode`:
 
 At `TAD>`: `CONNECT <system>` (for example `CONNECT D102`), `LIST` (not implemented yet), `WHO`
 (the clients on the tool), `INFO` (the link: nodes, state, counters, uptime), `HELP`, and
-`EXIT`/`LOGOUT`/`QUIT`. In both modes a dropped telnet connection hangs the TAD session up at once.
+`EXIT`/`LOGOUT`/`QUIT`, and `PASSWORD` (change your own password: old, new, again). Admins also have
+`USERS` (the users, level and change flag), `ADDUSER name [admin]` (asks the password twice; the new
+user must change it at the first login), `DELUSER name` (never the last admin) and `RESETPW name`
+(a new password, asked twice, that the user must change at the next login); other users get
+"not allowed". In both modes a dropped telnet connection hangs the TAD session up at once.
+
+Each user has a level: **admin** (may add and delete users, reset any password, change settings)
+or **user** (may use ND sessions and change their own password). A user marked "must change" is
+asked for a new password twice right after the login, and the users file is written before `TAD>`
+shows; an empty password, the old password again, or two entries that differ are refused.
 
 Other switches:
 
 | Switch | Default | Meaning |
 |---|---|---|
-| `--users FILE` | `host_tad_telnet.users` | the users for prompt mode; the tool will not start in prompt mode without at least one |
+| `--users FILE` | `host_tad_telnet.users` | the users for prompt mode; when the file is missing or holds no user, prompt mode creates it with the default admin (name `admin`, password `admin`, must change) and prints a warning |
 | `--esc-ms N` | 50 | an ESC with no other byte within N ms is the escape key (the host breaks the running program); 0 = ESC is always text |
 | `--term-type N` | 0 | the terminal type sent to the host, decimal |
 | `--user NAME` | `TELNET` | the user name TADA shows for the session, at most 16 characters |
 | `--raw-keys` | off | typed bytes go without the parity bit |
 
 Users are kept with a PBKDF2-HMAC-SHA256 hash (random 16-byte salt, 100000 iterations), one line
-each: `name:pbkdf2-sha256:<iterations>:<salt hex>:<hash hex>`; lines starting with `#` are
-comments. Manage them without a running tool:
+each: `name:pbkdf2-sha256:<iterations>:<salt hex>:<hash hex>:<flags>`, where `<flags>` is `admin`
+or `user`, optionally followed by `,change` (for example `admin,change`: must set a new password at
+the next login). A line without the flags field, from an older file, reads as `user` with no change
+needed; the tool always writes all six fields. Lines starting with `#` are comments. Manage them
+without a running tool:
 
 ```bash
-host_tad_telnet --add-user NAME [--users FILE]   # asks for the password twice, echo off
-host_tad_telnet --del-user NAME [--users FILE]
-host_tad_telnet --list-users [--users FILE]
+host_tad_telnet --add-user NAME [--admin] [--users FILE]  # asks the password twice, echo off; level user unless --admin
+host_tad_telnet --del-user NAME [--users FILE]            # refuses to delete the last admin
+host_tad_telnet --list-users [--users FILE]               # name, level, and "must change password"
+host_tad_telnet --reset-password NAME [--users FILE]      # new password twice; must change at next login
 ```
+
+The password hash runs through a replaceable function (`auth_hash_set_port()` in
+`src/libxmsg/auth/auth_hash.h`), so a board can use a faster implementation, such as mbedTLS on
+the ESP32 SHA hardware; without one the library's own PBKDF2 is used. The header describes how.
 
 ## Building from source
 

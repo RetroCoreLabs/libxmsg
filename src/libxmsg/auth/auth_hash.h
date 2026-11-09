@@ -93,6 +93,55 @@ int auth_pbkdf2_sha256(const uint8_t *pw, size_t pw_len, const uint8_t *salt, si
                        uint32_t iterations, uint8_t *out, size_t out_len);
 
 /**
+ * The password hash port. Every password derive in the library (auth_user_make, _check,
+ * _verify, _verify_get, _change_password, _reset_password, the login dialogue) goes through
+ * auth_hash_pbkdf2(), which calls the port set here, or the built-in auth_pbkdf2_sha256() when
+ * none is set. A port lets a target use a faster implementation, for example one that runs on
+ * the chip's SHA hardware. The function must give exactly the PBKDF2-HMAC-SHA256 result of
+ * RFC 8018 section 5.2, returning 0 on success and non-zero on failure.
+ *
+ * How an ESP32 sketch would plug in mbedTLS (described only; the library has no mbedTLS code
+ * and no dependency on it): write a function of the pbkdf2_sha256 shape below that calls
+ *     mbedtls_pkcs5_pbkdf2_hmac_ext(MBEDTLS_MD_SHA256, pw, pw_len, salt, salt_len,
+ *                                   iterations, (uint32_t)out_len, out)
+ * and returns its result (0 is success), then at start-up, before the first login:
+ *     static const AuthHashPort port = {NULL, my_pbkdf2};
+ *     auth_hash_set_port(&port);
+ * With the ESP-IDF SHA hardware option on, mbedTLS uses the hardware for SHA-256 (unverified
+ * here; check the ESP-IDF configuration of the build). The stored records do not change: the
+ * same password, salt and count give the same hash either way.
+ *
+ * The port is one setting for the whole program, read without a lock: set it once at start-up,
+ * before any thread checks a password.
+ */
+typedef struct AuthHashPort
+{
+    void *ctx;
+    int (*pbkdf2_sha256)(void *ctx, const uint8_t *pw, size_t pw_len, const uint8_t *salt,
+                         size_t salt_len, uint32_t iterations, uint8_t *out, size_t out_len);
+} AuthHashPort;
+
+/**
+ * @brief Choose the PBKDF2 implementation the library uses for passwords.
+ * @param port The port (copied), or NULL (or a NULL function) for the built-in one.
+ */
+void auth_hash_set_port(const AuthHashPort *port);
+
+/**
+ * @brief PBKDF2-HMAC-SHA256 through the chosen port (see auth_hash_set_port).
+ * @param pw         Password bytes.
+ * @param pw_len     Their count.
+ * @param salt       Salt bytes.
+ * @param salt_len   Their count.
+ * @param iterations The count, at least 1.
+ * @param out        Receives the derived key.
+ * @param out_len    Its length.
+ * @return 0, or -1 for a bad argument or a failure of the port.
+ */
+int auth_hash_pbkdf2(const uint8_t *pw, size_t pw_len, const uint8_t *salt, size_t salt_len,
+                     uint32_t iterations, uint8_t *out, size_t out_len);
+
+/**
  * @brief Compare two buffers in time that does not depend on where they differ.
  * @param a   First.
  * @param b   Second.

@@ -11,7 +11,8 @@
  *   host_tad_telnet --hdlc 127.0.0.1:1362 --node 19999 --peer 100 --system D100 --listen 2300
  *                   [--mode direct|prompt] [--users FILE] [--esc-ms N] [--term-type N]
  *                   [--user NAME] [--raw-keys] [--flags1 flags1.txt] [--log info]
- *   host_tad_telnet --add-user NAME | --del-user NAME | --list-users   [--users FILE]
+ *   host_tad_telnet --add-user NAME [--admin] | --del-user NAME | --list-users
+ *                   | --reset-password NAME   [--users FILE]
  *
  * The SINTRAN side must know our node: the link is defined there for it, and XMSG is running.
  *
@@ -26,20 +27,33 @@
  *      LIST               the systems that can be reached (not implemented yet)
  *      WHO                every client on the tool: terminal, user, address, time, what it does
  *      INFO               the link: our node, the peer, link state, line, counters, uptime
+ *      PASSWORD           change one's own password (old, new, again)
  *      HELP               the commands
  *      EXIT, LOGOUT, QUIT close the telnet connection
+ *    and for admins only (others get "not allowed"):
+ *      USERS              the users, with level and whether they must change the password
+ *      ADDUSER name [admin]  a new user; asks the password twice; the user must change it at
+ *                         the first login
+ *      DELUSER name       delete a user (not the last admin)
+ *      RESETPW name       set a new password (asked twice); the user must change it at login
  *    When the SINTRAN login ends, the TAD session is hung up and the user is back at "TAD> ".
  *    Three failed logins close the connection; each failure waits one second; the tool never
- *    says whether the name or the password was wrong. The tool refuses to start in prompt mode
- *    when the users file is missing or holds no user.
+ *    says whether the name or the password was wrong. A user marked "must change" is asked for
+ *    a new password twice right after the login, and the file is written before "TAD> " shows.
+ *    When the users file is missing or holds no user, the tool creates it with the default
+ *    admin (name admin, password admin, must change) and prints a warning.
  *  - in both modes, when the telnet connection drops, the TAD session is hung up at once, which
  *    logs the user out of SINTRAN.
  *
  * The users file (--users, default host_tad_telnet.users), one line per user, '#' comments:
- *     name:pbkdf2-sha256:<iterations>:<salt hex>:<hash hex>
+ *     name:pbkdf2-sha256:<iterations>:<salt hex>:<hash hex>:<flags>
+ * flags is "admin" or "user", optionally followed by ",change" (must set a new password at the
+ * next login). Lines without the flags field (older files) read as user, no change.
  * PBKDF2-HMAC-SHA256 with a random 16-byte salt per user and 100000 iterations; the password
- * itself is never stored or logged. --add-user NAME asks for the password twice with echo off
- * (an existing user is replaced), --del-user NAME removes one, --list-users prints the names.
+ * itself is never stored or logged. --add-user NAME [--admin] asks for the password twice with
+ * echo off (an existing user is replaced; level user unless --admin), --del-user NAME removes
+ * one (not the last admin), --list-users prints the names with level and change flag, and
+ * --reset-password NAME asks a new password twice and marks the user "must change".
  * The file is read again at every login, so changes need no restart.
  *
  * Terminal behaviour inside a TAD session: every byte is forwarded untouched, both ways.
@@ -416,7 +430,7 @@ static int users_write(const AuthUser *u, int n)
     {
         return -1;
     }
-    fprintf(f, "# host_tad_telnet users: name:pbkdf2-sha256:iterations:salt:hash\n");
+    fprintf(f, "# host_tad_telnet users: name:pbkdf2-sha256:iterations:salt:hash:flags\n");
     for (int i = 0; i < n; i++)
     {
         if (auth_user_format_line(&u[i], line, sizeof line) > 0)
@@ -444,6 +458,46 @@ static int users_lookup(void *ctx, const char *name, AuthUser *out)
     }
     auth_wipe(all, sizeof all);
     return found;
+}
+
+/* Store a record: replace the user of the same name, or add it. Returns 0 or -1. */
+static int users_put(const AuthUser *u)
+{
+    static AuthUser all[USERS_MAX];
+    int n = users_read(all, USERS_MAX);
+    int at = -1;
+    int rc;
+    if (n < 0)
+    {
+        n = 0;
+    }
+    for (int i = 0; i < n; i++)
+    {
+        if (strcmp(all[i].name, u->name) == 0)
+        {
+            at = i;
+        }
+    }
+    if (at < 0)
+    {
+        if (n >= USERS_MAX)
+        {
+            auth_wipe(all, sizeof all);
+            return -1;
+        }
+        at = n++;
+    }
+    all[at] = *u;
+    rc = users_write(all, n);
+    auth_wipe(all, sizeof all);
+    return rc;
+}
+
+/* The user store port for a changed password. */
+static int users_save(void *ctx, const AuthUser *u)
+{
+    (void)ctx;
+    return users_put(u);
 }
 
 static int random_fill(void *ctx, uint8_t *buf, size_t len)
@@ -512,7 +566,52 @@ static int console_password(const char *prompt, char *buf, size_t cap)
     return rc;
 }
 
-/* --add-user, --del-user, --list-users. Returns the process exit code. */
+static const AuthRandom s_rng = {NULL, random_fill};
+
+/* Ask a new password twice on the console. Returns 0 with `out` holding a record made from
+ * `base` (or a new record for `name` when base is NULL) and the new password; 1 on refusal. */
+static int console_new_password(const char *name, const AuthUser *base, AuthUser *out)
+{
+    char pw1[128];
+    char pw2[128];
+    int rc = 0;
+    if (console_password("password: ", pw1, sizeof pw1) != 0 ||
+        console_password("again: ", pw2, sizeof pw2) != 0)
+    {
+        rc = 1;
+    }
+    else if (pw1[0] == '\0')
+    {
+        printf("an empty password is not allowed\n");
+        rc = 1;
+    }
+    else if (strcmp(pw1, pw2) != 0)
+    {
+        printf("the two passwords differ\n");
+        rc = 1;
+    }
+    else if (base != NULL)
+    {
+        *out = *base;
+        if (auth_user_reset_password(out, pw1, &s_rng) != AUTH_CHANGE_OK)
+        {
+            printf("could not set the password (random source failed)\n");
+            rc = 1;
+        }
+    }
+    else if (auth_user_make(out, name, pw1, AUTH_DEFAULT_ITERATIONS, &s_rng) != 0)
+    {
+        printf("could not make the user (random source failed)\n");
+        rc = 1;
+    }
+    auth_wipe(pw1, sizeof pw1);
+    auth_wipe(pw2, sizeof pw2);
+    return rc;
+}
+
+static bool s_add_admin; /* --admin with --add-user */
+
+/* --add-user, --del-user, --list-users, --reset-password. Returns the process exit code. */
 static int users_command(const char *cmd, const char *name)
 {
     static AuthUser all[USERS_MAX];
@@ -527,7 +626,9 @@ static int users_command(const char *cmd, const char *name)
         }
         for (int i = 0; i < n; i++)
         {
-            printf("%s\n", all[i].name);
+            printf("%-32s %-5s%s\n", all[i].name,
+                   (all[i].level == AUTH_LEVEL_ADMIN) ? "admin" : "user",
+                   all[i].must_change ? "  must change password" : "");
         }
         auth_wipe(all, sizeof all);
         return 0;
@@ -556,41 +657,48 @@ static int users_command(const char *cmd, const char *name)
             printf("no user %s in %s\n", name, s_users_path);
             return 1;
         }
+        if (auth_users_is_last_admin(all, (size_t)n, name))
+        {
+            printf("%s is the last admin; add another admin first\n", name);
+            auth_wipe(all, sizeof all);
+            return 1;
+        }
         all[at] = all[n - 1];
         n--;
     }
-    else
+    else if (strcmp(cmd, "--reset-password") == 0)
     {
-        static const AuthRandom rng = {NULL, random_fill};
-        char pw1[128];
-        char pw2[128];
         AuthUser u;
-        if (console_password("password: ", pw1, sizeof pw1) != 0 ||
-            console_password("again: ", pw2, sizeof pw2) != 0)
+        if (at < 0)
         {
-            rc = 1;
+            printf("no user %s in %s\n", name, s_users_path);
+            return 1;
         }
-        else if (pw1[0] == '\0')
-        {
-            printf("an empty password is not allowed\n");
-            rc = 1;
-        }
-        else if (strcmp(pw1, pw2) != 0)
-        {
-            printf("the two passwords differ\n");
-            rc = 1;
-        }
-        else if (auth_user_make(&u, name, pw1, AUTH_DEFAULT_ITERATIONS, &rng) != 0)
-        {
-            printf("could not make the user (random source failed)\n");
-            rc = 1;
-        }
-        auth_wipe(pw1, sizeof pw1);
-        auth_wipe(pw2, sizeof pw2);
+        rc = console_new_password(name, &all[at], &u);
         if (rc != 0)
         {
+            auth_wipe(all, sizeof all);
             return rc;
         }
+        all[at] = u; /* must_change is now set */
+        auth_wipe(&u, sizeof u);
+    }
+    else
+    {
+        AuthUser u;
+        if (!s_add_admin && at >= 0 && auth_users_is_last_admin(all, (size_t)n, name))
+        {
+            printf("%s is the last admin; add with --admin, or add another admin first\n", name);
+            auth_wipe(all, sizeof all);
+            return 1;
+        }
+        rc = console_new_password(name, NULL, &u);
+        if (rc != 0)
+        {
+            auth_wipe(all, sizeof all);
+            return rc;
+        }
+        u.level = s_add_admin ? AUTH_LEVEL_ADMIN : AUTH_LEVEL_USER;
         if (at < 0)
         {
             if (n >= USERS_MAX)
@@ -647,6 +755,8 @@ typedef enum Phase
 {
     PH_LOGIN = 0, /* prompt mode: name and password */
     PH_PROMPT,    /* prompt mode: at "TAD> " */
+    PH_PASSWD,    /* prompt mode: PASSWORD, changing one's own password (c->login) */
+    PH_SETPW,     /* prompt mode: an admin types a password for ADDUSER or RESETPW */
     PH_SESSION    /* in a TAD session (direct mode: from the start) */
 } Phase;
 
@@ -673,6 +783,9 @@ typedef struct Client
     TermLine line;   /* the bridge's own command line and login */
     AuthLogin login; /* prompt mode */
     char user[AUTH_NAME_MAX + 1u];
+    AuthLevel level;       /* of the logged-in user */
+    AuthUser setpw;        /* PH_SETPW: the record being made (hash only) */
+    bool setpw_again;      /* PH_SETPW: the first entry is in, the second is due */
     char system[16]; /* the system of the TAD session */
     char remote[80]; /* the client's address, for WHO */
     uint32_t connected_at;
@@ -697,7 +810,7 @@ static uint16_t s_term_type;
 static const char *s_iam_user = "TELNET";
 static char s_line_name[160]; /* the HDLC line, for INFO */
 static uint32_t s_started_at;
-static const AuthUserStore s_store = {NULL, users_lookup};
+static const AuthUserStore s_store = {NULL, users_lookup, users_save};
 
 static void client_put(Client *c, const uint8_t *b, size_t n)
 {
@@ -746,6 +859,22 @@ static void show_prompt(Client *c)
             c->line.echo = auth_login_echo(&c->login);
             client_text(c, p);
         }
+        return;
+    }
+    if (c->phase == PH_PASSWD)
+    {
+        const char *p = auth_login_prompt(&c->login);
+        c->line.echo = false;
+        if (p != NULL)
+        {
+            client_text(c, p);
+        }
+        return;
+    }
+    if (c->phase == PH_SETPW)
+    {
+        c->line.echo = false;
+        client_say(c, "%s for %s: ", c->setpw_again ? "again" : "new password", c->setpw.name);
         return;
     }
     if (c->phase == PH_PROMPT)
@@ -901,21 +1030,209 @@ static void cmd_help(Client *c)
                    "LIST               the systems that can be reached\r\n"
                    "WHO                the clients on this bridge\r\n"
                    "INFO               the link to the SINTRAN machine\r\n"
+                   "PASSWORD           change your password\r\n"
                    "HELP               this text\r\n"
-                   "EXIT, LOGOUT, QUIT close the connection\r\n"
-                   "In a session: ESC alone breaks the running program; log out of SINTRAN to\r\n"
+                   "EXIT, LOGOUT, QUIT close the connection\r\n");
+    if (c->level == AUTH_LEVEL_ADMIN)
+    {
+        client_text(c, "USERS              the users (admin)\r\n"
+                       "ADDUSER name [admin]  add a user (admin)\r\n"
+                       "DELUSER name       delete a user (admin)\r\n"
+                       "RESETPW name       set a new password, changed at login (admin)\r\n");
+    }
+    client_text(c, "In a session: ESC alone breaks the running program; log out of SINTRAN to\r\n"
                    "come back here.\r\n");
+}
+
+static void cmd_users(Client *c)
+{
+    static AuthUser all[USERS_MAX];
+    int n = users_read(all, USERS_MAX);
+    for (int i = 0; i < n; i++)
+    {
+        client_say(c, "%-32s %-5s%s\r\n", all[i].name,
+                   (all[i].level == AUTH_LEVEL_ADMIN) ? "admin" : "user",
+                   all[i].must_change ? "  must change password" : "");
+    }
+    auth_wipe(all, sizeof all);
+}
+
+static void cmd_deluser(Client *c, const char *name)
+{
+    static AuthUser all[USERS_MAX];
+    int n = users_read(all, USERS_MAX);
+    int at = -1;
+    for (int i = 0; i < n; i++)
+    {
+        if (strcmp(all[i].name, name) == 0)
+        {
+            at = i;
+        }
+    }
+    if (at < 0)
+    {
+        client_say(c, "no user %s\r\n", name);
+    }
+    else if (auth_users_is_last_admin(all, (size_t)n, name))
+    {
+        client_say(c, "%s is the last admin and cannot be deleted\r\n", name);
+    }
+    else
+    {
+        all[at] = all[n - 1];
+        n--;
+        if (users_write(all, n) == 0)
+        {
+            printf("client %d (%s): deleted user %s\n", c->index, c->user, name);
+            client_say(c, "user %s deleted\r\n", name);
+        }
+        else
+        {
+            client_text(c, "cannot write the users file\r\n");
+        }
+    }
+    auth_wipe(all, sizeof all);
+}
+
+/* ADDUSER and RESETPW: check the name, then ask the password twice (PH_SETPW). */
+static void cmd_setpw_begin(Client *c, const char *name, bool add, AuthLevel level)
+{
+    AuthUser u;
+    bool exists;
+    if (!auth_name_is_valid(name))
+    {
+        client_say(c, "a user name is 1 to %u characters, no blank and no ':'\r\n",
+                   AUTH_NAME_MAX);
+        return;
+    }
+    exists = users_lookup(NULL, name, &u) == 0;
+    auth_wipe(&u, sizeof u);
+    if (add && exists)
+    {
+        client_say(c, "user %s exists; RESETPW sets a new password\r\n", name);
+        return;
+    }
+    if (!add && !exists)
+    {
+        client_say(c, "no user %s\r\n", name);
+        return;
+    }
+    memset(&c->setpw, 0, sizeof c->setpw);
+    snprintf(c->setpw.name, sizeof c->setpw.name, "%s", name);
+    c->setpw.level = level;
+    c->setpw.iterations = add ? 0u : 1u; /* 0: new user, made at the first entry */
+    c->setpw_again = false;
+    c->phase = PH_SETPW;
+}
+
+/* A line typed in PH_SETPW. The line is wiped by the caller. */
+static void setpw_line(Client *c, const char *text)
+{
+    AuthUser u;
+    if (!c->setpw_again)
+    {
+        int rc;
+        if (text[0] == '\0')
+        {
+            client_text(c, "an empty password is not allowed\r\n");
+            c->phase = PH_PROMPT;
+            return;
+        }
+        if (c->setpw.iterations == 0u)
+        {
+            AuthLevel level = c->setpw.level;
+            rc = auth_user_make(&u, c->setpw.name, text, AUTH_DEFAULT_ITERATIONS, &s_rng);
+            u.level = level;
+            if (rc == 0)
+            {
+                u.must_change = true; /* the admin knows it; the user picks their own */
+            }
+        }
+        else
+        {
+            rc = (users_lookup(NULL, c->setpw.name, &u) == 0)
+                     ? auth_user_reset_password(&u, text, &s_rng)
+                     : -1;
+        }
+        if (rc != 0)
+        {
+            client_text(c, "could not set the password\r\n");
+            auth_wipe(&u, sizeof u);
+            c->phase = PH_PROMPT;
+            return;
+        }
+        c->setpw = u;
+        auth_wipe(&u, sizeof u);
+        c->setpw_again = true;
+        return;
+    }
+    if (!auth_user_check(&c->setpw, text))
+    {
+        client_text(c, "the two passwords differ; nothing changed\r\n");
+    }
+    else if (users_put(&c->setpw) != 0)
+    {
+        client_text(c, "cannot write the users file\r\n");
+    }
+    else
+    {
+        printf("client %d (%s): set the password of %s\n", c->index, c->user, c->setpw.name);
+        client_say(c, "password of %s set; it must be changed at the next login\r\n",
+                   c->setpw.name);
+    }
+    auth_wipe(&c->setpw, sizeof c->setpw);
+    c->phase = PH_PROMPT;
+}
+
+/* A line typed in PH_PASSWD (the user's own change, through the login dialogue). */
+static void passwd_line(Client *c, const char *text, uint32_t now)
+{
+    AuthLoginState st = auth_login_line(&c->login, text, now);
+    AuthLoginNote note = auth_login_take_note(&c->login);
+    if (note != AUTH_NOTE_NONE)
+    {
+        client_say(c, "%s\r\n", auth_login_note_text(note));
+    }
+    if (note == AUTH_NOTE_CHANGED)
+    {
+        printf("client %d (%s): changed the password\n", c->index, c->user);
+    }
+    if (st == AUTH_LOGIN_DONE)
+    {
+        c->phase = PH_PROMPT;
+    }
+}
+
+/* Whether an admin command may run; tells the client when not. */
+static bool admin_only(Client *c)
+{
+    if (c->level == AUTH_LEVEL_ADMIN)
+    {
+        return true;
+    }
+    client_text(c, "not allowed\r\n");
+    return false;
 }
 
 /* One line typed at "TAD> ". */
 static void prompt_line(Client *c, const char *text, uint32_t now)
 {
-    char arg[16];
-    switch (term_cmd_parse(text, arg, sizeof arg))
+    char arg[AUTH_NAME_MAX + 1u];
+    TermCmd cmd = term_cmd_parse(text, arg, sizeof arg);
+    if (strlen(arg) > AUTH_NAME_MAX)
+    {
+        cmd = TERM_CMD_UNKNOWN;
+    }
+    switch (cmd)
     {
     case TERM_CMD_EMPTY:
         break;
     case TERM_CMD_CONNECT:
+        if (strlen(arg) >= sizeof c->system)
+        {
+            client_text(c, "unknown command; HELP lists them\r\n");
+            break;
+        }
         printf("client %d (%s): connect %s\n", c->index, c->user, arg);
         client_start(c, arg); /* no prompt after it: the host's banner comes */
         return;
@@ -937,6 +1254,43 @@ static void prompt_line(Client *c, const char *text, uint32_t now)
         client_text(c, "bye\r\n");
         c->closing = true;
         return;
+    case TERM_CMD_PASSWORD:
+        if (auth_login_change_begin(&c->login) == 0)
+        {
+            c->phase = PH_PASSWD;
+        }
+        else
+        {
+            client_say(c, "%s\r\n", auth_login_note_text(auth_login_take_note(&c->login)));
+        }
+        break;
+    case TERM_CMD_USERS:
+        if (admin_only(c))
+        {
+            cmd_users(c);
+        }
+        break;
+    case TERM_CMD_ADDUSER:
+        /* fall through */
+    case TERM_CMD_ADDADMIN:
+        if (admin_only(c))
+        {
+            cmd_setpw_begin(c, arg, true,
+                            (cmd == TERM_CMD_ADDADMIN) ? AUTH_LEVEL_ADMIN : AUTH_LEVEL_USER);
+        }
+        break;
+    case TERM_CMD_DELUSER:
+        if (admin_only(c))
+        {
+            cmd_deluser(c, arg);
+        }
+        break;
+    case TERM_CMD_RESETPW:
+        if (admin_only(c))
+        {
+            cmd_setpw_begin(c, arg, false, AUTH_LEVEL_USER);
+        }
+        break;
     default:
         client_text(c, "unknown command; HELP lists them\r\n");
         break;
@@ -947,12 +1301,25 @@ static void prompt_line(Client *c, const char *text, uint32_t now)
 /* One line typed at the login. The line (maybe a password) is wiped by the caller. */
 static void login_line(Client *c, const char *text, uint32_t now)
 {
+    AuthLoginState before = c->login.state;
     AuthLoginState st = auth_login_line(&c->login, text, now);
+    AuthLoginNote note = auth_login_take_note(&c->login);
+    if (note != AUTH_NOTE_NONE)
+    {
+        client_say(c, "%s\r\n", auth_login_note_text(note));
+    }
+    if (st == AUTH_LOGIN_NEW_PASSWORD && before == AUTH_LOGIN_PASSWORD)
+    {
+        client_text(c, "You must set a new password before going on.\r\n");
+    }
     switch (st)
     {
     case AUTH_LOGIN_DONE:
         snprintf(c->user, sizeof c->user, "%s", c->login.name);
-        printf("client %d: logged in as %s\n", c->index, c->user);
+        c->level = auth_login_level(&c->login);
+        printf("client %d: logged in as %s (%s)%s\n", c->index, c->user,
+               (c->level == AUTH_LEVEL_ADMIN) ? "admin" : "user",
+               (note == AUTH_NOTE_CHANGED) ? ", new password stored" : "");
         c->phase = PH_PROMPT;
         client_say(c, "Logged in. HELP lists the commands.\r\n");
         show_prompt(c);
@@ -962,8 +1329,15 @@ static void login_line(Client *c, const char *text, uint32_t now)
         client_text(c, "Login incorrect\r\n");
         break;
     case AUTH_LOGIN_REFUSED:
-        printf("client %d: login failed; too many tries, closing\n", c->index);
-        client_text(c, "Login incorrect\r\n");
+        if (note == AUTH_NOTE_NONE)
+        {
+            printf("client %d: login failed; too many tries, closing\n", c->index);
+            client_text(c, "Login incorrect\r\n");
+        }
+        else
+        {
+            printf("client %d: login refused: %s\n", c->index, auth_login_note_text(note));
+        }
         c->closing = true;
         break;
     default:
@@ -993,6 +1367,16 @@ static void client_line_byte(Client *c, uint8_t k, uint32_t now)
     if (c->phase == PH_LOGIN)
     {
         login_line(c, text, now);
+    }
+    else if (c->phase == PH_PASSWD)
+    {
+        passwd_line(c, text, now);
+        show_prompt(c);
+    }
+    else if (c->phase == PH_SETPW)
+    {
+        setpw_line(c, text);
+        show_prompt(c);
     }
     else
     {
@@ -1213,6 +1597,7 @@ static void client_drop(Client *c, uint32_t now)
     }
     auth_wipe(&c->line, sizeof c->line);
     auth_wipe(&c->login, sizeof c->login);
+    auth_wipe(&c->setpw, sizeof c->setpw);
     sock_close(c->sock);
 }
 
@@ -1281,7 +1666,7 @@ static void client_accept(Sock lsock, uint32_t now)
         client_start(c, s_system);
         return;
     }
-    (void)auth_login_init(&c->login, &s_store, AUTH_LOGIN_TRIES, AUTH_LOGIN_DELAY_MS);
+    (void)auth_login_init(&c->login, &s_store, &s_rng, AUTH_LOGIN_TRIES, AUTH_LOGIN_DELAY_MS);
     term_line_init(&c->line, true);
     c->phase = PH_LOGIN;
     client_say(c, "libxmsg TAD bridge, node %u, linked to %s\r\n", (unsigned)s_own, s_system);
@@ -1382,9 +1767,15 @@ static void usage(void)
            "         [--raw-keys]         no parity bit on typed bytes\n"
            "         [--flags1 FILE]      Flags1 counts (host_tad_telnet.flags1)\n"
            "         [--log error|warn|info|debug|trace]\n"
-           "       host_tad_telnet --add-user NAME | --del-user NAME | --list-users\n"
-           "         [--users FILE]\n"
-           "users file: one line per user, name:pbkdf2-sha256:iterations:salt hex:hash hex\n");
+           "       host_tad_telnet --add-user NAME [--admin] | --del-user NAME | --list-users\n"
+           "                     | --reset-password NAME   [--users FILE]\n"
+           "         --add-user      add or replace a user (level user, or admin with --admin)\n"
+           "         --del-user      delete a user (not the last admin)\n"
+           "         --list-users    names, level, and who must change the password\n"
+           "         --reset-password  new password (asked twice), changed at the next login\n"
+           "users file: one line per user,\n"
+           "  name:pbkdf2-sha256:iterations:salt hex:hash hex:admin|user[,change]\n"
+           "prompt mode with no users file creates one with admin/admin (must change).\n");
 }
 
 static bool parse_u16(const char *s, uint16_t *out)
@@ -1405,7 +1796,7 @@ typedef struct Args
     uint16_t listen_port;
     XmsgLogLevel level;
     const char *flags1_path;
-    const char *users_cmd; /* --add-user, --del-user, --list-users */
+    const char *users_cmd; /* --add-user, --del-user, --list-users, --reset-password */
     const char *users_name;
 } Args;
 
@@ -1466,7 +1857,8 @@ static bool parse_pair(Args *a, const char *k, const char *v)
         s_iam_user = v;
         return strlen(v) > 0 && strlen(v) < TAD_IAM_USER_SIZE; /* room for the "'" */
     }
-    else if (strcmp(k, "--add-user") == 0 || strcmp(k, "--del-user") == 0)
+    else if (strcmp(k, "--add-user") == 0 || strcmp(k, "--del-user") == 0 ||
+             strcmp(k, "--reset-password") == 0)
     {
         a->users_cmd = k;
         a->users_name = v;
@@ -1498,6 +1890,11 @@ static bool parse_args(Args *a, int argc, char **argv)
         if (strcmp(argv[i], "--raw-keys") == 0)
         {
             s_raw_keys = true;
+            continue;
+        }
+        if (strcmp(argv[i], "--admin") == 0)
+        {
+            s_add_admin = true;
             continue;
         }
         if (strcmp(argv[i], "--list-users") == 0)
@@ -1697,10 +2094,22 @@ int main(int argc, char **argv)
         auth_wipe(check, sizeof check);
         if (n <= 0)
         {
-            printf("prompt mode needs users: %s %s. Add one with\n"
-                   "  host_tad_telnet --add-user NAME --users %s\n",
-                   s_users_path, (n < 0) ? "does not exist" : "holds no user", s_users_path);
-            return 1;
+            AuthUser admin;
+            if (auth_user_make_default_admin(&admin, AUTH_DEFAULT_ITERATIONS, &s_rng) != 0 ||
+                users_write(&admin, 1) != 0)
+            {
+                auth_wipe(&admin, sizeof admin);
+                printf("%s %s, and a default admin could not be written to it\n", s_users_path,
+                       (n < 0) ? "does not exist" : "holds no user");
+                return 1;
+            }
+            auth_wipe(&admin, sizeof admin);
+            printf("WARNING: %s %s. Created it with the default admin:\n"
+                   "WARNING:   name admin, password admin.\n"
+                   "WARNING: Log in as admin at once; the password must be changed at the\n"
+                   "WARNING: first login, before anything else works.\n",
+                   s_users_path, (n < 0) ? "did not exist" : "held no user");
+            n = 1;
         }
         printf("prompt mode: %d user(s) in %s\n", n, s_users_path);
     }

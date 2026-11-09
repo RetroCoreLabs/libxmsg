@@ -70,12 +70,20 @@ typedef enum TermCmd
     TERM_CMD_HELP,    /**< HELP or ? */
     TERM_CMD_WHO,     /**< WHO: the clients on the bridge */
     TERM_CMD_INFO,    /**< INFO: the link facts */
-    TERM_CMD_EXIT     /**< EXIT, LOGOUT or QUIT */
+    TERM_CMD_EXIT,    /**< EXIT, LOGOUT or QUIT */
+    TERM_CMD_PASSWORD, /**< PASSWORD: change one's own password */
+    TERM_CMD_USERS,    /**< USERS: list the users (admin) */
+    TERM_CMD_ADDUSER,  /**< ADDUSER <name>: add a user of level user (admin) */
+    TERM_CMD_ADDADMIN, /**< ADDUSER <name> ADMIN: add a user of level admin (admin) */
+    TERM_CMD_DELUSER,  /**< DELUSER <name> (admin) */
+    TERM_CMD_RESETPW   /**< RESETPW <name>: set a new password, to be changed at login (admin) */
 } TermCmd;
 
 /**
- * @brief Read a command line. Words are matched without regard to case; the argument is
- *        returned in upper case (SINTRAN system names are upper case).
+ * @brief Read a command line. Words are matched without regard to case. The argument of
+ *        CONNECT is returned in upper case (SINTRAN system names are upper case); the user name
+ *        of ADDUSER, DELUSER and RESETPW keeps its case (user names are matched exactly).
+ *        ADDUSER takes one more word, ADMIN (any case), for a user of level admin.
  * @param line The line.
  * @param arg  Receives the first argument, zero-terminated ("" when none).
  * @param cap  Size of arg.
