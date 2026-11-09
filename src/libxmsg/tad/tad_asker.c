@@ -477,6 +477,8 @@ static void on_accept_reply(TadAsker *a, const XmsgDatagram *dg, uint32_t now_ms
     enqueue(a, TAD_SEND_SETUP, now_ms);
 }
 
+static void hangup_now(TadAsker *a, uint32_t now_ms);
+
 static void on_port_assignment(TadAsker *a, const uint8_t *chain, size_t clen, uint32_t now_ms)
 {
     TadReader r;
@@ -507,6 +509,10 @@ static void on_port_assignment(TadAsker *a, const uint8_t *chain, size_t clen, u
     XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_INFO, "session port 0x%04X, unit data %02X %02X",
              a->session_port, a->lun[0], a->lun[1]);
     set_state(a, TAD_ASKER_PORT_ASSIGNED, 0, now_ms);
+    if (a->hangup_wanted)
+    {
+        hangup_now(a, now_ms);
+    }
 }
 
 static void asker_on_datagram(XmsgSession *s, const XmsgDatagram *dg, uint32_t now_ms)
@@ -701,21 +707,42 @@ TadAskerState tad_asker_state(const TadAsker *a)
     return (a == NULL) ? TAD_ASKER_IDLE : a->state;
 }
 
+/* Send the DCON now: nothing else is worth sending once the user is gone. */
+static void hangup_now(TadAsker *a, uint32_t now_ms)
+{
+    a->hangup_wanted = false;
+    a->q_count = 0;
+    if (a->inflight != TAD_SEND_TEXT)
+    {
+        a->line_len = 0;
+    }
+    set_rfi(a, false);
+    set_state(a, TAD_ASKER_CLOSING, 0, now_ms);
+    enqueue(a, TAD_SEND_DCON, now_ms);
+}
+
 int tad_asker_hangup(TadAsker *a, uint32_t now_ms)
 {
     if (a == NULL)
     {
         return XMSG_EINVAL;
     }
-    if (a->state != TAD_ASKER_PORT_ASSIGNED && a->state != TAD_ASKER_TERMINAL_SETUP &&
-        a->state != TAD_ASKER_RUNNING)
+    switch (a->state)
     {
+    case TAD_ASKER_CONNECTING:
+    case TAD_ASKER_ACCEPTED:
+        /* No session port yet: DCON has nowhere to go. Send it the moment the port arrives. */
+        a->hangup_wanted = true;
+        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_INFO, "hang-up waits for the session port");
+        return XMSG_OK;
+    case TAD_ASKER_PORT_ASSIGNED:
+    case TAD_ASKER_TERMINAL_SETUP:
+    case TAD_ASKER_RUNNING:
+        hangup_now(a, now_ms);
+        return XMSG_OK;
+    default:
         return XMSG_ESTATE;
     }
-    set_rfi(a, false);
-    set_state(a, TAD_ASKER_CLOSING, 0, now_ms);
-    enqueue(a, TAD_SEND_DCON, now_ms);
-    return XMSG_OK;
 }
 
 void tad_asker_abort(TadAsker *a)

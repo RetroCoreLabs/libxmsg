@@ -703,6 +703,69 @@ static void letter_is_sent_again_after_a_host_restart(void)
     CHECK_EQ(xmsg_flags1_peek(&s_a.flags1, 102), 1);
 }
 
+/* The telnet client went away before the host assigned the session port: the hang-up is
+ * remembered and the DCON is the first frame sent to the session port, so the host is not left
+ * holding a session nobody uses. */
+static void hangup_before_the_port_goes_out_with_the_port(void)
+{
+    uint32_t now = bring_up(0x00F8);
+    asker_start(now);
+    for (int i = 0; i < 200 && s_host.count == 0; i++)
+    {
+        pump(++now);
+    }
+    CHECK_EQ(s_host.count, 1); /* the letter */
+    CHECK_EQ(tad_asker_hangup(&s_asker, now), XMSG_OK);
+    CHECK_EQ(s_asker.state, TAD_ASKER_CONNECTING); /* nothing to send to yet */
+    host_send_hex(k_tad_host_frames[0].hex, k_tad_host_frames[0].flags1, 0, now); /* accept */
+    for (int i = 0; i < 200 && s_host.count < 2; i++)
+    {
+        pump(++now);
+    }
+    CHECK_EQ(s_host.count, 2); /* the session setup still goes: it is what asks for the port */
+    host_send_hex(k_tad_host_frames[1].hex, k_tad_host_frames[1].flags1, 0, now); /* port */
+    for (int i = 0; i < 400 && s_asker.state != TAD_ASKER_CLOSED; i++)
+    {
+        pump(++now);
+    }
+    CHECK_EQ(s_asker.state, TAD_ASKER_CLOSED);
+    CHECK_EQ(s_host.count, 3);
+    if (s_host.count == 3)
+    {
+        const uint8_t *f = s_host.frames[2];
+        CHECK_BYTES(f + 14, 4, "21008294"); /* DCON: bare control, role 0x94 */
+        CHECK_EQ(xmsg_be16_read(f + OFF_DST_PORT), s_asker.session_port);
+        CHECK_BYTES(f + 26, s_host.lens[2] - 26, "0008000000020900");
+    }
+}
+
+/* Hang-up while the session runs: replies waiting to go and typed text not yet sent are
+ * dropped, and the DCON is the next frame. */
+static void hangup_while_running_drops_what_waits(void)
+{
+    TadAsker a;
+    TadAskerConfig cfg;
+    tad_asker_config_default(&cfg, 102, "D102");
+    CHECK_EQ(tad_asker_init(&a, &cfg, NULL), XMSG_OK);
+    a.state = TAD_ASKER_RUNNING; /* stand-alone, no node */
+    a.session_port = 0x04C2;
+    a.queue[0] = (uint8_t)TAD_SEND_DUMM;
+    a.queue[1] = (uint8_t)TAD_SEND_TEXT;
+    a.q_head = 0;
+    a.q_count = 2;
+    a.line_len = 5;
+    CHECK_EQ(tad_asker_hangup(&a, 0), XMSG_OK);
+    CHECK_EQ(a.state, TAD_ASKER_CLOSING);
+    CHECK_EQ(a.q_count, 1);
+    CHECK_EQ(a.queue[a.q_head], (uint8_t)TAD_SEND_DCON);
+    CHECK_EQ(a.line_len, 0);
+    CHECK(!a.rfi_open);
+    CHECK_EQ(tad_asker_hangup(&a, 0), XMSG_ESTATE); /* once */
+    a.state = TAD_ASKER_IDLE;
+    CHECK_EQ(tad_asker_hangup(&a, 0), XMSG_ESTATE);
+    CHECK_EQ(tad_asker_hangup(NULL, 0), XMSG_EINVAL);
+}
+
 static void typing_rules(void)
 {
     TadAsker a;
@@ -755,5 +818,7 @@ int main(void)
     silent_host_times_out();
     xense_resends_and_other_errors_fail();
     letter_is_sent_again_after_a_host_restart();
+    hangup_before_the_port_goes_out_with_the_port();
+    hangup_while_running_drops_what_waits();
     TEST_DONE();
 }

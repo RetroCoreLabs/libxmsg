@@ -189,6 +189,7 @@ typedef struct TadAsker
     uint16_t session_port; /**< from the port assignment */
     uint8_t lun[2];        /**< the 0x0B data of the port assignment, as received */
     bool rfi_open;         /**< input granted and not yet used */
+    bool hangup_wanted;    /**< tad_asker_hangup() came before the session port was known */
     /* Frames waiting to go, oldest first. */
     uint8_t queue[TAD_ASKER_QUEUE];
     uint8_t q_head;
@@ -250,13 +251,18 @@ bool tad_asker_may_type(const TadAsker *a);
 TadAskerState tad_asker_state(const TadAsker *a);
 
 /**
- * @brief End the session: send DCON to the host's session port, as a real asker does when its
- *        user is done. The state goes to CLOSING, then CLOSED (and the session detaches) once
- *        the host acknowledges the DCON.
+ * @brief End the session as soon as possible: send DCON to the host's session port, as a real
+ *        asker does when its user is done. Replies still waiting to go and typed text not yet
+ *        sent are dropped, so the DCON is the next frame out (a frame already in flight is
+ *        finished first: one is in flight at a time). The state goes to CLOSING, then CLOSED
+ *        (and the session detaches) once the host acknowledges the DCON.
+ *        Called before the host has assigned the session port (the first second or so), the
+ *        hang-up is remembered and the DCON goes out the moment the port is known, so the host
+ *        is never left holding a session nobody uses.
  * @param a      Session.
  * @param now_ms Current time.
- * @return XMSG_OK, or XMSG_ESTATE when there is no session port yet (before the port
- *         assignment there is nothing to hang up; use tad_asker_abort()).
+ * @return XMSG_OK (sent, or remembered), XMSG_EINVAL for NULL, XMSG_ESTATE when there is no
+ *         session to end (idle, closing, closed or failed).
  */
 int tad_asker_hangup(TadAsker *a, uint32_t now_ms);
 

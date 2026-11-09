@@ -14,12 +14,19 @@
  *
  * The SINTRAN side must know our node: the link is defined there for it, and XMSG is running.
  *
- * Terminal behaviour, following what the real asker does (see libxmsg/tad/tad_asker.h):
- *  - the tool asks the telnet client for character mode and does the echoing itself, as the
- *    host's ECKM says: echo on, or off while a password is typed;
- *  - it edits a line locally (backspace and delete work) and sends it when Return is pressed,
- *    one line per input grant, as the real asker sent "sys" + Return in one piece;
+ * Terminal behaviour: every byte is forwarded untouched, both ways.
+ *  - telnet: the tool opens with the usual server set - it will echo, suppress go-ahead and
+ *    send binary, and asks the client to suppress go-ahead and send binary (RFC 854, 856, 857,
+ *    858) - so the client sends each key as typed, 8 bits, with no CR translation. Other options
+ *    are refused. Telnet commands are taken out of the stream; IAC IAC is the data byte 0xFF.
+ *  - typed bytes (ESC, control keys, backspace, everything) go to the host as they are, in
+ *    order, as soon as it grants input, up to 255 bytes per grant. No line editing.
+ *  - the tool echoes typed bytes back to the client when the host's ECKM says so (the host
+ *    does not echo; ECKM 0xFF, for a password, means no echo).
  *  - host text goes to the client byte for byte (0xFF doubled, as telnet needs).
+ *  - keystrokes carry even parity in bit 7, as the real asker sends them (the library's
+ *    keystroke_parity setting, measured); see libxmsg/tad/tad_asker.h. --raw-keys turns it
+ *    off so each typed byte leaves exactly as typed.
  *
  * The Flags1 count to each peer is kept in a small text file (--flags1, default
  * host_tad_telnet.flags1), with the port-word seed on a line "seed N", so a restart of the
@@ -308,13 +315,16 @@ static int store_save_seed(void *ctx, uint16_t seed)
 /* Telnet clients                                                                             */
 /* ------------------------------------------------------------------------------------------ */
 
-#define TN_IAC  0xFFu
-#define TN_WILL 0xFBu
-#define TN_DO   0xFDu
-#define TN_SB   0xFAu
-#define TN_SE   0xF0u
-#define TN_ECHO 0x01u
-#define TN_SGA  0x03u
+#define TN_IAC    0xFFu
+#define TN_DONT   0xFEu
+#define TN_DO     0xFDu
+#define TN_WONT   0xFCu
+#define TN_WILL   0xFBu
+#define TN_SB     0xFAu
+#define TN_SE     0xF0u
+#define TN_BINARY 0x00u /* RFC 856: 8-bit data, no CR translation */
+#define TN_ECHO   0x01u /* RFC 857: we echo, the client does not */
+#define TN_SGA    0x03u /* RFC 858: no go-ahead, i.e. character at a time */
 
 typedef enum TelnetRx
 {
@@ -332,11 +342,12 @@ typedef struct Client
     TadAsker asker;
     bool connect_pending; /* waiting for the link before the letter can go */
     TelnetRx tn;
-    bool skip_lf;      /* a CR was just taken: drop the LF or NUL that follows */
-    bool echo;         /* the host's ECKM: echo typed characters */
-    uint8_t line[255]; /* the line being edited */
-    size_t line_len;
-    uint8_t ready[1024]; /* finished lines waiting for an input grant */
+    uint8_t verb;        /* the WILL/WONT/DO/DONT whose option byte comes next */
+    bool us_on[256];     /* options WE do (agreed): ECHO, SGA, BINARY */
+    bool him_on[256];    /* options the CLIENT does (agreed): SGA, BINARY */
+    bool after_cr;       /* the last data byte was CR (for the NVT CR NUL rule) */
+    bool echo;           /* the host's ECKM: echo typed bytes back to the client */
+    uint8_t ready[1024]; /* typed bytes, in order, waiting for an input grant */
     size_t ready_len;
     uint8_t out[16384]; /* bytes for the client socket */
     size_t out_len;
@@ -348,6 +359,7 @@ static Client s_clients[XMSG_MAX_SESSIONS];
 static XmsgNode s_node;
 static uint16_t s_peer;
 static const char *s_system;
+static bool s_raw_keys; /* --raw-keys: typed bytes leave without the parity bit */
 
 static void client_put(Client *c, const uint8_t *b, size_t n)
 {
@@ -411,6 +423,7 @@ static void client_start(Client *c, uint32_t now)
     TadAskerConfig cfg;
     TadAskerCallbacks cb = {c, cb_text, cb_state, NULL, cb_echo, NULL};
     tad_asker_config_default(&cfg, s_peer, s_system);
+    cfg.keystroke_parity = !s_raw_keys;
     if (tad_asker_init(&c->asker, &cfg, &cb) != XMSG_OK)
     {
         client_say(c, "bad system name\r\n");
@@ -421,58 +434,112 @@ static void client_start(Client *c, uint32_t now)
     (void)now;
 }
 
-/* Finish the edited line: it waits in `ready` until the host grants input. */
-static void line_done(Client *c)
+/* One data byte from the client, as typed: queued untouched, in order, for the host. The only
+ * rule applied is telnet's own: outside binary mode a CR is sent by the client as CR NUL, and
+ * that NUL is not a typed byte (RFC 854). Nothing else is edited, dropped or held for Return. */
+static void client_byte(Client *c, uint8_t k)
 {
-    if (c->ready_len + c->line_len <= sizeof c->ready)
+    if (c->after_cr && k == 0x00 && !c->him_on[TN_BINARY])
     {
-        memcpy(c->ready + c->ready_len, c->line, c->line_len);
-        c->ready_len += c->line_len;
-    }
-    c->line_len = 0;
-}
-
-static void client_key(Client *c, uint8_t k)
-{
-    if (c->skip_lf)
-    {
-        c->skip_lf = false;
-        if (k == '\n' || k == 0x00)
-        {
-            return;
-        }
-    }
-    if (k == '\r' || k == '\n')
-    {
-        c->line[c->line_len++] = '\r';
-        c->skip_lf = (k == '\r');
-        line_done(c);
+        c->after_cr = false;
         return;
     }
-    if (k == 0x08 || k == 0x7F)
+    c->after_cr = (k == '\r');
+    if (c->ready_len >= sizeof c->ready)
     {
-        if (c->line_len > 0)
-        {
-            c->line_len--;
-            if (c->echo)
-            {
-                client_put(c, (const uint8_t *)"\b \b", 3);
-            }
-        }
-        return;
+        return; /* the host is not taking input; the client typed 1 KB ahead of it */
     }
-    c->line[c->line_len++] = k;
-    if (c->echo && k >= 0x20)
+    c->ready[c->ready_len++] = k;
+    if (c->echo)
     {
         client_put(c, &k, 1);
     }
-    if (c->line_len >= sizeof c->line - 1)
+}
+
+static void tn_send(Client *c, uint8_t verb, uint8_t opt)
+{
+    if (c->out_len + 3 <= sizeof c->out)
     {
-        line_done(c); /* a full line goes as it is */
+        c->out[c->out_len++] = TN_IAC;
+        c->out[c->out_len++] = verb;
+        c->out[c->out_len++] = opt;
     }
 }
 
-/* Strip telnet commands; hand data bytes to the line editor. */
+/* The options we do ourselves, and the ones we let the client do. */
+static bool tn_we_do(uint8_t opt)
+{
+    return opt == TN_ECHO || opt == TN_SGA || opt == TN_BINARY;
+}
+
+static bool tn_client_may(uint8_t opt)
+{
+    return opt == TN_SGA || opt == TN_BINARY;
+}
+
+/* Option negotiation (RFC 854, with the loop rule of RFC 1143: answer only a CHANGE). */
+static void tn_option(Client *c, uint8_t verb, uint8_t opt)
+{
+    switch (verb)
+    {
+    case TN_DO:
+        if (!tn_we_do(opt))
+        {
+            tn_send(c, TN_WONT, opt);
+        }
+        else if (!c->us_on[opt])
+        {
+            c->us_on[opt] = true;
+            tn_send(c, TN_WILL, opt);
+        }
+        break;
+    case TN_DONT:
+        if (c->us_on[opt])
+        {
+            c->us_on[opt] = false;
+            tn_send(c, TN_WONT, opt);
+        }
+        break;
+    case TN_WILL:
+        if (!tn_client_may(opt))
+        {
+            tn_send(c, TN_DONT, opt);
+        }
+        else if (!c->him_on[opt])
+        {
+            c->him_on[opt] = true;
+            tn_send(c, TN_DO, opt);
+        }
+        break;
+    default: /* TN_WONT */
+        if (c->him_on[opt])
+        {
+            c->him_on[opt] = false;
+            tn_send(c, TN_DONT, opt);
+        }
+        break;
+    }
+}
+
+/* The server's opening: we will echo, suppress go-ahead and send binary; we ask the client to
+ * suppress go-ahead and send binary. An answer that merely agrees changes nothing. */
+static void tn_open(Client *c)
+{
+    static const uint8_t mine[] = {TN_ECHO, TN_SGA, TN_BINARY};
+    static const uint8_t theirs[] = {TN_SGA, TN_BINARY};
+    for (size_t i = 0; i < sizeof mine; i++)
+    {
+        c->us_on[mine[i]] = true;
+        tn_send(c, TN_WILL, mine[i]);
+    }
+    for (size_t i = 0; i < sizeof theirs; i++)
+    {
+        c->him_on[theirs[i]] = true;
+        tn_send(c, TN_DO, theirs[i]);
+    }
+}
+
+/* Take telnet commands out; hand every data byte on as it is. */
 static void client_rx(Client *c, const uint8_t *b, size_t n)
 {
     for (size_t i = 0; i < n; i++)
@@ -487,13 +554,13 @@ static void client_rx(Client *c, const uint8_t *b, size_t n)
             }
             else
             {
-                client_key(c, x);
+                client_byte(c, x);
             }
             break;
         case TN_GOT_IAC:
             if (x == TN_IAC)
             {
-                client_key(c, x);
+                client_byte(c, x); /* IAC IAC is the data byte 0xFF */
                 c->tn = TN_DATA;
             }
             else if (x == TN_SB)
@@ -502,7 +569,8 @@ static void client_rx(Client *c, const uint8_t *b, size_t n)
             }
             else if (x >= TN_WILL)
             {
-                c->tn = TN_GOT_VERB; /* WILL, WONT, DO, DONT: one option byte follows */
+                c->verb = x; /* WILL, WONT, DO, DONT: one option byte follows */
+                c->tn = TN_GOT_VERB;
             }
             else
             {
@@ -510,6 +578,7 @@ static void client_rx(Client *c, const uint8_t *b, size_t n)
             }
             break;
         case TN_GOT_VERB:
+            tn_option(c, c->verb, x);
             c->tn = TN_DATA;
             break;
         case TN_IN_SB:
@@ -522,20 +591,18 @@ static void client_rx(Client *c, const uint8_t *b, size_t n)
     }
 }
 
-/* Send the first ready line (up to and including its CR) when the host lets us type. */
+/* Send what has been typed, as it is, as soon as the host lets us type: up to TAD_MAX_DATA bytes
+ * per input grant (the host's limit), the rest with the next grant. */
 static void client_feed_host(Client *c, uint32_t now)
 {
-    size_t n = 0;
-    if (c->ready_len == 0 || !tad_asker_may_type(&c->asker))
+    size_t n = c->ready_len;
+    if (n == 0 || !tad_asker_may_type(&c->asker))
     {
         return;
     }
-    while (n < c->ready_len && n < TAD_MAX_DATA)
+    if (n > TAD_MAX_DATA)
     {
-        if (c->ready[n++] == '\r')
-        {
-            break;
-        }
+        n = TAD_MAX_DATA;
     }
     int took = tad_asker_write(&c->asker, c->ready, n, now);
     if (took > 0)
@@ -592,7 +659,7 @@ static void on_link(void *ctx, LapbState st, bool up, bool ready, const char *re
 static void usage(void)
 {
     printf("usage: host_tad_telnet --hdlc HOST:PORT --node N --peer N --system NAME\n"
-           "                       [--listen PORT] [--flags1 FILE] [--log "
+           "                       [--raw-keys] [--listen PORT] [--flags1 FILE] [--log "
            "error|warn|info|debug|trace]\n");
 }
 
@@ -618,10 +685,21 @@ int main(int argc, char **argv)
     char host[128];
     char port[16];
 
-    for (int i = 1; i + 1 < argc; i += 2)
+    for (int i = 1; i < argc; i++)
     {
         const char *k = argv[i];
-        const char *v = argv[i + 1];
+        if (strcmp(k, "--raw-keys") == 0)
+        {
+            s_raw_keys = true;
+            continue;
+        }
+        if (i + 1 >= argc)
+        {
+            usage();
+            return 1;
+        }
+        i++;
+        const char *v = argv[i];
         bool ok = true;
         if (strcmp(k, "--hdlc") == 0)
         {
@@ -808,16 +886,13 @@ int main(int argc, char **argv)
                 else
                 {
                     Client *c = &s_clients[i];
-                    static const uint8_t neg[] = {TN_IAC, TN_WILL, TN_ECHO, TN_IAC, TN_WILL,
-                                                  TN_SGA, TN_IAC,  TN_DO,   TN_SGA};
                     memset(c, 0, sizeof *c);
                     c->used = true;
                     c->sock = cs;
                     c->index = i;
                     c->echo = true;
                     sock_nonblocking(cs);
-                    memcpy(c->out, neg, sizeof neg);
-                    c->out_len = sizeof neg;
+                    tn_open(c);
                     printf("client %d: connected\n", i);
                     client_start(c, now);
                 }
