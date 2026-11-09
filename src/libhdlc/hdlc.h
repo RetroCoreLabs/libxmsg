@@ -28,6 +28,7 @@
 #ifndef HDLC_H
 #define HDLC_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -57,6 +58,46 @@ extern "C" {
  * @return Updated CRC register.
  */
 uint16_t hdlc_crc_byte(uint16_t crc, uint8_t data);
+
+/** Bytes of FCS on the wire. */
+#define HDLC_FCS_SIZE 2u
+
+/**
+ * @brief The CRC over a buffer, continuing from a register value.
+ * @param[in] crc   Register: HDLC_CRC_INIT to start, or a previous result.
+ * @param[in] data  Bytes; may be NULL when len is 0.
+ * @param[in] len   Number of bytes.
+ * @return Updated register.
+ */
+uint16_t hdlc_fcs_update(uint16_t crc, const uint8_t *data, size_t len);
+
+/**
+ * @brief The CRC register after a whole buffer, from HDLC_CRC_INIT.
+ *        Pass it to hdlc_fcs_append() to get the two FCS bytes.
+ * @param[in] data  Bytes.
+ * @param[in] len   Number of bytes.
+ * @return Register value (not yet inverted).
+ */
+uint16_t hdlc_fcs_compute(const uint8_t *data, size_t len);
+
+/**
+ * @brief Write the FCS for a register value: the inverted register, low byte first.
+ * @param[out] out  Two bytes.
+ * @param[in]  crc  Register from hdlc_fcs_compute().
+ */
+void hdlc_fcs_append(uint8_t *out, uint16_t crc);
+
+/**
+ * @brief Whether a frame that ends in its two FCS bytes is good.
+ *
+ * Fewer than 4 bytes (address, control and the FCS) is never a frame (ITU-T
+ * X.25 clause 2.3.5.3 a) and answers false.
+ *
+ * @param[in] frame_with_fcs  Frame, FCS last.
+ * @param[in] len             Its length.
+ * @return true when the residue is HDLC_CRC_GOOD.
+ */
+bool hdlc_fcs_is_good(const uint8_t *frame_with_fcs, size_t len);
 
 /* ------------------------------------------------------------ encoder */
 

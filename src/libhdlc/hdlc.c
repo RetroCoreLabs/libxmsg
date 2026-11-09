@@ -61,6 +61,36 @@ uint16_t HOT_PATH_CODE hdlc_crc_byte(uint16_t crc, uint8_t data)
     return (uint16_t)((crc >> 8u) ^ CRC_TABLE[(crc ^ data) & 0xFFu]);
 }
 
+uint16_t HOT_PATH_CODE hdlc_fcs_update(uint16_t crc, const uint8_t *data, size_t len)
+{
+    for (size_t i = 0; i < len; i++)
+    {
+        crc = (uint16_t)((crc >> 8u) ^ CRC_TABLE[(crc ^ data[i]) & 0xFFu]);
+    }
+    return crc;
+}
+
+uint16_t HOT_PATH_CODE hdlc_fcs_compute(const uint8_t *data, size_t len)
+{
+    return hdlc_fcs_update(HDLC_CRC_INIT, data, len);
+}
+
+void HOT_PATH_CODE hdlc_fcs_append(uint8_t *out, uint16_t crc)
+{
+    uint16_t sent = (uint16_t)~crc;
+    out[0] = (uint8_t)(sent & 0xFFu);
+    out[1] = (uint8_t)(sent >> 8u);
+}
+
+bool HOT_PATH_CODE hdlc_fcs_is_good(const uint8_t *frame_with_fcs, size_t len)
+{
+    if (len < 4u)
+    {
+        return false;
+    }
+    return hdlc_fcs_compute(frame_with_fcs, len) == HDLC_CRC_GOOD;
+}
+
 /* ------------------------------------------------------------ encoder */
 
 void hdlc_encoder_reset(hdlc_encoder *enc)

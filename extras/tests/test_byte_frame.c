@@ -10,6 +10,8 @@
 #include "libhdlc/byte_frame.h"
 #include "test_util.h"
 
+#include <string.h>
+
 static void encode_escapes(void)
 {
     static const uint8_t in[] = { 0x01, 0x7E, 0x41, 0x7D, 0x1F, 0x20 };
@@ -97,11 +99,44 @@ static void overlong_counted_and_survives_reset(void)
     }
 }
 
+/*
+ * The one behaviour that changed when the short form moved onto the shared engine (2026-11-09):
+ * the byte after ANY 0x7D is XORed with 0x20, a second 0x7D included (RFC 1662 4.2). The old
+ * decoder stayed in escape state on 7D 7D and XORed the byte after that instead. No correct
+ * sender ever writes 7D 7D (a 7D is sent as 7D 5D), so only broken input sees the difference.
+ */
+static void escape_after_escape(void)
+{
+    static const uint8_t wire[] = { 0x7E, 0x01, 0x7D, 0x7D, 0x41, 0x02, 0x7E };
+    byte_frame_decoder d;
+    uint8_t got[16];
+    int got_len = 0;
+
+    memset(&d, 0, sizeof d);
+    byte_frame_decoder_reset(&d);
+    CHECK_EQ(feed_all(&d, wire, (int)sizeof wire, got, &got_len), 1);
+    CHECK_BYTES(got, got_len, "01 5D 41 02");
+}
+
+/* A decoder in zeroed memory works without a reset, as the old one did. */
+static void zeroed_decoder_needs_no_reset(void)
+{
+    static byte_frame_decoder d;
+    static const uint8_t wire[] = { 0x7E, 0x11, 0x22, 0x7E };
+    uint8_t got[16];
+    int got_len = 0;
+
+    CHECK_EQ(feed_all(&d, wire, (int)sizeof wire, got, &got_len), 1);
+    CHECK_BYTES(got, got_len, "11 22");
+}
+
 int main(void)
 {
     encode_escapes();
     round_trip_all_byte_values();
     noise_empty_and_bad_endings();
     overlong_counted_and_survives_reset();
+    escape_after_escape();
+    zeroed_decoder_needs_no_reset();
     TEST_DONE();
 }
