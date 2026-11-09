@@ -13,7 +13,7 @@ host tools and unit tests.
 | Part | Header | What it does |
 |---|---|---|
 | Bit-level HDLC | `libhdlc/hdlc.h` | Bit stuffing, opening/closing flags, aborts, CRC-16/X.25 frame check, control-field decode. The encoder gives packed line bytes (for SPI) or groups of 8-10 bits (for a Pico PIO). The decoder takes line bytes, handles a whole byte at once when it holds no stuffing, flag or abort, and reports each frame as OK / CRC error / odd bit count / too long, with counters. Frame bytes go to a callback one at a time, or straight into a caller's buffer with one callback per frame (`hdlc_decoder_set_buffer`). |
-| Host framing | `libhdlc/byte_frame.h` | RFC 1662 byte stuffing between the gateway and the PC over USB serial or TCP. |
+| Byte-stream framing | `libhdlc/byte_frame.h` | RFC 1662 byte stuffing for frames on a byte stream: USB serial, TCP, the nd100x bridge. A full engine (caller-owned buffer, FCS check on or off, any escape set, a resumable encoder for non-blocking transports; used by libxmsg) and a short form for gateways. The frame check functions are in `hdlc.h`. |
 | Control frames | `libhdlc/control_frame.h` | Messages between the PC and the gateway firmware on the same channel as line frames: commands, replies, log, statistics, events. Described in full in [extras/docs/control-frames.md](extras/docs/control-frames.md). |
 | Ring buffer | `libhdlc/ring_buffer.h` | A byte ring guarded by a mutex, for passing bytes between tasks or threads, any number of writers. FreeRTOS on ESP32, SRWLOCK on Windows, pthread elsewhere. Not on the Pico ([BUGS.md](BUGS.md) L-PICO). |
 | Lock-free ring | `libhdlc/spsc_ring.h` | A byte ring for exactly ONE writer and ONE reader, no lock, safe from an interrupt. The ring for the Pico. Two writers at once corrupt it. |
@@ -33,7 +33,7 @@ terminals talk this way; a gateway built on this library lets a PC take part.
 
 Version 0.1.0, first commit 2026-11-09. Measured that day:
 
-- unit tests pass on Windows (gcc, w64devkit) and Linux (gcc, Ubuntu): 5 test programs, over
+- unit tests pass on Windows (gcc, w64devkit) and Linux (gcc, Ubuntu): 7 test programs, over
   20000 checks;
 - HDLCGW (ESP32-S2) built against it passed the full two-board sweep against RC422Dev: 376 cases,
   0 failures, 19200 to 983000 bit/s, frames of 10 to 626 bytes, no frame lost or bad;
@@ -85,7 +85,8 @@ the whole-byte fast path changes nothing.
   lists the two details kept from it on purpose.
 - The whole-byte receive table, the closing-flag alignment check and the bit-group encoder come
   from RC422Dev, measured on the Pico at 983000 bit/s.
-- byte_frame, control_frame and ring_buffer come from HDLCGW.
+- The byte-stream engine and its tests come from libxmsg (2026-11-09), which mirrors RetroIO.Hdlc.
+- control_frame and ring_buffer come from HDLCGW.
 
 ## Licence
 
