@@ -598,9 +598,14 @@ int lapb_rx_frame(LapbLink *l, const uint8_t *frame, size_t len, uint32_t now_ms
     }
     if (!lapb_frame_address_known(v.address))
     {
-        l->stats.bad_address++;
-        XMSG_LOG(XMSG_LOG_LAPB, XMSG_LOG_DEBUG, "frame with address 0x%02X ignored", v.address);
-        return XMSG_EPROTO;
+        /* Taken like any other frame: the C# reference (RetroIO LapbLayer.OnFrameReceived)
+         * never looks at the address of a received frame. MEASURED 2026-11-09 on RetroCore D100:
+         * it sometimes sends an I-frame with address 0x07, or 0x87 when the info length is odd,
+         * instead of 0x09/0x89; dropping those cost a T1 resend (about 1 s) each time and, in
+         * one run, a REJ. What 0x07 means is not known; it is counted and logged. */
+        l->stats.unusual_address++;
+        XMSG_LOG(XMSG_LOG_LAPB, XMSG_LOG_INFO, "frame with address 0x%02X taken (unusual)",
+                 v.address);
     }
 
     if (v.kind == LAPB_FRAME_UNNUMBERED)

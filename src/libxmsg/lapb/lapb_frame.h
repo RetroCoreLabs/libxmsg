@@ -121,7 +121,8 @@ static inline bool lapb_frame_parse(const uint8_t *frame, size_t len, LapbFrameV
 }
 
 /**
- * @brief Whether an address byte is one the ND dialect uses. Anything else is not for us.
+ * @brief Whether an address byte is one we send (01, 09, 89). A received frame with another
+ *        address is still taken, as the C# does; see lapb_rx_frame().
  */
 static inline bool lapb_frame_address_known(uint8_t address)
 {

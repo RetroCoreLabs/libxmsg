@@ -86,6 +86,76 @@ static void set_rfi(TadAsker *a, bool open)
 /* Building frames                                                                            */
 /* ------------------------------------------------------------------------------------------ */
 
+/* Copy `name` into a fixed SINTRAN string field: the text, "'", then zeros. */
+static void put_name(uint8_t *field, size_t size, const char *name, size_t len)
+{
+    memset(field, 0, size);
+    memcpy(field, name, len);
+    field[len] = (uint8_t)'\'';
+}
+
+/* The 7IAM chain, laid out as record 3618 of pcap-decode-sample.json (63 bytes):
+ *   28 00 | 0A 21 <33: system> | 00 | 0B 02 <terminal> | 10 11 <17: user> | FF 00
+ * The single 00 after the system name is the word-alignment pad a SINTRAN host puts before an
+ * element that would start at an odd offset (TAD-Message-Formats 2.1); it is in the capture.
+ * Returns the body length (head + chain) or 0. */
+static size_t build_iam(const TadAsker *a, uint8_t *body, size_t cap)
+{
+    char own[TAD_IAM_SYS_SIZE];
+    size_t own_len = strlen(a->own_name);
+    size_t user_len = strlen(a->user_name);
+    uint8_t *c = body + TAD_BODY_HEAD_SIZE;
+    size_t n = 0;
+    const size_t chain_len = 2u + 2u + TAD_IAM_SYS_SIZE + 1u + 4u + 2u + TAD_IAM_USER_SIZE + 2u;
+
+    if (cap < TAD_BODY_HEAD_SIZE + chain_len)
+    {
+        return 0;
+    }
+    if (own_len > 0)
+    {
+        memcpy(own, a->own_name, own_len + 1);
+    }
+    else
+    {
+        /* "D" and the system number in decimal, as the real asker names itself. */
+        char digits[6];
+        size_t nd = 0;
+        unsigned v = xmsg_node_system(a->base.node);
+        do
+        {
+            digits[nd++] = (char)('0' + (v % 10u));
+            v /= 10u;
+        } while (v != 0u);
+        own[0] = 'D';
+        for (size_t i = 0; i < nd; i++)
+        {
+            own[1 + i] = digits[nd - 1 - i];
+        }
+        own_len = 1 + nd;
+        own[own_len] = '\0';
+    }
+    c[n++] = (uint8_t)TAD_OP_IAM;
+    c[n++] = 0;
+    c[n++] = (uint8_t)TAD_OP_IAM_SYS;
+    c[n++] = (uint8_t)TAD_IAM_SYS_SIZE;
+    put_name(c + n, TAD_IAM_SYS_SIZE, own, own_len);
+    n += TAD_IAM_SYS_SIZE;
+    c[n++] = 0; /* alignment pad */
+    c[n++] = (uint8_t)TAD_OP_LUN;
+    c[n++] = 2;
+    xmsg_be16_write(c + n, a->cfg.terminal_number);
+    n += 2;
+    c[n++] = (uint8_t)TAD_OP_IAM_USER;
+    c[n++] = (uint8_t)TAD_IAM_USER_SIZE;
+    put_name(c + n, TAD_IAM_USER_SIZE, a->user_name, user_len);
+    n += TAD_IAM_USER_SIZE;
+    c[n++] = (uint8_t)TAD_OP_RAW_FF;
+    c[n++] = 0;
+    tad_body_head_write(body, 0, (uint16_t)n);
+    return TAD_BODY_HEAD_SIZE + n;
+}
+
 /* Put a packed chain at body + 4 and the head in front of it. Returns the body length or 0. */
 static size_t build_chain(TadAsker *a, TadAskerSend kind, uint8_t *body, size_t cap)
 {
@@ -180,6 +250,13 @@ static void fill_subhdr(const TadAsker *a, TadAskerSend kind, XmsgSubhdr *sub)
         sub->dst_port = a->session_port;
         sub->xmcsm = TAD_XMCSM_TERMINAL;
         break;
+    case TAD_SEND_IAM:
+        /* MEASURED, record 3618: setup flags, data role, back to the port that asked. */
+        sub->frame_flags = XMSG_FF_SETUP;
+        sub->role = TAD_ROLE_DATA;
+        sub->dst_port = a->who_port;
+        sub->xmcsm = TAD_XMCSM_IAM;
+        break;
     default: /* RECO, CERS, DUMM */
         sub->frame_flags = XMSG_FF_DATA_A;
         sub->role = TAD_ROLE_CONTROL;
@@ -208,6 +285,10 @@ static int send_kind(TadAsker *a, TadAskerSend kind, uint32_t now_ms)
     if (kind == TAD_SEND_LETTER)
     {
         len = xrout_letter_build(body, cap, TAD_SERVICE_NAME, a->system_name);
+    }
+    else if (kind == TAD_SEND_IAM)
+    {
+        len = build_iam(a, body, cap);
     }
     else
     {
@@ -539,6 +620,17 @@ static void asker_on_datagram(XmsgSession *s, const XmsgDatagram *dg, uint32_t n
                  (unsigned)dg->body_len);
         return;
     }
+    if (tad_chain_has(chain, clen, TAD_OP_WHO))
+    {
+        /* The host asks who we are (TADA does, for each remote terminal it lists). Answer to
+         * the port that asked; the frame is a question, not terminal content, so no DUMM. */
+        a->who_port = dg->sub.src_port;
+        a->stats.who_answers++;
+        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_INFO, "host asks who we are (7WHO) from port 0x%04X",
+                 a->who_port);
+        enqueue(a, TAD_SEND_IAM, now_ms);
+        return;
+    }
     switch (a->state)
     {
     case TAD_ASKER_ACCEPTED:
@@ -595,6 +687,9 @@ void tad_asker_config_default(TadAskerConfig *cfg, uint16_t peer_node, const cha
     cfg->keystroke_parity = true;
     cfg->connect_timeout_ms = 30000;
     cfg->ack_timeout_ms = 10000;
+    cfg->own_name = NULL;
+    cfg->terminal_number = 1;
+    cfg->user_name = "REMOTE";
 }
 
 int tad_asker_init(TadAsker *a, const TadAskerConfig *cfg, const TadAskerCallbacks *cb)
@@ -610,10 +705,27 @@ int tad_asker_init(TadAsker *a, const TadAskerConfig *cfg, const TadAskerCallbac
     {
         return XMSG_EINVAL;
     }
+    /* Each name leaves room for its "'" inside the fixed 7IAM field. */
+    size_t own_len = (cfg->own_name != NULL) ? strlen(cfg->own_name) : 0;
+    size_t user_len = (cfg->user_name != NULL) ? strlen(cfg->user_name) : 0;
+    if (own_len >= sizeof a->own_name || user_len >= sizeof a->user_name)
+    {
+        return XMSG_EINVAL;
+    }
     memset(a, 0, sizeof *a);
     a->cfg = *cfg;
     memcpy(a->system_name, cfg->system_name, name_len + 1);
     a->cfg.system_name = a->system_name;
+    if (own_len > 0)
+    {
+        memcpy(a->own_name, cfg->own_name, own_len + 1);
+    }
+    if (user_len > 0)
+    {
+        memcpy(a->user_name, cfg->user_name, user_len + 1);
+    }
+    a->cfg.own_name = a->own_name;
+    a->cfg.user_name = a->user_name;
     if (cb != NULL)
     {
         a->cb = *cb;

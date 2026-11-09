@@ -766,6 +766,102 @@ static void hangup_while_running_drops_what_waits(void)
     CHECK_EQ(tad_asker_hangup(NULL, 0), XMSG_EINVAL);
 }
 
+/* TADA asks every remote terminal "who are you" (7WHO) and waits for the answer; without one
+ * it hangs on that terminal's row (live D100, 2026-11-09). The question is record 3653 of
+ * RetroIO pcap-decode-sample.json (node 103 asking node 102), here sent by the host from its
+ * port 0x0728; the answer must be record 3618's 7IAM byte for byte (sub-header from offset 14
+ * on, and the whole body), sent back to the port that asked, with no DUMM for the question. */
+static void who_are_you_is_answered_like_the_real_asker(void)
+{
+    /* Record 3653 as captured; the systems and the asking port are set for this test below. */
+    static const char k_who[] = "2113000E0066006700260048DDA3"
+                                "21008214006605DA006704DA0048"
+                                "00000002FC00";
+    /* Record 3618, from the sub-header on: 7IAM from D102, terminal 1, user SYSTEM. */
+    static const char k_iam_body[] =
+        "0000003F28000A2144313032270000000000000000000000000000000000000000000000000000000000"
+        "0B020001101153595354454D2700000000000000000000FF00";
+    TadAskerConfig cfg;
+    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo, NULL};
+    uint8_t raw[64];
+    char hex[2 * sizeof raw + 1];
+
+    uint32_t now = bring_up(0x00F8);
+    tad_asker_config_default(&cfg, 102, "D102");
+    cfg.own_name = "D102";
+    cfg.terminal_number = 1;
+    cfg.user_name = "SYSTEM";
+    CHECK_EQ(tad_asker_init(&s_asker, &cfg, &cb), XMSG_OK);
+    CHECK_EQ(tad_asker_connect(&s_asker, &s_a, now), XMSG_OK);
+    for (int i = 0; i < 200 && s_host.count == 0; i++)
+    {
+        pump(++now);
+    }
+    host_send_hex(k_tad_host_frames[0].hex, k_tad_host_frames[0].flags1, 0, now); /* accept */
+    for (int i = 0; i < 200 && s_host.count < 2; i++)
+    {
+        pump(++now);
+    }
+    host_send_hex(k_tad_host_frames[1].hex, k_tad_host_frames[1].flags1, 0, now); /* port */
+    for (int i = 0; i < 200; i++)
+    {
+        pump(++now);
+    }
+    CHECK_EQ(s_asker.state, TAD_ASKER_PORT_ASSIGNED);
+    CHECK_EQ(s_host.count, 2); /* letter and session setup */
+
+    int len = test_hex_to_bytes(k_who, raw, sizeof raw);
+    CHECK_EQ(len, 34);
+    xmsg_be16_write(raw + 18, 100);    /* to our system */
+    xmsg_be16_write(raw + 22, 102);    /* from the host */
+    xmsg_be16_write(raw + 24, 0x0728); /* from the host's asking port */
+    for (int i = 0; i < len; i++)
+    {
+        static const char k_digits[] = "0123456789ABCDEF";
+        hex[2 * i] = k_digits[raw[i] >> 4];
+        hex[2 * i + 1] = k_digits[raw[i] & 0x0Fu];
+    }
+    hex[2 * len] = '\0';
+    host_send_hex(hex, 0x0300, 0, now);
+    for (int i = 0; i < 400; i++)
+    {
+        pump(++now);
+    }
+    CHECK_EQ(s_asker.stats.who_answers, 1);
+    CHECK_EQ(s_host.count, 3); /* the 7IAM and nothing else: no DUMM for a question */
+    if (s_host.count == 3)
+    {
+        const uint8_t *f = s_host.frames[2];
+        CHECK_BYTES(f + 14, 4, "21008684"); /* setup flags, data role */
+        CHECK_EQ(xmsg_be16_read(f + 18), 102);
+        CHECK_EQ(xmsg_be16_read(f + OFF_DST_PORT), 0x0728);
+        CHECK_EQ(xmsg_be16_read(f + 22), 100);
+        CHECK_EQ(xmsg_be16_read(f + OFF_SRC_PORT), s_asker.base.local_port);
+        CHECK_BYTES(f + 26, 2, "0048");
+        CHECK_EQ(s_host.lens[2], 95);
+        CHECK_BYTES(f + 28, s_host.lens[2] - 28, k_iam_body);
+        CHECK_BYTES(f + 28, 4, "0000003F");
+    }
+    CHECK_EQ(s_asker.state, TAD_ASKER_PORT_ASSIGNED); /* a question changes nothing else */
+}
+
+/* The default answer names us "D" + our system number, and refuses names that do not fit. */
+static void who_are_you_default_name_and_limits(void)
+{
+    TadAskerConfig cfg;
+    TadAsker a;
+    tad_asker_config_default(&cfg, 102, "D102");
+    CHECK(cfg.own_name == NULL);
+    CHECK_EQ(cfg.terminal_number, 1);
+    CHECK(strcmp(cfg.user_name, "REMOTE") == 0);
+    cfg.user_name = "12345678901234567"; /* 17: no room for the "'" */
+    CHECK_EQ(tad_asker_init(&a, &cfg, NULL), XMSG_EINVAL);
+    cfg.user_name = "1234567890123456"; /* 16 fits */
+    CHECK_EQ(tad_asker_init(&a, &cfg, NULL), XMSG_OK);
+    cfg.own_name = "123456789012345678901234567890123"; /* 33 */
+    CHECK_EQ(tad_asker_init(&a, &cfg, NULL), XMSG_EINVAL);
+}
+
 static void typing_rules(void)
 {
     TadAsker a;
@@ -820,5 +916,7 @@ int main(void)
     letter_is_sent_again_after_a_host_restart();
     hangup_before_the_port_goes_out_with_the_port();
     hangup_while_running_drops_what_waits();
+    who_are_you_is_answered_like_the_real_asker();
+    who_are_you_default_name_and_limits();
     TEST_DONE();
 }

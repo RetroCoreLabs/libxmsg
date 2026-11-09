@@ -47,8 +47,21 @@ extern "C"
 #define TAD_OP_RAW_07 0x07u /**< port assignment: 5 bytes, 00 + host system + session port */
 #define TAD_OP_RAW_1B 0x1Bu /**< session setup, no data */
 #define TAD_OP_RAW_1C 0x1Cu /**< session setup, one data byte 00 */
-#define TAD_OP_RAW_FD 0xFDu /**< the host's "session over"; answered with DCON */
-#define TAD_OP_RAW_FF 0xFFu /**< last element of the setup chains */
+#define TAD_OP_RAW_FD 0xFDu /**< 7POLL: a notice from *TADADM; nothing is sent back */
+
+/* 7WHO and 7IAM: the symbol names and values are in the SINTRAN J, K03, L07 and M06 symbol
+ * tables (7WHO=000374, 7IAM=000050 octal). MEASURED on the wire in RetroIO
+ * pcap-decode-sample.json: 7WHO in records 3653-3665 (node 103 to 102, bare control frame,
+ * body FC 00), each answered by 7IAM in records 3618-3630 (102 back to the asking port). TADA
+ * sends 7WHO to fill the TERMNO, USER and SYSTEM columns of a remote terminal and waits for
+ * the answer; without one it hangs (live D100, 2026-11-09). */
+#define TAD_OP_WHO        0xFCu /**< "who are you": no data */
+#define TAD_OP_IAM        0x28u /**< "I am": no data, then the elements below */
+#define TAD_OP_IAM_SYS    0x0Au /**< in 7IAM: 33 bytes, our system name + "'" + zeros */
+#define TAD_OP_IAM_USER   0x10u /**< in 7IAM: 17 bytes, the user name + "'" + zeros */
+#define TAD_IAM_SYS_SIZE  33u
+#define TAD_IAM_USER_SIZE 17u
+#define TAD_OP_RAW_FF     0xFFu /**< last element of the setup chains */
 
 /** A view of one message in a chain. */
 typedef struct TadMessage

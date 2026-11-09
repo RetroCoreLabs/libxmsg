@@ -627,13 +627,25 @@ static void frames_outside_connected_draw_dm_or_silence(void)
     CHECK_EQ(lapb_state(&l), LAPB_DISCONNECTED);
 }
 
-static void unknown_address_is_ignored_and_counted(void)
+/* RetroCore D100 sometimes sends an I-frame with address 0x07 (0x87 when the info length is
+ * odd) instead of 0x09/0x89 - MEASURED 2026-11-09, twice in one TADA run. The C# takes any
+ * address; so do we, and count it. Dropping them cost a 1 s T1 resend each time. */
+static void unusual_address_is_taken_and_counted(void)
 {
     LapbLink l;
     new_connected_initiator(&l, NULL);
-    uint8_t odd[] = {0x03, 0x01, 0x00, 0x66};
-    CHECK_EQ(lapb_rx_frame(&l, odd, sizeof odd, 0), XMSG_EPROTO);
-    CHECK_EQ(l.stats.bad_address, 1);
+    int before = s_c.got_count;
+    uint8_t even[] = {0x07, 0x00, 0xAA, 0xBB}; /* I, N(S)=0 N(R)=0, two info bytes */
+    CHECK_EQ(lapb_rx_frame(&l, even, sizeof even, 0), XMSG_OK);
+    uint8_t odd[] = {0x87, 0x02, 0xCC}; /* I, N(S)=1, one info byte */
+    CHECK_EQ(lapb_rx_frame(&l, odd, sizeof odd, 0), XMSG_OK);
+    CHECK_EQ(s_c.got_count, before + 2);
+    CHECK_EQ(l.stats.unusual_address, 2);
+    if (s_c.got_count == before + 2)
+    {
+        CHECK_BYTES(s_c.got[before], s_c.got_len[before], "AA BB");
+        CHECK_BYTES(s_c.got[before + 1], s_c.got_len[before + 1], "CC");
+    }
     uint8_t runt[] = {0x09};
     CHECK_EQ(lapb_rx_frame(&l, runt, 1, 0), XMSG_EPROTO);
 }
@@ -731,7 +743,7 @@ int main(void)
     duplicate_is_reacknowledged_not_rejected();
     sabm_burst_is_answered_in_full_and_the_link_stays_consistent();
     frames_outside_connected_draw_dm_or_silence();
-    unknown_address_is_ignored_and_counted();
+    unusual_address_is_taken_and_counted();
     frame_helpers_decode_every_kind();
     busy_sends_rnr_and_acks_as_rnr_until_released();
     init_rejects_bad_config();

@@ -86,6 +86,7 @@ extern "C"
 #define TAD_XMCSM_SETUP    0x0400u /**< the session setup */
 #define TAD_XMCSM_TERMINAL 0x0108u /**< terminal setup, BDAT, RECO, CERS, DUMM */
 #define TAD_XMCSM_BARE     0x0008u /**< ESCA, DCON */
+#define TAD_XMCSM_IAM      0x0048u /**< 7IAM, as the 7WHO it answers (records 3618, 3653) */
 
 /* Role bytes (sub-header byte 3) on the frames we send. */
 #define TAD_ROLE_LETTER  0xE4u /**< the connect letter */
@@ -146,6 +147,12 @@ typedef struct TadAskerConfig
     bool keystroke_parity;       /**< even parity in bit 7 on typed bytes: true */
     uint32_t connect_timeout_ms; /**< how long to wait for the accept: 30000 */
     uint32_t ack_timeout_ms;     /**< how long to wait for the host's ACK of a frame: 10000 */
+    /* What the asker tells the host when it asks "who are you" (7WHO); TADA prints these in
+     * the SYSTEM, TERMNO and USER columns. */
+    const char *own_name;     /**< our system name, at most 32 characters; NULL = "D" + our
+                                   system number (the form the real asker sends: "D102") */
+    uint16_t terminal_number; /**< our terminal number: 1 */
+    const char *user_name;    /**< the user on our side, at most 16 characters: "REMOTE" */
 } TadAskerConfig;
 
 /** The kinds of frame the asker sends. */
@@ -160,7 +167,8 @@ typedef enum TadAskerSend
     TAD_SEND_CERS,
     TAD_SEND_DUMM,
     TAD_SEND_TEXT,
-    TAD_SEND_DCON
+    TAD_SEND_DCON,
+    TAD_SEND_IAM /**< the answer to the host's 7WHO */
 } TadAskerSend;
 
 /** Counters for tests and diagnostics. */
@@ -172,6 +180,7 @@ typedef struct TadAskerStats
     uint32_t xense_resends;
     uint32_t host_notices;    /**< 0xFD notices from the host's *TADADM port */
     uint32_t restart_resends; /**< frames sent again after the host restarted its count */
+    uint32_t who_answers;     /**< 7WHO questions answered with 7IAM */
     uint32_t text_bytes_in;
     uint32_t text_bytes_out;
 } TadAskerStats;
@@ -183,6 +192,8 @@ typedef struct TadAsker
     TadAskerCallbacks cb;
     TadAskerConfig cfg;
     char system_name[16];
+    char own_name[TAD_IAM_SYS_SIZE];   /**< copied from the config; empty = "D" + number */
+    char user_name[TAD_IAM_USER_SIZE]; /**< copied from the config */
     TadAskerState state;
     int error;
     uint16_t tadadm_port;  /**< the *TADADM port, from the accept's source port */
@@ -190,6 +201,7 @@ typedef struct TadAsker
     uint8_t lun[2];        /**< the 0x0B data of the port assignment, as received */
     bool rfi_open;         /**< input granted and not yet used */
     bool hangup_wanted;    /**< tad_asker_hangup() came before the session port was known */
+    uint16_t who_port;     /**< the port the last 7WHO came from: where 7IAM goes */
     /* Frames waiting to go, oldest first. */
     uint8_t queue[TAD_ASKER_QUEUE];
     uint8_t q_head;

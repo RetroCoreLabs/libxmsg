@@ -12,6 +12,7 @@
  *   ND100X_SYSTEM      its system name as XROUT knows it (default D100)
  *   ND100X_USER        user to log in as (default SYSTEM)
  *   ND100X_PASSWORD    password (default empty)
+ *   ND100X_REACH_FIRST 1: send a reachability request (0x19) before connecting (default 0)
  *   ND100X_FLAGS1_FILE where our Flags1 count to the host is kept between runs (default
  *                      nd100x_tad.flags1 in the working directory; a line "peer next" and a
  *                      line "seed N" for the port-word generator, as host_tad_telnet keeps). Without it every run starts at 0, the
@@ -20,8 +21,12 @@
  *
  * What it types, one line per input grant, as the real D100 user did in the captured session
  * (record 257 onward in RetroIO pcap-decode-sample.json): the user name, the password, then
- * LIST-FILES,,, and LOGOUT. What is checked: the session reaches RUNNING, every line goes out,
- * text comes back, the host sends its session notice (0xFD) after LOGOUT, and we then hang up
+ * LIST-FILES,,, and LOGOUT, with TADA before LOGOUT. TADA lists every TAD terminal; for each
+ * remote one, ours included, the host asks "who are you" (7WHO) and waits for our 7IAM, so the
+ * listing reaches its end and the next prompt only if we answer (it hung on our row before).
+ * What is checked: the session reaches RUNNING, every line goes out (LOGOUT can only go out
+ * after TADA has finished), text comes back, TADA's header and our own system name in its
+ * listing are seen, at least one 7WHO was answered, the host sends its session notice (0xFD) after LOGOUT, and we then hang up
  * with DCON, as a real asker does (state CLOSED). A notice that comes BEFORE LOGOUT (D100 sends
  * one ~3 s after connect) must not end anything. The whole run must finish within two minutes.
  */
@@ -40,10 +45,48 @@ static void log_sink(void *ctx, XmsgLogCategory category, XmsgLogLevel level, co
 
 static size_t s_text_len;
 
+/* Looks for one string in the host text as it streams past, across frame boundaries. */
+typedef struct TextMatch
+{
+    const char *want;
+    size_t at;
+    bool seen;
+} TextMatch;
+
+static TextMatch s_tada_header = {"TAD/TYP RESERV", 0, false};
+static TextMatch s_our_name = {NULL, 0, false}; /* "D" + our node, set in main */
+
+static void match_feed(TextMatch *m, const uint8_t *bytes, size_t len)
+{
+    if (m->want == NULL || m->seen)
+    {
+        return;
+    }
+    size_t wlen = strlen(m->want);
+    for (size_t i = 0; i < len && !m->seen; i++)
+    {
+        char c = (char)(bytes[i] & 0x7Fu);
+        if (c == m->want[m->at])
+        {
+            m->at++;
+        }
+        else
+        {
+            m->at = (c == m->want[0]) ? 1u : 0u;
+        }
+        if (m->at == wlen)
+        {
+            m->seen = true;
+        }
+    }
+}
+
 static void on_text(void *ctx, const uint8_t *bytes, size_t len)
 {
     (void)ctx;
     s_text_len += len;
+    match_feed(&s_tada_header, bytes, len);
+    match_feed(&s_our_name, bytes, len);
     fwrite(bytes, 1, len, stdout);
 }
 
@@ -211,11 +254,19 @@ int main(void)
     uint16_t own = env_u16("ND100X_OUR_NODE", 19999);
     uint16_t peer = env_u16("ND100X_PEER_NODE", 100);
     const char *system = env_str("ND100X_SYSTEM", "D100");
-    char lines[4][80];
+    enum
+    {
+        N_LINES = 5
+    };
+    char lines[N_LINES][80];
     snprintf(lines[0], sizeof lines[0], "%s\r", env_str("ND100X_USER", "SYSTEM"));
     snprintf(lines[1], sizeof lines[1], "%s\r", env_str("ND100X_PASSWORD", ""));
     snprintf(lines[2], sizeof lines[2], "LIST-FILES,,,\r");
-    snprintf(lines[3], sizeof lines[3], "LOGOUT\r");
+    snprintf(lines[3], sizeof lines[3], "TADA\r");
+    snprintf(lines[4], sizeof lines[4], "LOGOUT\r");
+    static char s_name[8];
+    snprintf(s_name, sizeof s_name, "D%u", (unsigned)own);
+    s_our_name.want = s_name;
 
     XmsgLogPort sink = {NULL, log_sink};
     xmsg_log_set_sink(&sink);
@@ -260,6 +311,9 @@ int main(void)
     uint32_t start = test_now_ms();
     uint32_t now = start;
     bool connected = false;
+    bool reach_first = env_u16("ND100X_REACH_FIRST", 0) != 0;
+    bool reach_sent = false;
+    uint32_t reach_at = 0;
     int next_line = 0;
     unsigned notices_at_logout = 0;
     uint8_t chunk[2048];
@@ -279,23 +333,33 @@ int main(void)
             xmsg_node_feed(&node, chunk, (size_t)r, now);
         }
         xmsg_node_tick(&node, now);
-        if (!connected && xmsg_node_is_ready(&node))
+        /* ND100X_REACH_FIRST=1: send our own reachability request (0x19) when the link is
+         * ready and connect one second later. A measurement switch: does the host start its
+         * count for us again when WE announce ourselves? */
+        if (reach_first && !reach_sent && xmsg_node_is_ready(&node))
+        {
+            CHECK_EQ(xmsg_node_send_reach(&node, peer, now), XMSG_OK);
+            reach_sent = true;
+            reach_at = now;
+        }
+        if (!connected && xmsg_node_is_ready(&node) && (!reach_first || now - reach_at >= 1000))
         {
             CHECK_EQ(tad_asker_connect(&asker, &node, now), XMSG_OK);
             connected = true;
         }
-        if (next_line < 4 && tad_asker_may_type(&asker))
+        if (next_line < N_LINES && tad_asker_may_type(&asker))
         {
             size_t n = strlen(lines[next_line]);
             CHECK_EQ(tad_asker_write(&asker, (const uint8_t *)lines[next_line], n, now), (int)n);
             next_line++;
-            if (next_line == 4)
+            if (next_line == N_LINES)
             {
                 notices_at_logout = s_notices;
             }
         }
         /* After LOGOUT, the host's notice says the login is over: our user is done, hang up. */
-        if (next_line == 4 && asker.state == TAD_ASKER_RUNNING && s_notices > notices_at_logout)
+        if (next_line == N_LINES && asker.state == TAD_ASKER_RUNNING &&
+            s_notices > notices_at_logout)
         {
             CHECK_EQ(tad_asker_hangup(&asker, now), XMSG_OK);
         }
@@ -307,13 +371,17 @@ int main(void)
     }
 
     CHECK(connected);
-    CHECK_EQ(next_line, 4);
+    CHECK_EQ(next_line, N_LINES);
+    CHECK(s_tada_header.seen);
+    CHECK(s_our_name.seen);
+    CHECK(asker.stats.who_answers >= 1);
     CHECK_EQ(asker.state, TAD_ASKER_CLOSED);
     CHECK(s_text_len > 0);
     CHECK_EQ(node.stats.bad_headers, 0);
-    printf("  %u text bytes, %u frames in, %u out, %u XENSE resends, %u ms\n", (unsigned)s_text_len,
-           asker.stats.frames_in, asker.stats.frames_out, asker.stats.xense_resends,
-           (unsigned)(now - start));
+    printf("  %u text bytes, %u frames in, %u out, %u XENSE resends, %u who-are-you answers, %u "
+           "ms\n",
+           (unsigned)s_text_len, asker.stats.frames_in, asker.stats.frames_out,
+           asker.stats.xense_resends, asker.stats.who_answers, (unsigned)(now - start));
     xmsg_node_link_stop(&node, now);
     test_tcp_close(s_sock);
     TEST_DONE();

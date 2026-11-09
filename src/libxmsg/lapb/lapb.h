@@ -115,9 +115,9 @@ typedef struct LapbStats
     uint32_t frmr_received;
     uint32_t t1_timeouts;
     uint32_t t3_polls;
-    uint32_t duplicates;     /**< I-frames already received, re-acknowledged */
-    uint32_t bad_address;    /**< frames with an address the ND dialect does not use */
-    uint32_t ctl_queue_full; /**< control frames that could not be queued (should stay 0) */
+    uint32_t duplicates;      /**< I-frames already received, re-acknowledged */
+    uint32_t unusual_address; /**< frames taken with an address other than 01/09/89 */
+    uint32_t ctl_queue_full;  /**< control frames that could not be queued (should stay 0) */
 } LapbStats;
 
 /** Called with each in-sequence information field, in order, exactly once. */

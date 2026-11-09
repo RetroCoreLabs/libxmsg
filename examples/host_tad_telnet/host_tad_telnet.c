@@ -424,6 +424,9 @@ static void client_start(Client *c, uint32_t now)
     TadAskerCallbacks cb = {c, cb_text, cb_state, NULL, cb_echo, NULL};
     tad_asker_config_default(&cfg, s_peer, s_system);
     cfg.keystroke_parity = !s_raw_keys;
+    /* What TADA on the host shows for this session (7IAM): terminal = client slot + 1. */
+    cfg.terminal_number = (uint16_t)((c - s_clients) + 1);
+    cfg.user_name = "TELNET";
     if (tad_asker_init(&c->asker, &cfg, &cb) != XMSG_OK)
     {
         client_say(c, "bad system name\r\n");
