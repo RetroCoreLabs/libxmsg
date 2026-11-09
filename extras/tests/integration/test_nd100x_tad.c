@@ -26,9 +26,10 @@
  * listing reaches its end and the next prompt only if we answer (it hung on our row before).
  * What is checked: the session reaches RUNNING, every line goes out (LOGOUT can only go out
  * after TADA has finished), text comes back, TADA's header and our own system name in its
- * listing are seen, at least one 7WHO was answered, the host sends its session notice (0xFD) after LOGOUT, and we then hang up
- * with DCON, as a real asker does (state CLOSED). A notice that comes BEFORE LOGOUT (D100 sends
- * one ~3 s after connect) must not end anything. The whole run must finish within two minutes.
+ * listing are seen, at least one 7WHO was answered, the host says the login ended (SYCN 000B)
+ * exactly once and only after LOGOUT, and we then hang up with DCON, as a real asker does (state
+ * CLOSED). A 0xFD notice that comes BEFORE LOGOUT (D100 sends one ~3 s after connect) must not
+ * end anything. The whole run must finish within two minutes.
  */
 #include "libxmsg/log/xmsg_log.h"
 #include "libxmsg/tad/tad_asker.h"
@@ -97,6 +98,18 @@ static void on_notice(void *ctx)
     (void)ctx;
     s_notices++;
     printf("\n  host session notice %u\n", s_notices);
+}
+
+static unsigned s_logouts;
+static int s_logout_after_line = -1; /* lines sent when the logout signal came */
+static int s_lines_sent;
+
+static void on_logged_out(void *ctx)
+{
+    (void)ctx;
+    s_logouts++;
+    s_logout_after_line = s_lines_sent;
+    printf("\n  host says the login ended (SYCN 000B) %u\n", s_logouts);
 }
 
 static void on_state(void *ctx, TadAskerState st, int error)
@@ -324,7 +337,7 @@ int main(void)
 
     static TadAsker asker;
     TadAskerConfig acfg;
-    TadAskerCallbacks acb = {NULL, on_text, on_state, NULL, NULL, on_notice};
+    TadAskerCallbacks acb = {NULL, on_text, on_state, NULL, NULL, on_notice, on_logged_out};
     tad_asker_config_default(&acfg, peer, system);
     CHECK_EQ(tad_asker_init(&asker, &acfg, &acb), XMSG_OK);
 
@@ -372,14 +385,16 @@ int main(void)
             size_t n = strlen(lines[next_line]);
             CHECK_EQ(tad_asker_write(&asker, (const uint8_t *)lines[next_line], n, now), (int)n);
             next_line++;
+            s_lines_sent = next_line;
             if (next_line == N_LINES)
             {
                 notices_at_logout = s_notices;
             }
         }
-        /* After LOGOUT, the host's notice says the login is over: our user is done, hang up. */
-        if (next_line == N_LINES && asker.state == TAD_ASKER_RUNNING &&
-            s_notices > notices_at_logout)
+        /* After LOGOUT, the host's SYCN 000B says the login is over: our user is done, hang
+         * up (the bridge does the same). The 0xFD notice is no longer what decides. */
+        (void)notices_at_logout;
+        if (next_line == N_LINES && asker.state == TAD_ASKER_RUNNING && s_logouts > 0)
         {
             CHECK_EQ(tad_asker_hangup(&asker, now), XMSG_OK);
         }
@@ -395,6 +410,10 @@ int main(void)
     CHECK(s_tada_header.seen);
     CHECK(s_our_name.seen);
     CHECK(asker.stats.who_answers >= 1);
+    /* The logout signal came exactly once, and only after LOGOUT went out. */
+    CHECK_EQ(s_logouts, 1);
+    CHECK_EQ(asker.stats.logouts, 1);
+    CHECK_EQ(s_logout_after_line, N_LINES);
     CHECK_EQ(asker.state, TAD_ASKER_CLOSED);
     CHECK(s_text_len > 0);
     CHECK_EQ(node.stats.bad_headers, 0);

@@ -99,6 +99,37 @@ build/examples/host_tad_telnet/host_tad_telnet --hdlc 127.0.0.1:1362 --node 1999
     --peer 100 --system D100 --listen 2300
 ```
 
+The tool has two modes, chosen with `--mode`:
+
+| Mode | What a telnet client gets | When SINTRAN logs out |
+|---|---|---|
+| `direct` (default) | a TAD session on `--system` at once | the session is hung up and the telnet connection closed |
+| `prompt` | `login:` / `password:`, then the tool's `TAD>` command line | the session is hung up and the user is back at `TAD>` |
+
+At `TAD>`: `CONNECT <system>` (for example `CONNECT D102`), `LIST` (not implemented yet), `WHO`
+(the clients on the tool), `INFO` (the link: nodes, state, counters, uptime), `HELP`, and
+`EXIT`/`LOGOUT`/`QUIT`. In both modes a dropped telnet connection hangs the TAD session up at once.
+
+Other switches:
+
+| Switch | Default | Meaning |
+|---|---|---|
+| `--users FILE` | `host_tad_telnet.users` | the users for prompt mode; the tool will not start in prompt mode without at least one |
+| `--esc-ms N` | 50 | an ESC with no other byte within N ms is the escape key (the host breaks the running program); 0 = ESC is always text |
+| `--term-type N` | 0 | the terminal type sent to the host, decimal |
+| `--user NAME` | `TELNET` | the user name TADA shows for the session, at most 16 characters |
+| `--raw-keys` | off | typed bytes go without the parity bit |
+
+Users are kept with a PBKDF2-HMAC-SHA256 hash (random 16-byte salt, 100000 iterations), one line
+each: `name:pbkdf2-sha256:<iterations>:<salt hex>:<hash hex>`; lines starting with `#` are
+comments. Manage them without a running tool:
+
+```bash
+host_tad_telnet --add-user NAME [--users FILE]   # asks for the password twice, echo off
+host_tad_telnet --del-user NAME [--users FILE]
+host_tad_telnet --list-users [--users FILE]
+```
+
 ## Building from source
 
 The CMake entry point is `src/CMakeLists.txt`; the file at the repository root only forwards to it.

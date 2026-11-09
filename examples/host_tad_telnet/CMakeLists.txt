@@ -6,5 +6,5 @@
 add_executable(host_tad_telnet host_tad_telnet.c)
 target_link_libraries(host_tad_telnet PRIVATE xmsg::xmsg house_warnings)
 if(WIN32)
-    target_link_libraries(host_tad_telnet PRIVATE ws2_32)
+    target_link_libraries(host_tad_telnet PRIVATE ws2_32 bcrypt)
 endif()

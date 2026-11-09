@@ -40,6 +40,12 @@
 #include "libxmsg/xrout/xrout_letter.h"
 #include "libxmsg/tad/tad_codec.h"
 #include "libxmsg/tad/tad_asker.h"
+#include "libxmsg/term/term_escape.h"
+#include "libxmsg/term/term_line.h"
+#include "libxmsg/term/term_report.h"
+#include "libxmsg/auth/auth_hash.h"
+#include "libxmsg/auth/auth_user.h"
+#include "libxmsg/auth/auth_login.h"
 
 #include "libxmsg/gen/sintran_wire.h"
 #include "libxmsg/gen/tad_wire.h"

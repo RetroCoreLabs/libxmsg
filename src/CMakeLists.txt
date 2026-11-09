@@ -49,7 +49,13 @@ set(XMSG_SOURCES
     libxmsg/xmsg/xmsg_node.c
     libxmsg/xrout/xrout_letter.c
     libxmsg/tad/tad_codec.c
-    libxmsg/tad/tad_asker.c)
+    libxmsg/tad/tad_asker.c
+    libxmsg/term/term_escape.c
+    libxmsg/term/term_line.c
+    libxmsg/term/term_report.c
+    libxmsg/auth/auth_hash.c
+    libxmsg/auth/auth_user.c
+    libxmsg/auth/auth_login.c)
 if(XMSG_WITH_ASYNC_FRAMER)
     list(APPEND XMSG_SOURCES libxmsg/hdlc/hdlc_async.c)
 endif()

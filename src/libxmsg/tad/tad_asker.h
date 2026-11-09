@@ -132,6 +132,14 @@ typedef struct TadAskerCallbacks
      *  comes after LOGOUT, and on some hosts also right after login (see the file comment). An
      *  application that has seen its user log out calls tad_asker_hangup() on it. */
     void (*host_notice)(void *ctx);
+    /** The SINTRAN login on the host has ended: a host chain held SYCN with data 00 0B. This is
+     *  THE logout signal. MEASURED in RetroIO pcap-decode-sample.json: SYCN 000B is sent 8 times
+     *  (records 337, 617, 668, 856, 1337, 1373, 1408, 1515), always in the same chain as the
+     *  BDAT "CR LF --EXIT-- CR LF" after LOGOUT, and never anywhere else. The host then sends CESC
+     *  and the 0xFD notice, and never a DCON: the asker hangs up. The asker does NOT hang up by
+     *  itself; the application decides (call tad_asker_hangup()). Raised once per host chain
+     *  (a repeated frame is not seen again). */
+    void (*logged_out)(void *ctx);
 } TadAskerCallbacks;
 
 /** Settings; tad_asker_config_default() fills the measured values. */
@@ -141,7 +149,10 @@ typedef struct TadAskerConfig
     uint16_t peer_system;        /**< its XMSG system number (0 = same as peer_node) */
     const char *system_name;     /**< the target system as XROUT knows it, e.g. "D102" */
     uint8_t tmod;                /**< terminal mode in the setup: 0x08 */
-    uint8_t ttyp[2];             /**< terminal type: 00 00 */
+    uint8_t ttyp[2];             /**< terminal type, high byte first: 00 00. The J source
+                                      BDTTYP copies these two bytes straight into the host's
+                                      terminal type; real askers send 00 00. Type 93 decimal is
+                                      00 5D (the codec writes the bytes in this order). */
     uint8_t desc;                /**< escape key: 0x1B */
     uint8_t opsv[3];             /**< OPSV: 4C 01 04 */
     bool keystroke_parity;       /**< even parity in bit 7 on typed bytes: true */
@@ -181,6 +192,8 @@ typedef struct TadAskerStats
     uint32_t host_notices;    /**< 0xFD notices from the host's *TADADM port */
     uint32_t restart_resends; /**< frames sent again after the host restarted its count */
     uint32_t who_answers;     /**< 7WHO questions answered with 7IAM */
+    uint32_t logouts;         /**< host chains holding SYCN 00 0B: the login ended */
+    uint32_t escapes;         /**< ESCA frames queued by tad_asker_escape() */
     uint32_t resyncs;         /**< unanswered letters that drew a resync */
     uint32_t text_bytes_in;
     uint32_t text_bytes_out;
@@ -257,6 +270,25 @@ int tad_asker_connect(TadAsker *a, XmsgNode *node, uint32_t now_ms);
  *         or the previous text is still on its way; XMSG_ESTATE when not running; XMSG_EINVAL.
  */
 int tad_asker_write(TadAsker *a, const uint8_t *bytes, size_t len, uint32_t now_ms);
+
+/**
+ * @brief Send ESCA (escape) to the host's session port: the host breaks the running program,
+ *        as the ESC key does on a local terminal.
+ *
+ *        The host breaks a program only on an ESCA message (opcode 0x08); an ESC byte inside
+ *        BDAT text is just data. It answers ESRS (0x20) when escape is enabled and EDRS (0x29)
+ *        when it is disabled (SINTRAN III version J NPL source 20-COS-TAD-POF-CODE.NPL lines
+ *        1385-1404). The frame is the same bare control frame the asker sends during the
+ *        terminal setup (flags 0x82, role 0x94, XMCSM 0008, body 00 00 00 02 08 00). It does NOT
+ *        need an input grant (RFI): it is queued like any reply and goes out after the frame now
+ *        in flight. Typed text waiting for a grant is not touched.
+ * @param a      Session.
+ * @param now_ms Current time.
+ * @return XMSG_OK (queued); XMSG_EINVAL for NULL; XMSG_ESTATE when there is no session port yet
+ *         or the terminal setup is not yet queued (idle, connecting, accepted, port-assigned)
+ *         or the session is ending (closing, closed, failed).
+ */
+int tad_asker_escape(TadAsker *a, uint32_t now_ms);
 
 /** @brief Whether the host has granted input that is not yet used. */
 bool tad_asker_may_type(const TadAsker *a);

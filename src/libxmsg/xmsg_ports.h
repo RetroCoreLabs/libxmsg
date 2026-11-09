@@ -37,6 +37,9 @@ typedef struct XmsgTransportPort
 {
     void *ctx;                                                 /**< passed back to write */
     int (*write)(void *ctx, const uint8_t *bytes, size_t len); /**< bytes accepted, 0 or negative */
+    /** The line speed in bits per second, for a transport that knows it (a serial or PIO line
+     *  on an ESP32 or Pico). NULL, or a return of 0, means not known: a TCP stream has none. */
+    uint32_t (*line_speed)(void *ctx);
 } XmsgTransportPort;
 
 /**

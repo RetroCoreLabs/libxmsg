@@ -468,6 +468,7 @@ static void answer_terminal_frame(TadAsker *a, const uint8_t *chain, size_t clen
     bool has_cesc = false;
     bool has_fd = false;
     bool has_content = false;
+    bool has_logout = false;
 
     tad_reader_init(&r, chain, clen);
     while (tad_reader_next(&r, &m))
@@ -509,6 +510,16 @@ static void answer_terminal_frame(TadAsker *a, const uint8_t *chain, size_t clen
         case TAD_OP_RAW_FD:
             has_fd = true;
             break;
+        case TAD_OP_SYCN:
+            /* SYCN is content (answered with DUMM, as the replayed capture shows). Data 00 0B is
+             * the end of the login: see logged_out in tad_asker.h. Other values (0002, 0003,
+             * 0006, 000A, 000C) are steps of the login ladder. */
+            has_content = true;
+            if (m.len >= 2 && m.data[0] == 0x00u && m.data[1] == TAD_SYCN_LOGGED_OUT)
+            {
+                has_logout = true;
+            }
+            break;
         default:
             has_content = true; /* BMMX, SYCN and the rest: content that needs a DUMM */
             XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_DEBUG, "host TAD opcode 0x%02X, %u bytes", m.opcode,
@@ -517,6 +528,15 @@ static void answer_terminal_frame(TadAsker *a, const uint8_t *chain, size_t clen
         }
     }
 
+    if (has_logout)
+    {
+        a->stats.logouts++;
+        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_INFO, "host says the login ended (SYCN 000B)");
+        if (a->cb.logged_out != NULL)
+        {
+            a->cb.logged_out(a->cb.ctx);
+        }
+    }
     if (has_fd)
     {
         /* A notice, not the end: see the file comment in tad_asker.h. Nothing is sent back;
@@ -827,6 +847,29 @@ int tad_asker_write(TadAsker *a, const uint8_t *bytes, size_t len, uint32_t now_
         xmsg_node_tick(a->base.node, now_ms);
     }
     return (int)take;
+}
+
+int tad_asker_escape(TadAsker *a, uint32_t now_ms)
+{
+    if (a == NULL)
+    {
+        return XMSG_EINVAL;
+    }
+    /* Not before the terminal setup is queued: an ESCA must not overtake it. */
+    if (a->session_port == 0 ||
+        (a->state != TAD_ASKER_TERMINAL_SETUP && a->state != TAD_ASKER_RUNNING))
+    {
+        return XMSG_ESTATE;
+    }
+    a->stats.escapes++;
+    XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_INFO, "escape (ESCA) to session port 0x%04X",
+             a->session_port);
+    enqueue(a, TAD_SEND_ESCA, now_ms);
+    if (a->base.attached && a->base.node != NULL)
+    {
+        xmsg_node_tick(a->base.node, now_ms);
+    }
+    return XMSG_OK;
 }
 
 bool tad_asker_may_type(const TadAsker *a)

@@ -389,7 +389,7 @@ static uint32_t bring_up(uint16_t first_flags1)
 static void asker_start(uint32_t now)
 {
     TadAskerConfig cfg;
-    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo, NULL};
+    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo, NULL, NULL};
     tad_asker_config_default(&cfg, 102, "D102");
     CHECK_EQ(tad_asker_init(&s_asker, &cfg, &cb), XMSG_OK);
     CHECK_EQ(tad_asker_connect(&s_asker, &s_a, now), XMSG_OK);
@@ -525,6 +525,9 @@ static void replay_of_a_real_session(bool over_tcp)
      * session is still running and nothing more was sent. */
     CHECK(early_notice);
     CHECK_EQ(s_asker.stats.host_notices, 2); /* the early one and the one after --EXIT-- */
+    /* SYCN 000B came once, with --EXIT--; the other SYCN values of the login ladder did not
+     * count. The asker's reply to it (a DUMM) matched the captured asker frame above. */
+    CHECK_EQ(s_asker.stats.logouts, 1);
     CHECK_EQ(s_asker.state, TAD_ASKER_RUNNING);
     CHECK_EQ(s_host.count, N_ASKER);
     /* The user is done: hang up. The DCON is acknowledged and the session closes. */
@@ -654,7 +657,7 @@ static void xense_resends_and_other_errors_fail(void)
     uint32_t now = bring_up(0x00F8);
     /* Hold the host's ACKs back by not pumping, so the letter stays unacknowledged. */
     TadAskerConfig cfg;
-    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo, NULL};
+    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo, NULL, NULL};
     tad_asker_config_default(&cfg, 102, "D102");
     CHECK_EQ(tad_asker_init(&s_asker, &cfg, &cb), XMSG_OK);
     CHECK_EQ(tad_asker_connect(&s_asker, &s_a, now), XMSG_OK);
@@ -782,7 +785,7 @@ static void who_are_you_is_answered_like_the_real_asker(void)
         "0000003F28000A2144313032270000000000000000000000000000000000000000000000000000000000"
         "0B020001101153595354454D2700000000000000000000FF00";
     TadAskerConfig cfg;
-    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo, NULL};
+    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo, NULL, NULL};
     uint8_t raw[64];
     char hex[2 * sizeof raw + 1];
 
@@ -869,7 +872,7 @@ static void who_are_you_default_name_and_limits(void)
 static void unanswered_letter_draws_one_resync(void)
 {
     TadAskerConfig cfg;
-    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo, NULL};
+    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo, NULL, NULL};
     uint8_t chunk[256];
     size_t n;
 
@@ -944,6 +947,166 @@ static void typing_rules(void)
     CHECK_EQ(tad_asker_init(&a, &cfg, NULL), XMSG_EINVAL);
 }
 
+/* ------------------------------------------------------------------ logout, escape, type */
+
+static unsigned s_logged_out;
+
+static void w_logged_out(void *ctx)
+{
+    (void)ctx;
+    s_logged_out++;
+}
+
+/* The host frame with this Flags1 in the capture. */
+static const char *host_hex(uint16_t flags1)
+{
+    for (size_t i = 0; i < N_HOST; i++)
+    {
+        if (k_tad_host_frames[i].flags1 == flags1)
+        {
+            return k_tad_host_frames[i].hex;
+        }
+    }
+    CHECK(false);
+    return k_tad_host_frames[0].hex;
+}
+
+/* Bring a session to the terminal setup with the captured accept, port assignment and DUMM:
+ * the asker has then sent letter, session setup, terminal setup and ESCA (4 frames). */
+static uint32_t to_terminal_setup(const TadAskerConfig *cfg)
+{
+    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo, NULL, w_logged_out};
+    uint32_t now = bring_up(0x00F8);
+    s_logged_out = 0;
+    CHECK_EQ(tad_asker_init(&s_asker, cfg, &cb), XMSG_OK);
+    CHECK_EQ(tad_asker_connect(&s_asker, &s_a, now), XMSG_OK);
+    for (size_t k = 0; k < 3; k++)
+    {
+        for (int i = 0; i < 300 && s_host.count < k + 1u; i++)
+        {
+            pump(++now);
+        }
+        host_send_hex(k_tad_host_frames[k].hex, k_tad_host_frames[k].flags1, 0, now);
+    }
+    for (int i = 0; i < 400 && s_host.count < 4; i++)
+    {
+        pump(++now);
+    }
+    for (int i = 0; i < 100; i++)
+    {
+        pump(++now);
+    }
+    CHECK_EQ(s_asker.state, TAD_ASKER_TERMINAL_SETUP);
+    CHECK_EQ(s_host.count, 4);
+    return now;
+}
+
+/* SYCN 00 0B is the logout: raised once per chain, not again for a repeat of the frame, not for
+ * other SYCN values and not for the 0xFD notice alone (record 595 of the capture file has an FD
+ * right after the login). The asker does not hang up on its own; the reply rule is unchanged
+ * (a DUMM, as for any content). */
+static void logout_signal_once(void)
+{
+    TadAskerConfig cfg;
+    char hex[256];
+    tad_asker_config_default(&cfg, 102, "D102");
+    uint32_t now = to_terminal_setup(&cfg);
+
+    host_send_hex(host_hex(0x0136), 0x0136, 0, now);                  /* SYCN 0003 */
+    host_send_hex(k_tad_host_frames[N_HOST - 1].hex, 0x0137, 0, now); /* FD alone */
+    for (int i = 0; i < 200; i++)
+    {
+        pump(++now);
+    }
+    CHECK_EQ(s_logged_out, 0);
+    CHECK_EQ(s_asker.stats.logouts, 0);
+    CHECK_EQ(s_asker.stats.host_notices, 1);
+
+    /* The same chain with SYCN 000A (logged in): not a logout. */
+    snprintf(hex, sizeof hex, "%s", host_hex(0x0145));
+    hex[strlen(hex) - 1u] = 'A';
+    host_send_hex(hex, 0x0138, 0, now);
+    for (int i = 0; i < 200; i++)
+    {
+        pump(++now);
+    }
+    CHECK_EQ(s_logged_out, 0);
+
+    size_t before = s_host.count;
+    host_send_hex(host_hex(0x0145), 0x0139, 0, now); /* "--EXIT--" + SYCN 000B */
+    for (int i = 0; i < 200; i++)
+    {
+        pump(++now);
+    }
+    CHECK_EQ(s_logged_out, 1);
+    CHECK_EQ(s_asker.stats.logouts, 1);
+    CHECK_EQ(s_asker.state, TAD_ASKER_TERMINAL_SETUP); /* no hang-up by itself */
+    CHECK_EQ(s_host.count, before + 1u);                /* the DUMM, as before */
+    if (s_host.count == before + 1u)
+    {
+        CHECK_BYTES(s_host.frames[before] + 28, s_host.lens[before] - 28, "000000021800");
+    }
+    host_send_hex(host_hex(0x0145), 0x0139, 0, now); /* a repeat of the same frame */
+    for (int i = 0; i < 200; i++)
+    {
+        pump(++now);
+    }
+    CHECK_EQ(s_logged_out, 1);
+    CHECK(s_asker.stats.repeats_in >= 1);
+}
+
+/* tad_asker_escape sends the same bare ESCA frame as the terminal setup does, works with no
+ * input grant open, and leaves typed text alone. Before the terminal setup it is refused. The
+ * terminal type from the config lands in the TTYP bytes. */
+static void escape_and_terminal_type(void)
+{
+    TadAskerConfig cfg;
+    TadAsker idle;
+    tad_asker_config_default(&cfg, 102, "D102");
+    cfg.ttyp[0] = 0x00; /* type 93 decimal = 0x005D, high byte first */
+    cfg.ttyp[1] = 0x5D;
+
+    CHECK_EQ(tad_asker_init(&idle, &cfg, NULL), XMSG_OK);
+    CHECK_EQ(tad_asker_escape(&idle, 0), XMSG_ESTATE); /* no session */
+    CHECK_EQ(tad_asker_escape(NULL, 0), XMSG_EINVAL);
+    idle.state = TAD_ASKER_PORT_ASSIGNED;
+    idle.session_port = 0x04C2;
+    CHECK_EQ(tad_asker_escape(&idle, 0), XMSG_ESTATE); /* would overtake the terminal setup */
+
+    uint32_t now = to_terminal_setup(&cfg);
+    /* Frame 2 is the terminal setup: TMOD 08, TTYP 00 5D, DESC 1B, OPSV 4C 01 04. */
+    CHECK_BYTES(s_host.frames[2] + 28, s_host.lens[2] - 28,
+                "0000000F0C01080D02005D0F011B1F034C0104");
+    CHECK(!s_asker.rfi_open);
+    CHECK_EQ(tad_asker_escape(&s_asker, now), XMSG_OK);
+    for (int i = 0; i < 200 && s_host.count < 5; i++)
+    {
+        pump(++now);
+    }
+    CHECK_EQ(s_host.count, 5);
+    CHECK_EQ(s_asker.stats.escapes, 1);
+    if (s_host.count == 5)
+    {
+        /* Byte for byte the setup ESCA (frame 3) from the sub-header on: flags 0x82, role
+         * 0x94, to the session port, XMCSM 0008, body 00 00 00 02 08 00. */
+        CHECK_EQ(s_host.lens[4], s_host.lens[3]);
+        CHECK(memcmp(s_host.frames[4] + 14, s_host.frames[3] + 14, s_host.lens[3] - 14) == 0);
+        CHECK_BYTES(s_host.frames[4] + 14, 4, "21008294");
+        CHECK_EQ(xmsg_be16_read(s_host.frames[4] + OFF_DST_PORT), 0x04C2);
+        CHECK_BYTES(s_host.frames[4] + 26, s_host.lens[4] - 26, "0008000000020800");
+    }
+
+    /* Running, no grant, typed text waiting: ESCA still goes, and the asker's own pending text
+     * is not touched. */
+    s_asker.state = TAD_ASKER_RUNNING;
+    s_asker.line_len = 3;
+    CHECK_EQ(tad_asker_escape(&s_asker, now), XMSG_OK);
+    CHECK_EQ(s_asker.line_len, 3);
+    s_asker.line_len = 0;
+    CHECK_EQ(tad_asker_hangup(&s_asker, now), XMSG_OK);
+    CHECK_EQ(tad_asker_escape(&s_asker, now), XMSG_ESTATE); /* closing */
+}
+
 int main(void)
 {
     printf("[tad_asker]\n");
@@ -966,5 +1129,7 @@ int main(void)
     who_are_you_is_answered_like_the_real_asker();
     who_are_you_default_name_and_limits();
     unanswered_letter_draws_one_resync();
+    logout_signal_once();
+    escape_and_terminal_type();
     TEST_DONE();
 }

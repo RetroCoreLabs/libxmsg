@@ -63,6 +63,10 @@ extern "C"
 #define TAD_IAM_USER_SIZE 17u
 #define TAD_OP_RAW_FF     0xFFu /**< last element of the setup chains */
 
+/** Low byte of the SYCN data 00 0B: the login has ended (after LOGOUT, with "--EXIT--").
+ *  MEASURED: RetroIO pcap-decode-sample.json records 337, 617, 668, 856, 1337, 1373, 1408, 1515. */
+#define TAD_SYCN_LOGGED_OUT 0x0Bu
+
 /** A view of one message in a chain. */
 typedef struct TadMessage
 {
