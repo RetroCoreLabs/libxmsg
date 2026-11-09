@@ -1,0 +1,26 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: cmake -S src -B build -DHDLC_WERROR=ON
+      - name: Configure (Windows, MinGW gcc)
+        if: runner.os == 'Windows'
+        run: cmake -S src -B build -G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DHDLC_WERROR=ON
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

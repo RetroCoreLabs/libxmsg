@@ -1,5 +1,11 @@
 # libhdlc
 
+[![build](https://github.com/RetroCoreLabs/libhdlc/actions/workflows/build.yml/badge.svg)](https://github.com/RetroCoreLabs/libhdlc/actions/workflows/build.yml)
+[![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
+[![C11](https://img.shields.io/badge/C-11-informational.svg)](#building-and-testing)
+
+[About HDLC](#about-hdlc) | [Status](#status) | [Platforms](#platforms) | [Using it](#using-it) | [Building and testing](#building-and-testing) | [Control frames](extras/docs/control-frames.md)
+
 HDLC framing in portable C11, for gateways that put a synchronous HDLC/SDLC line on a PC. It is
 shared by HDLCGW (ESP32-S2) and RC422Dev (Raspberry Pi Pico), and builds on Linux and Windows for
 host tools and unit tests.
@@ -13,6 +19,25 @@ host tools and unit tests.
 | Lock-free ring | `libhdlc/spsc_ring.h` | A byte ring for exactly ONE writer and ONE reader, no lock, safe from an interrupt. The ring for the Pico. Two writers at once corrupt it. |
 
 `#include "libhdlc/libhdlc.h"` (or `<libhdlc.h>` in an Arduino sketch) pulls in all of it.
+
+## About HDLC
+
+HDLC (High-Level Data Link Control, ISO 13239) and its IBM ancestor SDLC send frames over a
+synchronous serial line: a clock wire plus a data wire, bits flowing continuously. A frame starts
+and ends with the flag `01111110`. Inside a frame the sender inserts a 0 after every five 1s in a
+row (bit stuffing), so the flag pattern can never appear in the data, and seven 1s in a row abort
+a frame. The last two bytes are a CRC-16 frame check. Norsk Data machines, X.25 equipment and IBM
+terminals talk this way; a gateway built on this library lets a PC take part.
+
+## Status
+
+Version 0.1.0, first commit 2026-11-09. Measured that day:
+
+- unit tests pass on Windows (gcc, w64devkit) and Linux (gcc, Ubuntu): 5 test programs, over
+  20000 checks;
+- HDLCGW (ESP32-S2) built against it passed the full two-board sweep against RC422Dev: 376 cases,
+  0 failures, 19200 to 983000 bit/s, frames of 10 to 626 bytes, no frame lost or bad;
+- every file compiles for the Pico's Cortex-M0+; it has not yet run on a Pico.
 
 ## Platforms
 
