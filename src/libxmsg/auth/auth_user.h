@@ -46,7 +46,7 @@ extern "C"
 #define AUTH_DEFAULT_ITERATIONS 100000u
 /** The scheme word in a users-file line. */
 #define AUTH_SCHEME "pbkdf2-sha256"
-/** Room for one formatted line, with its zero (name + scheme + count + hex + flags + separators). */
+/** Room for one formatted line with its zero: name, scheme, count, hex, flags, separators. */
 #define AUTH_LINE_MAX \
     (AUTH_NAME_MAX + 14u + 11u + (2u * AUTH_SALT_SIZE) + (2u * AUTH_HASH_SIZE) + 8u + 14u)
 /** The default admin made by auth_user_make_default_admin(): name and password. */
