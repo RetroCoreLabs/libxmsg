@@ -6,8 +6,9 @@
  *
  * What this layer does: brings the link up (both sides send a SABM and answer the other's; the
  * link is usable only when BOTH exchanges are done), numbers the information frames modulo 8,
- * acknowledges, retransmits on REJ or timeout, honours RNR, polls an idle link every T3, and
- * takes the link down after N2 unanswered polls. Everything above it (the XMSG datagram layer)
+ * acknowledges, retransmits on REJ or timeout, honours RNR, polls an idle link ONCE after T3
+ * of silence (T3 starts again only when the peer next sends something; see the keepalive note
+ * below), and takes the link down after N2 unanswered T1 polls. Everything above it (the XMSG datagram layer)
  * sees a sequence of information fields in order, each delivered once.
  *
  * Where the behaviour comes from: the C# RetroIO.Lapb LapbLayer.cs, which was proven against
