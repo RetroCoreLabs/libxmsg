@@ -17,7 +17,6 @@ endif()
 
 option(XMSG_WITH_COSMOS "Build libcosmos (COSMOS file access client and server)" OFF)
 option(XMSG_WITH_FTP "Build the FTP command core inside libcosmos (needs XMSG_WITH_COSMOS)" OFF)
-option(XMSG_WITH_ASYNC_FRAMER "Compile the RFC 1662 byte framer (off when the line hardware frames)" ON)
 option(XMSG_BUILD_TESTS "Build the CTest unit tests" ${XMSG_IS_TOP_LEVEL})
 option(XMSG_BUILD_EXAMPLES "Build the host examples" ${XMSG_IS_TOP_LEVEL})
 option(XMSG_WERROR "Treat every warning as an error (CI only)" OFF)
@@ -31,6 +30,28 @@ set(XMSG_LOG_MAX_LEVEL 4 CACHE STRING "Highest log level compiled in: 0 ERROR 1 
 include(cmake/house_standard.cmake)
 
 # ---------------------------------------------------------------------------------------------
+# libhdlc: ALL HDLC code (RFC 1662 byte framing, the FCS) lives there, not here (Ronny,
+# 2026-11-09). Found as a sibling checkout next to libxmsg; when that is missing, fetched from
+# GitHub at a fixed commit so CI builds the same code every time. A parent project that already
+# added libhdlc keeps its own copy.
+# ---------------------------------------------------------------------------------------------
+set(LIBXMSG_LIBHDLC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../libhdlc" CACHE PATH
+    "libhdlc checkout (the folder holding its src/); fetched from GitHub when not found")
+set(LIBXMSG_LIBHDLC_COMMIT 02d5241 CACHE STRING "libhdlc commit fetched when no checkout is found")
+if(NOT TARGET hdlc::hdlc)
+    if(EXISTS "${LIBXMSG_LIBHDLC_DIR}/src/CMakeLists.txt")
+        add_subdirectory("${LIBXMSG_LIBHDLC_DIR}/src" "${CMAKE_CURRENT_BINARY_DIR}/libhdlc")
+    else()
+        include(FetchContent)
+        FetchContent_Declare(libhdlc
+            GIT_REPOSITORY https://github.com/RetroCoreLabs/libhdlc.git
+            GIT_TAG ${LIBXMSG_LIBHDLC_COMMIT}
+            SOURCE_SUBDIR src)
+        FetchContent_MakeAvailable(libhdlc)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------------------------
 # libxmsg
 # ---------------------------------------------------------------------------------------------
 # Header-only until P1 lands the first .c file; the empty source list is deliberate so the target
@@ -38,7 +59,6 @@ include(cmake/house_standard.cmake)
 # so a one-line translation unit is generated here until then.
 set(XMSG_SOURCES
     libxmsg/log/xmsg_log.c
-    libxmsg/hdlc/fcs16.c
     libxmsg/lapb/lapb.c
     libxmsg/sintran/sintran_hdr.c
     libxmsg/xmsg/xmsg_subhdr.c
@@ -56,9 +76,6 @@ set(XMSG_SOURCES
     libxmsg/auth/auth_hash.c
     libxmsg/auth/auth_user.c
     libxmsg/auth/auth_login.c)
-if(XMSG_WITH_ASYNC_FRAMER)
-    list(APPEND XMSG_SOURCES libxmsg/hdlc/hdlc_async.c)
-endif()
 
 if(NOT XMSG_SOURCES)
     set(XMSG_PLACEHOLDER_C "${CMAKE_CURRENT_BINARY_DIR}/xmsg_placeholder.c")
@@ -76,10 +93,7 @@ target_compile_definitions(xmsg PUBLIC
     XMSG_REASSEMBLY_SLOTS=${XMSG_REASSEMBLY_SLOTS}
     XMSG_LAPB_N1=${XMSG_LAPB_N1}
     XMSG_LOG_MAX_LEVEL=${XMSG_LOG_MAX_LEVEL})
-if(XMSG_WITH_ASYNC_FRAMER)
-    target_compile_definitions(xmsg PUBLIC XMSG_WITH_ASYNC_FRAMER=1)
-endif()
-target_link_libraries(xmsg PRIVATE house_warnings)
+target_link_libraries(xmsg PUBLIC hdlc::hdlc PRIVATE house_warnings)
 add_library(xmsg::xmsg ALIAS xmsg)
 
 # ---------------------------------------------------------------------------------------------

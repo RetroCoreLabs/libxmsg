@@ -44,11 +44,6 @@
 #define XMSG_LOG_MAX_LEVEL 4
 #endif
 
-/* The RFC 1662 byte framer is compiled unless the line hardware (PIO, SPI firmware) frames. */
-#ifndef XMSG_WITH_ASYNC_FRAMER
-#define XMSG_WITH_ASYNC_FRAMER 1
-#endif
-
 /* Library version, also in library.properties and src/CMakeLists.txt - keep the three in step. */
 #define XMSG_VERSION_MAJOR  0
 #define XMSG_VERSION_MINOR  1

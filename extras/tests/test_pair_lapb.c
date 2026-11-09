@@ -10,7 +10,7 @@
  * and in order at the far end; the link must never go down. Then the same over loopback TCP with
  * a clean wire and real time.
  */
-#include "libxmsg/hdlc/hdlc_async.h"
+#include "libhdlc/byte_frame.h"
 #include "libxmsg/lapb/lapb.h"
 
 #include "pair/test_pair.h"
@@ -21,7 +21,7 @@
 typedef struct Station
 {
     LapbLink lapb;
-    HdlcDecoder dec;
+    byte_frame_rx dec;
     uint8_t rx_buf[XMSG_LAPB_N1 + 4];
     uint8_t tx_frame[XMSG_LAPB_N1 + 2];
     uint8_t tx_wire[2 * (XMSG_LAPB_N1 + 4) + 2];
@@ -96,7 +96,7 @@ static void station_init(Station *s, uint16_t node, TestPair *pair, int side, Te
     cfg.t1_ms = t1_ms;
     cfg.t3_ms = t1_ms * 10;
     lapb_init(&s->lapb, &cfg, s, station_on_info, station_on_state);
-    hdlc_decoder_init(&s->dec, s->rx_buf, sizeof s->rx_buf, true);
+    byte_frame_rx_init(&s->dec, s->rx_buf, sizeof s->rx_buf, true);
     s->pair = pair;
     s->side = side;
     s->sock = sock;
@@ -140,7 +140,7 @@ static void station_pump_tx(Station *s)
         {
             return;
         }
-        size_t w = hdlc_encode(s->tx_frame, (size_t)n, HDLC_ACCM_NONE, true, s->tx_wire,
+        size_t w = byte_frame_encode_accm(s->tx_frame, (size_t)n, BYTE_FRAME_ACCM_NONE, true, s->tx_wire,
                                sizeof s->tx_wire);
         CHECK(w > 0);
         station_write(s, s->tx_wire, w);
@@ -172,12 +172,12 @@ static void station_pump_rx(Station *s, uint32_t now)
         while (off < n)
         {
             size_t used = 0;
-            HdlcDecodeStatus st = hdlc_decoder_feed(&s->dec, chunk + off, n - off, &used);
+            byte_frame_rx_status st = byte_frame_rx_feed(&s->dec, chunk + off, n - off, &used);
             off += used;
-            if (st == HDLC_DECODE_FRAME)
+            if (st == BYTE_FRAME_RX_FRAME)
             {
                 size_t fl;
-                const uint8_t *f = hdlc_decoder_frame(&s->dec, &fl);
+                const uint8_t *f = byte_frame_rx_frame(&s->dec, &fl);
                 lapb_rx_frame(&s->lapb, f, fl, now);
                 station_pump_tx(s);
             }

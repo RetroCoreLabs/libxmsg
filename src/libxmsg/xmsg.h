@@ -24,8 +24,8 @@
 #include "libxmsg/xmsg_errors.h"
 #include "libxmsg/xmsg_ports.h"
 
-#include "libxmsg/hdlc/fcs16.h"
-#include "libxmsg/hdlc/hdlc_async.h"
+#include "libhdlc/hdlc.h"
+#include "libhdlc/byte_frame.h"
 #include "libxmsg/lapb/lapb.h"
 #include "libxmsg/lapb/lapb_frame.h"
 #include "libxmsg/log/xmsg_log.h"

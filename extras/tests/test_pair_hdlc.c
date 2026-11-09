@@ -10,7 +10,7 @@
  * intact and in order. Then the same traffic runs over a real socket pair on 127.0.0.1, which is
  * how a test on two separate processes will look later.
  */
-#include "libxmsg/hdlc/hdlc_async.h"
+#include "libhdlc/byte_frame.h"
 
 #include "pair/test_pair.h"
 #include "test_util.h"
@@ -22,7 +22,7 @@ static TestTcpPair s_tcp;
 
 typedef struct Side
 {
-    HdlcDecoder decoder;
+    byte_frame_rx decoder;
     uint8_t rx_buf[XMSG_LAPB_N1 + 4];
     unsigned next_expected; /**< sequence number the next good frame must carry */
     unsigned received;
@@ -44,7 +44,7 @@ static size_t build_frame(unsigned seq, uint8_t *out)
 
 static void side_init(Side *s)
 {
-    hdlc_decoder_init(&s->decoder, s->rx_buf, sizeof s->rx_buf, true);
+    byte_frame_rx_init(&s->decoder, s->rx_buf, sizeof s->rx_buf, true);
     s->next_expected = 0;
     s->received = 0;
     s->out_of_order = 0;
@@ -56,12 +56,12 @@ static void side_consume(Side *s, const uint8_t *bytes, size_t n)
     while (off < n)
     {
         size_t used = 0;
-        HdlcDecodeStatus st = hdlc_decoder_feed(&s->decoder, bytes + off, n - off, &used);
+        byte_frame_rx_status st = byte_frame_rx_feed(&s->decoder, bytes + off, n - off, &used);
         off += used;
-        if (st == HDLC_DECODE_FRAME)
+        if (st == BYTE_FRAME_RX_FRAME)
         {
             size_t fl;
-            const uint8_t *f = hdlc_decoder_frame(&s->decoder, &fl);
+            const uint8_t *f = byte_frame_rx_frame(&s->decoder, &fl);
             unsigned seq = ((unsigned)f[0] << 8) | f[1];
             uint8_t expect[700];
             size_t el = build_frame(seq, expect);
@@ -95,7 +95,7 @@ static void in_memory_with_faults(void)
     for (unsigned seq = 0; seq < FRAMES_PER_SIDE; seq++)
     {
         size_t fl = build_frame(seq, frame);
-        size_t wl = hdlc_encode(frame, fl, HDLC_ACCM_NONE, true, wire, sizeof wire);
+        size_t wl = byte_frame_encode_accm(frame, fl, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
         CHECK(wl > 0);
         CHECK_EQ(test_pair_write(&s_pair, 0, wire, wl), (int)wl);
         CHECK_EQ(test_pair_write(&s_pair, 1, wire, wl), (int)wl);
@@ -143,7 +143,7 @@ static void in_memory_hold_and_release(void)
     test_pair_set_faults(&s_pair, 0, &hold);
     side_init(&b);
     size_t fl = build_frame(5, frame);
-    size_t wl = hdlc_encode(frame, fl, HDLC_ACCM_NONE, true, wire, sizeof wire);
+    size_t wl = byte_frame_encode_accm(frame, fl, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
     CHECK_EQ(test_pair_write(&s_pair, 0, wire, wl), (int)wl);
     CHECK_EQ(test_pair_pending(&s_pair, 1), 0);
     test_pair_release(&s_pair, 0, wl / 2);
@@ -174,10 +174,10 @@ static void over_loopback_tcp(void)
 
     /* Push frames both ways while draining; a non-blocking socket may accept a partial write, so
      * the encoder's resumable form is used here as the real transport pump will. */
-    HdlcEncoder enc_a;
-    HdlcEncoder enc_b;
-    hdlc_encoder_init(&enc_a, HDLC_ACCM_NONE, true);
-    hdlc_encoder_init(&enc_b, HDLC_ACCM_NONE, true);
+    byte_frame_tx enc_a;
+    byte_frame_tx enc_b;
+    byte_frame_tx_init(&enc_a, BYTE_FRAME_ACCM_NONE, true);
+    byte_frame_tx_init(&enc_b, BYTE_FRAME_ACCM_NONE, true);
     uint8_t frame_a[700];
     uint8_t frame_b[700];
     uint32_t deadline = test_now_ms() + 10000;
@@ -185,17 +185,17 @@ static void over_loopback_tcp(void)
     while ((a.received < FRAMES_PER_SIDE || b.received < FRAMES_PER_SIDE) &&
            test_now_ms() < deadline)
     {
-        if (sent < FRAMES_PER_SIDE && hdlc_encoder_done(&enc_a) && hdlc_encoder_done(&enc_b))
+        if (sent < FRAMES_PER_SIDE && byte_frame_tx_done(&enc_a) && byte_frame_tx_done(&enc_b))
         {
             size_t fl = build_frame(sent, frame_a);
             memcpy(frame_b, frame_a, fl);
-            hdlc_encoder_begin(&enc_a, frame_a, fl);
-            hdlc_encoder_begin(&enc_b, frame_b, fl);
+            byte_frame_tx_begin(&enc_a, frame_a, fl);
+            byte_frame_tx_begin(&enc_b, frame_b, fl);
             sent++;
         }
-        if (!hdlc_encoder_done(&enc_a))
+        if (!byte_frame_tx_done(&enc_a))
         {
-            size_t n = hdlc_encoder_produce(&enc_a, wire, 97); /* odd size: splits escapes */
+            size_t n = byte_frame_tx_produce(&enc_a, wire, 97); /* odd size: splits escapes */
             int w = 0;
             while ((size_t)w < n)
             {
@@ -209,9 +209,9 @@ static void over_loopback_tcp(void)
                 w += k;
             }
         }
-        if (!hdlc_encoder_done(&enc_b))
+        if (!byte_frame_tx_done(&enc_b))
         {
-            size_t n = hdlc_encoder_produce(&enc_b, wire, 131);
+            size_t n = byte_frame_tx_produce(&enc_b, wire, 131);
             int w = 0;
             while ((size_t)w < n)
             {

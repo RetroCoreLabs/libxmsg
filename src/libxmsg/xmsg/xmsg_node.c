@@ -8,7 +8,7 @@
 
 #include <string.h>
 
-#include "libxmsg/hdlc/fcs16.h"
+#include "libhdlc/hdlc.h"
 #include "libxmsg/log/xmsg_log.h"
 
 static void node_pump(XmsgNode *n, uint32_t now_ms);
@@ -26,7 +26,7 @@ void xmsg_node_config_default(XmsgNodeConfig *cfg, uint16_t own_node)
     cfg->settle_ms = 500;
     cfg->framing = XMSG_FRAMING_ASYNC;
     cfg->transport_adds_fcs = false;
-    cfg->hdlc_accm = HDLC_ACCM_NONE;
+    cfg->hdlc_accm = BYTE_FRAME_ACCM_NONE;
     cfg->portword_seed = 0x5A5A;
     cfg->persist_every = 1;
 }
@@ -83,11 +83,11 @@ int xmsg_node_init(XmsgNode *n, const XmsgNodeConfig *cfg, const XmsgPorts *port
     }
     xmsg_log_set_sink(&n->ports.log);
 
-    if (hdlc_decoder_init(&n->rx, n->rx_buf, sizeof n->rx_buf, true) != 0)
+    if (byte_frame_rx_init(&n->rx, n->rx_buf, sizeof n->rx_buf, true) != 0)
     {
         return XMSG_EINVAL;
     }
-    hdlc_encoder_init(&n->tx, n->cfg.hdlc_accm, true);
+    byte_frame_tx_init(&n->tx, n->cfg.hdlc_accm, true);
     if (lapb_init(&n->lapb, &n->cfg.lapb, n, on_lapb_info, on_lapb_state) != XMSG_OK)
     {
         return XMSG_EINVAL;
@@ -121,8 +121,8 @@ int xmsg_node_link_stop(XmsgNode *n, uint32_t now_ms)
 void xmsg_node_transport_lost(XmsgNode *n)
 {
     lapb_force_down(&n->lapb);
-    hdlc_decoder_reset(&n->rx);
-    hdlc_encoder_init(&n->tx, n->cfg.hdlc_accm, true);
+    byte_frame_rx_reset(&n->rx);
+    byte_frame_tx_init(&n->tx, n->cfg.hdlc_accm, true);
     n->tx_len = 0;
     n->tx_sent = 0;
     n->tx_frame_open = false;
@@ -507,16 +507,16 @@ int xmsg_node_feed(XmsgNode *n, const uint8_t *bytes, size_t len, uint32_t now_m
     while (off < len)
     {
         size_t used = 0;
-        HdlcDecodeStatus st = hdlc_decoder_feed(&n->rx, bytes + off, len - off, &used);
+        byte_frame_rx_status st = byte_frame_rx_feed(&n->rx, bytes + off, len - off, &used);
         off += used;
-        if (st == HDLC_DECODE_FRAME)
+        if (st == BYTE_FRAME_RX_FRAME)
         {
             size_t fl;
-            const uint8_t *f = hdlc_decoder_frame(&n->rx, &fl);
+            const uint8_t *f = byte_frame_rx_frame(&n->rx, &fl);
             node_rx_frame(n, f, fl, now_ms);
             node_pump(n, now_ms);
         }
-        else if (st != HDLC_DECODE_NEED_MORE)
+        else if (st != BYTE_FRAME_RX_NEED_MORE)
         {
             XMSG_LOG(XMSG_LOG_HDLC, XMSG_LOG_DEBUG, "framing status %d", (int)st);
         }
@@ -533,12 +533,12 @@ int xmsg_node_feed_frame(XmsgNode *n, const uint8_t *frame, size_t len, uint32_t
     }
     if (!n->cfg.transport_adds_fcs)
     {
-        if (!fcs16_is_good(frame, len))
+        if (!hdlc_fcs_is_good(frame, len))
         {
             n->rx.stats.fcs_errors++;
             return XMSG_EPROTO;
         }
-        len -= FCS16_SIZE;
+        len -= HDLC_FCS_SIZE;
     }
     node_rx_frame(n, frame, len, now_ms);
     node_pump(n, now_ms);
@@ -844,11 +844,11 @@ static void drain_transport(XmsgNode *n, uint32_t now_ms)
                 {
                     return;
                 }
-                hdlc_encoder_begin(&n->tx, n->tx_frame, (size_t)fl);
+                byte_frame_tx_begin(&n->tx, n->tx_frame, (size_t)fl);
                 n->tx_frame_open = true;
             }
-            n->tx_len = hdlc_encoder_produce(&n->tx, n->tx_scratch, sizeof n->tx_scratch);
-            if (hdlc_encoder_done(&n->tx))
+            n->tx_len = byte_frame_tx_produce(&n->tx, n->tx_scratch, sizeof n->tx_scratch);
+            if (byte_frame_tx_done(&n->tx))
             {
                 n->tx_frame_open = false;
             }
@@ -868,8 +868,8 @@ static void drain_transport(XmsgNode *n, uint32_t now_ms)
             n->tx_len = (size_t)fl;
             if (!n->cfg.transport_adds_fcs)
             {
-                fcs16_append(n->tx_scratch + fl, fcs16_compute(n->tx_scratch, (size_t)fl));
-                n->tx_len += FCS16_SIZE;
+                hdlc_fcs_append(n->tx_scratch + fl, hdlc_fcs_compute(n->tx_scratch, (size_t)fl));
+                n->tx_len += HDLC_FCS_SIZE;
             }
         }
     }

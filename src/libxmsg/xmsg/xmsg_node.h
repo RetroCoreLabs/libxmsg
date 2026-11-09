@@ -35,7 +35,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "libxmsg/hdlc/hdlc_async.h"
+#include "libhdlc/byte_frame.h"
 #include "libxmsg/lapb/lapb.h"
 #include "libxmsg/xmsg/xmsg_dg.h"
 #include "libxmsg/xmsg/xmsg_flags1.h"
@@ -73,7 +73,7 @@ typedef struct XmsgNodeConfig
     uint32_t settle_ms;      /**< quiet time after link-up before data may flow; 500 */
     XmsgFraming framing;     /**< how the transport carries frames */
     bool transport_adds_fcs; /**< raw framing only: the hardware appends and checks the FCS */
-    uint32_t hdlc_accm; /**< async framing: HDLC_ACCM_NONE (nd100x) or ALL_CONTROL (USB gateway) */
+    uint32_t hdlc_accm; /**< async framing: BYTE_FRAME_ACCM_NONE (nd100x) or ALL_CONTROL (USB gateway) */
     uint16_t portword_seed; /**< seed for minting port words */
     uint8_t persist_every;  /**< Flags1 store policy; 1 = save every frame */
 } XmsgNodeConfig;
@@ -137,8 +137,8 @@ struct XmsgNode
     XmsgNodeCallbacks cb;
 
     /* framing */
-    HdlcDecoder rx;
-    HdlcEncoder tx;
+    byte_frame_rx rx;
+    byte_frame_tx tx;
     uint8_t rx_buf[XMSG_LAPB_N1 + 4];
     uint8_t tx_frame[XMSG_LAPB_N1 + 2];             /**< the frame being sent */
     uint8_t tx_scratch[2 * (XMSG_LAPB_N1 + 4) + 2]; /**< its encoded bytes */

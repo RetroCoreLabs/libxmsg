@@ -20,7 +20,7 @@
  * UA and no DM - so our side gets there by N2 running out ("N2 exhausted during teardown"),
  * which is the ordinary LAPB rule for an unanswered DISC.
  */
-#include "libxmsg/hdlc/hdlc_async.h"
+#include "libhdlc/byte_frame.h"
 #include "libxmsg/lapb/lapb.h"
 #include "libxmsg/log/xmsg_log.h"
 
@@ -108,9 +108,9 @@ int main(void)
     LapbConfig cfg;
     lapb_config_default(&cfg, own_node);
     CHECK_EQ(lapb_init(&link, &cfg, NULL, on_info, on_state), XMSG_OK);
-    HdlcDecoder dec;
+    byte_frame_rx dec;
     static uint8_t rx_buf[XMSG_LAPB_N1 + 4];
-    hdlc_decoder_init(&dec, rx_buf, sizeof rx_buf, true);
+    byte_frame_rx_init(&dec, rx_buf, sizeof rx_buf, true);
     uint8_t frame[XMSG_LAPB_N1 + 2];
     uint8_t wire[2 * (XMSG_LAPB_N1 + 4) + 2];
     uint8_t chunk[1024];
@@ -127,7 +127,7 @@ int main(void)
         int n;
         while ((n = lapb_pull_tx(&link, frame, sizeof frame)) > 0)
         {
-            size_t w = hdlc_encode(frame, (size_t)n, HDLC_ACCM_NONE, true, wire, sizeof wire);
+            size_t w = byte_frame_encode_accm(frame, (size_t)n, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
             printf("  TX %02X %02X (%d bytes)\n", frame[0], frame[1], n);
             size_t off = 0;
             while (off < w)
@@ -153,16 +153,16 @@ int main(void)
         while (off < (size_t)r)
         {
             size_t used = 0;
-            HdlcDecodeStatus st = hdlc_decoder_feed(&dec, chunk + off, (size_t)r - off, &used);
+            byte_frame_rx_status st = byte_frame_rx_feed(&dec, chunk + off, (size_t)r - off, &used);
             off += used;
-            if (st == HDLC_DECODE_FRAME)
+            if (st == BYTE_FRAME_RX_FRAME)
             {
                 size_t fl;
-                const uint8_t *f = hdlc_decoder_frame(&dec, &fl);
+                const uint8_t *f = byte_frame_rx_frame(&dec, &fl);
                 printf("  RX %02X %02X (%u bytes)\n", f[0], f[1], (unsigned)fl);
                 lapb_rx_frame(&link, f, fl, now);
             }
-            else if (st != HDLC_DECODE_NEED_MORE)
+            else if (st != BYTE_FRAME_RX_NEED_MORE)
             {
                 printf("  framing: status %d\n", (int)st);
             }
@@ -205,7 +205,7 @@ int main(void)
         int n;
         while ((n = lapb_pull_tx(&link, frame, sizeof frame)) > 0)
         {
-            size_t w = hdlc_encode(frame, (size_t)n, HDLC_ACCM_NONE, true, wire, sizeof wire);
+            size_t w = byte_frame_encode_accm(frame, (size_t)n, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
             (void)test_tcp_write(sock, wire, w);
         }
         /* Wait with T1 running, so the DISC is sent again every T1 as LAPB (and the C#
@@ -217,7 +217,7 @@ int main(void)
             lapb_tick(&link, test_now_ms());
             while ((n = lapb_pull_tx(&link, frame, sizeof frame)) > 0)
             {
-                size_t w = hdlc_encode(frame, (size_t)n, HDLC_ACCM_NONE, true, wire, sizeof wire);
+                size_t w = byte_frame_encode_accm(frame, (size_t)n, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
                 (void)test_tcp_write(sock, wire, w);
             }
             test_tcp_wait_readable(sock, 50);
@@ -226,11 +226,11 @@ int main(void)
             while (r > 0 && off < (size_t)r)
             {
                 size_t used = 0;
-                if (hdlc_decoder_feed(&dec, chunk + off, (size_t)r - off, &used) ==
-                    HDLC_DECODE_FRAME)
+                if (byte_frame_rx_feed(&dec, chunk + off, (size_t)r - off, &used) ==
+                    BYTE_FRAME_RX_FRAME)
                 {
                     size_t fl;
-                    const uint8_t *f = hdlc_decoder_frame(&dec, &fl);
+                    const uint8_t *f = byte_frame_rx_frame(&dec, &fl);
                     lapb_rx_frame(&link, f, fl, test_now_ms());
                 }
                 off += used;

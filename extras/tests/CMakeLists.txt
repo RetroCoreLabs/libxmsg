@@ -36,8 +36,6 @@ function(xmsg_add_integration_test name)
 endfunction()
 
 xmsg_add_test(smoke)
-xmsg_add_test(fcs16)
-xmsg_add_test(hdlc_async)
 xmsg_add_test(log)
 xmsg_add_test(pair_hdlc)
 xmsg_add_test(lapb)

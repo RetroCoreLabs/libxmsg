@@ -155,7 +155,7 @@ The CMake entry point is `src/CMakeLists.txt`; the file at the repository root o
 |---|---|---|
 | `XMSG_WITH_COSMOS` | OFF | Also build `libcosmos`, the COSMOS file-access client and server |
 | `XMSG_WITH_FTP` | OFF | Also build the FTP command core (needs `XMSG_WITH_COSMOS`) |
-| `XMSG_WITH_ASYNC_FRAMER` | ON | Compile the byte framer; turn off when the line hardware frames |
+| `LIBXMSG_LIBHDLC_DIR` | `../libhdlc` beside this repository | Where libhdlc is checked out; when it is not there, CMake fetches RetroCoreLabs/libhdlc at `LIBXMSG_LIBHDLC_COMMIT` |
 | `XMSG_BUILD_TESTS` | ON when top level | The CTest unit tests |
 | `XMSG_WERROR` | OFF | Every warning is an error (CI turns this on) |
 | `XMSG_MAX_SESSIONS`, `XMSG_MAX_PEERS`, `XMSG_LAPB_N1`, ... | see `src/libxmsg/xmsg_config.h` | Compile-time sizes; they decide the whole RAM footprint |
@@ -185,6 +185,8 @@ few real ones still power up, and this library is how a modern device joins thei
   original lives in the RetroIO and NDInsight repositories).
 - The C# reference implementation: the `RetroIO.Protocols.Xmsg` packages in the RetroIO repository.
 - The nd100x emulator, whose `--hdlc` option is the test transport: the nd100x repository.
+- libhdlc (RetroCoreLabs/libhdlc): ALL the HDLC code - the RFC 1662 byte framing and the FCS -
+  lives there, and libxmsg depends on it (CMake finds or fetches it; Arduino: `depends=libhdlc`).
 
 ## Contributing
 
