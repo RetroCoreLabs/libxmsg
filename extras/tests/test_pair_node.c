@@ -490,7 +490,33 @@ static void resync_starts_both_counts_again_at_zero(void)
     }
     CHECK_EQ(s_b.stats.resyncs, 0);
 
+    /* A reply that never comes does not block resyncs for good (found by the XMSGGW port):
+     * inside resync_timeout_ms a second call sends nothing, after it the request goes again. */
+    reach_before = s_reach_seen_b;
+    CHECK_EQ(xmsg_node_resync(&s_a, 102, now), XMSG_OK);
+    CHECK_EQ(xmsg_node_resync(&s_a, 102, now + s_a.cfg.resync_timeout_ms - 1u), XMSG_OK);
+    CHECK_EQ(xmsg_node_resync(&s_a, 102, now + s_a.cfg.resync_timeout_ms), XMSG_OK);
+    for (int i = 0; i < 200; i++)
+    {
+        now++;
+        pump_pair(now);
+    }
+    CHECK_EQ(s_reach_seen_b, reach_before + 2); /* the first and the timed-out repeat */
+    CHECK_EQ(s_a.stats.resyncs, 2); /* one more than before: the second reply comes unasked */
+    CHECK(!s_a.resync_pending);
+
+    /* The wait is dropped when the link goes down. */
+    CHECK_EQ(xmsg_node_resync(&s_a, 102, now), XMSG_OK);
+    CHECK(s_a.resync_pending);
     xmsg_node_link_stop(&s_a, now);
+    for (int i = 0; i < 20000 && s_a.link_up; i++)
+    {
+        now++;
+        pump_pair(now);
+    }
+    CHECK(!s_a.link_up);
+    CHECK(!s_a.resync_pending);
+    CHECK_EQ(xmsg_node_resync(&s_a, 102, now), XMSG_ESTATE);
     CHECK_EQ(xmsg_node_resync(NULL, 102, now), XMSG_EINVAL);
 }
 

@@ -24,6 +24,9 @@ void xmsg_node_config_default(XmsgNodeConfig *cfg, uint16_t own_node)
     cfg->own_system = own_node;
     lapb_config_default(&cfg->lapb, own_node);
     cfg->settle_ms = 500;
+    /* Chosen, not measured: well above the LAPB T1 (3000 ms) that a lost request frame would
+     * already have been resent within; the host's reply time itself has not been measured. */
+    cfg->resync_timeout_ms = 5000;
     cfg->framing = XMSG_FRAMING_ASYNC;
     cfg->transport_adds_fcs = false;
     cfg->hdlc_accm = BYTE_FRAME_ACCM_NONE;
@@ -49,6 +52,10 @@ static void on_lapb_state(void *ctx, LapbState state, bool up, const char *reaso
         n->ready = false;
         n->stage_open = false;
         n->pending_count = 0;
+        /* A reachability reply can no longer come on this link: stop waiting for it, or every
+         * later xmsg_node_resync() to that peer would send nothing (found by the XMSGGW port,
+         * 2026-11-09). */
+        n->resync_pending = false;
     }
     if (up && !was_up)
     {
@@ -741,13 +748,23 @@ int xmsg_node_resync(XmsgNode *n, uint16_t peer_node, uint32_t now_ms)
     }
     if (n->resync_pending && n->resync_peer == peer_node)
     {
-        return XMSG_OK;
+        if ((int32_t)(now_ms - n->resync_sent_ms) < (int32_t)n->cfg.resync_timeout_ms)
+        {
+            return XMSG_OK; /* still waiting for the reply */
+        }
+        XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_WARN,
+                 "node %u: no reachability reply in %u ms: asking again", peer_node,
+                 (unsigned)n->cfg.resync_timeout_ms);
     }
-    XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_WARN,
-             "node %u drops our frames in silence: asking it to start its count for us again",
-             peer_node);
+    else
+    {
+        XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_WARN,
+                 "node %u drops our frames in silence: asking it to start its count for us again",
+                 peer_node);
+    }
     n->resync_pending = true;
     n->resync_peer = peer_node;
+    n->resync_sent_ms = now_ms;
     return xmsg_node_send_reach(n, peer_node, now_ms);
 }
 

@@ -71,6 +71,7 @@ typedef struct XmsgNodeConfig
     uint16_t own_system;     /**< our XMSG system number (0 = same as own_node) */
     LapbConfig lapb;         /**< link parameters; own_node is copied into it */
     uint32_t settle_ms;      /**< quiet time after link-up before data may flow; 500 */
+    uint32_t resync_timeout_ms; /**< xmsg_node_resync() may ask again after this long; 5000 */
     XmsgFraming framing;     /**< how the transport carries frames */
     bool transport_adds_fcs; /**< raw framing only: the hardware appends and checks the FCS */
     uint32_t hdlc_accm; /**< async framing: BYTE_FRAME_ACCM_NONE (nd100x) or ALL_CONTROL (USB gateway) */
@@ -177,6 +178,7 @@ struct XmsgNode
     /* xmsg_node_resync(): our reachability request is out, waiting for the reply */
     bool resync_pending;
     uint16_t resync_peer;
+    uint32_t resync_sent_ms; /**< when the request went out, for resync_timeout_ms */
 
     XmsgNodeStats stats;
 };
@@ -286,6 +288,11 @@ int xmsg_node_send_reach(XmsgNode *n, uint16_t peer_node, uint32_t now_ms);
  * @param n         Node.
  * @param peer_node The peer.
  * @param now_ms    Time.
+ * Only one request waits at a time. A second call for the same peer sends nothing while the
+ * first is younger than cfg.resync_timeout_ms; after that the reply is taken as lost and the
+ * request goes out again. The wait is also dropped when the link goes down, so a reply lost
+ * with the link cannot block resyncs for the rest of the run.
+ *
  * @return XMSG_OK (also when one is already waiting for its reply), XMSG_ESTATE when the link
  *         is not up.
  */
