@@ -5,7 +5,8 @@
  * Copyright (c) 2026 Ronny Hansen
  *
  * What this layer does: brings the link up (both sides send a SABM and answer the other's; the
- * link is usable only when BOTH exchanges are done), numbers the information frames modulo 8,
+ * link is usable once OUR SABM is answered, or, if we sent none, once we answered the peer's -
+ * see lapb_is_up), numbers the information frames modulo 8,
  * acknowledges, retransmits on REJ or timeout, honours RNR, polls an idle link ONCE after T3
  * of silence (T3 starts again only when the peer next sends something; see the keepalive note
  * below), and takes the link down after N2 unanswered T1 polls. Everything above it (the XMSG datagram layer)

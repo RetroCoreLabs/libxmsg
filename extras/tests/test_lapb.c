@@ -310,6 +310,41 @@ static void peer_sabm_alone_does_not_bring_the_link_up(void)
     CHECK_EQ(lapb_tx_free_slots(&l), 7);
 }
 
+/* Live D100, 2026-11-09 23:52 (frame log, lines 4063-4076): the ND's own SABMs were lost while
+ * our side rebooted; then our SABM got its UA (twice), we sent RR, the ND sent RR N(R)=0 and
+ * from then on was in RUN with no reason ever to send a SABM. The link must be up on our UA
+ * alone. A second UA (the ND's CALLING timer firing) changes nothing. */
+static void ua_to_our_sabm_alone_brings_the_link_up(void)
+{
+    LapbLink l;
+    new_link(&l, 100, NULL);
+    lapb_connect(&l, 0);
+    drain(&l);
+    clear_sent();
+    deliver(&l, 10, "01 73 " P102); /* UA to our SABM */
+    CHECK_EQ(lapb_state(&l), LAPB_CONNECTED);
+    CHECK(lapb_is_up(&l));
+    CHECK_EQ(lapb_tx_free_slots(&l), 7);
+    CHECK(s_c.sent_count >= 1); /* the RR that moves an ND in CONNECT on to RUN */
+    if (s_c.sent_count >= 1)
+    {
+        CHECK_BYTES(s_c.sent[0], s_c.sent_len[0], "09 01 " L100);
+    }
+    clear_sent();
+    deliver(&l, 11, "01 73 " P102); /* the ND's second UA */
+    CHECK(lapb_is_up(&l));
+    CHECK_EQ(l.vs, 0);
+    CHECK_EQ(l.vr, 0);
+    deliver(&l, 12, "09 01 " P102); /* RR N(R)=0 from the ND, now in RUN */
+    CHECK(lapb_is_up(&l));
+    CHECK_EQ(send_info(&l, 13, "AB CD"), XMSG_OK);
+    CHECK_EQ(s_c.sent_count, 1);
+    if (s_c.sent_count == 1)
+    {
+        CHECK_BYTES(s_c.sent[0], s_c.sent_len[0], "09 00 AB CD"); /* I N(S)=0 N(R)=0 */
+    }
+}
+
 static void unanswered_sabm_is_resent_after_the_peer_sabm(void)
 {
     /* Measured 2026-11-09 on RetroCore D100: the SABMs crossed, D100 answered ours with an RR
@@ -788,6 +823,7 @@ int main(void)
     s7_mid_session_sabm_reset();
     peer_sabm_alone_does_not_bring_the_link_up();
     unanswered_sabm_is_resent_after_the_peer_sabm();
+    ua_to_our_sabm_alone_brings_the_link_up();
     passive_station_comes_up_on_the_peer_sabm_alone();
     up_callback_fires_once_per_change();
     n2_by_default_takes_the_link_down_with_no_sabm();

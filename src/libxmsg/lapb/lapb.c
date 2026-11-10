@@ -292,7 +292,16 @@ void lapb_force_down(LapbLink *l)
 
 bool lapb_is_up(const LapbLink *l)
 {
-    return l->state == LAPB_CONNECTED && l->our_sabm_acked && l->peer_sabm_answered;
+    /* Up once OUR SABM is answered by UA (or we never sent one and answered the peer's).
+     * The peer's SABM is NOT also required: SINTRAN's link handler (XHLIF, carved 2026-11-10,
+     * NDInsight SINTRAN/XMSG/DOC/HDLC-LINK-BRINGUP-STATES-2026-11-10.md) goes CALLING ->
+     * CONNECT on our SABM, CONNECT -> RUN on the next frame, and from then on has no reason
+     * to send a SABM of its own. Waiting for one left XMSGGW half up for 4 minutes after a
+     * reboot (live D100, 2026-11-09 23:52:46) while D100 sat in RUN. What must still wait is a
+     * station whose own SABM is unanswered: an ND in RUN that later receives that SABM kills
+     * and restarts its link (XHLIF RUN state, 143006), which is the "sent too early" fault the
+     * C# LapbLayer recorded on 2026-08-19. our_sabm_acked covers exactly that case. */
+    return l->state == LAPB_CONNECTED && l->our_sabm_acked;
 }
 
 LapbState lapb_state(const LapbLink *l)
