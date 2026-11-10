@@ -943,7 +943,7 @@ static void unanswered_letter_draws_one_resync(void)
  * 0000, the chain length, then the chain (the shape of every captured host terminal frame). */
 static void give_chain(TadAsker *a, const char *chain_hex)
 {
-    uint8_t body[64];
+    uint8_t body[128];
     XmsgDatagram dg;
     int n = test_hex_to_bytes(chain_hex, body + 4, sizeof body - 4);
     CHECK(n > 0);
@@ -1001,8 +1001,30 @@ static void break_setting_rules(void)
     give_chain(&a, "0004030100000200");
     CHECK_EQ(a.break_strategy, 1);
 
+    /* S3-CONFIG's screen letter, XMSGGW pane A 13:16:00.271 and hub frame 989: BMMX strategy 7,
+     * BRKMAX 1, a table of all ones, then ECKM strategy 7 with its table, then RFI. */
+    give_chain(&a, "000403010000"
+                   "0413070001FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+                   "00031107FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0200");
+    CHECK_EQ(a.break_strategy, 7);
+    CHECK_EQ(a.break_max, 1);
+    CHECK(a.break_table == TAD_BREAK_TABLE_ALL);
+    CHECK_EQ(a.stats.unknown_break_strategy, 0);
+    a.line_len = 0;
+    a.rfi_open = true;
+    CHECK_EQ(tad_asker_write(&a, slutt, 5, 0), 1);
+    CHECK_BYTES(a.line, a.line_len, "1B");
+
+    /* BRKMAX alone limits a strategy 3 and up even with no break character. */
+    give_chain(&a, "04130700030000000000000000000000000000000000");
+    CHECK(a.break_table == TAD_BREAK_TABLE_NONE);
+    a.line_len = 0;
+    a.rfi_open = true;
+    CHECK_EQ(tad_asker_write(&a, slutt, 5, 0), 3);
+    give_chain(&a, "0004030100000200");
+
     /* A strategy this file does not implement is counted and logged, and input is not cut. */
-    give_chain(&a, "0004030300100200");
+    give_chain(&a, "0004030300000200");
     CHECK_EQ(a.stats.unknown_break_strategy, 1);
     a.line_len = 0;
     a.rfi_open = true;

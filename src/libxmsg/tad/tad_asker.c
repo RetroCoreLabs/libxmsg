@@ -458,7 +458,8 @@ static void asker_tick(XmsgSession *s, uint32_t now_ms)
     }
 }
 
-/* The host's break setting (BMMX, see the header): strategy byte, BRKMAX word. */
+/* The host's break setting (BMMX, see the header): strategy byte, BRKMAX word, and for
+ * strategy 7 a 16-byte break table. */
 static void take_break_setting(TadAsker *a, const TadMessage *m)
 {
     int8_t strategy;
@@ -476,16 +477,31 @@ static void take_break_setting(TadAsker *a, const TadMessage *m)
         return;
     }
     a->break_strategy = strategy;
-    if (strategy > 1)
+    a->break_table = TAD_BREAK_TABLE_NONE;
+    if (strategy == 7 && m->len >= 19)
+    {
+        /* Only a table of all ones or all zeros is read: those two mean every character and no
+         * character whatever the bit order, which is not known (extras/BUGS.md B1). */
+        bool ones = true;
+        bool zeros = true;
+        for (size_t i = 3; i < 19; i++)
+        {
+            ones = ones && (m->data[i] == 0xFFu);
+            zeros = zeros && (m->data[i] == 0x00u);
+        }
+        a->break_table = ones ? TAD_BREAK_TABLE_ALL : (zeros ? TAD_BREAK_TABLE_NONE : TAD_BREAK_TABLE_MIXED);
+    }
+    if (strategy > 1 && !(strategy == 7 && a->break_table != TAD_BREAK_TABLE_MIXED))
     {
         a->stats.unknown_break_strategy++;
         XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_ERROR,
-                 "host break strategy %d (BRKMAX %u) is not implemented; input is not cut",
+                 "host break strategy %d is not implemented; input is cut only at BRKMAX %u",
                  (int)strategy, (unsigned)a->break_max);
     }
     else
     {
-        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_DEBUG, "host break strategy %d", (int)strategy);
+        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_DEBUG, "host break strategy %d, BRKMAX %u",
+                 (int)strategy, (unsigned)a->break_max);
     }
 }
 
@@ -499,8 +515,10 @@ static bool is_break_char(const TadAsker *a, uint8_t c)
         return true;
     case 1:
         return c7 < 32u || c7 == 127u;
+    case 7:
+        return a->break_table == TAD_BREAK_TABLE_ALL;
     default:
-        return false; /* negative: none; 2..8: not implemented (see take_break_setting) */
+        return false; /* negative: none; 2..6, 8 and a mixed 7 table: not implemented */
     }
 }
 
@@ -865,6 +883,7 @@ int tad_asker_connect(TadAsker *a, XmsgNode *node, uint32_t now_ms)
     a->rfi_open = false;
     a->break_strategy = 1;
     a->break_max = 0;
+    a->break_table = TAD_BREAK_TABLE_NONE;
     a->tadadm_port = 0;
     a->session_port = 0;
     a->error = 0;
@@ -900,6 +919,10 @@ int tad_asker_write(TadAsker *a, const uint8_t *bytes, size_t len, uint32_t now_
         return XMSG_EAGAIN;
     }
     take = (len > TAD_MAX_DATA) ? TAD_MAX_DATA : len;
+    if (a->break_strategy >= 3 && a->break_max != 0u && take > a->break_max)
+    {
+        take = a->break_max; /* MON BRKM: most characters before a break, strategies 3 and up */
+    }
     for (size_t i = 0; i < take; i++)
     {
         if (is_break_char(a, bytes[i]))

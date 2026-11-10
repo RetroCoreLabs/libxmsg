@@ -55,9 +55,14 @@
  *    ESC [ 4 8 _ as five one-byte BDATs, each after its own RFI; D100 accepts it. The whole key
  *    in one letter is refused (BEL). Typed lines at the command prompt (strategy 1) go whole up
  *    to their CR (SYSTEM CR in one BDAT, SET-T-T,,93 CR in one). Strategy 9 changes only
- *    BRKMAX and keeps the strategy. Strategies 2..8 and their break tables are not
- *    implemented: the BMMX is logged as an ERROR, counted in stats.unknown_break_strategy, and
- *    input is not cut (extras/BUGS.md B1).
+ *    BRKMAX and keeps the strategy. For strategies 3 and up BRKMAX is the most bytes one BDAT
+ *    may carry (MON BRKM: "maximum number of characters before break"). Strategy 7 brings a
+ *    16-byte table: all ones means every character breaks, all zeros none; a mixed table needs
+ *    the bit order, which is not known. MEASURED 2026-11-10: S3-CONFIG's screen letter carries
+ *    04 13 07 0001 FF x16 (strategy 7, BRKMAX 1, every character), and after the first byte
+ *    D100 switches to strategy 0. Strategies 2..6, 8 and a mixed table are not implemented: the
+ *    BMMX is logged as an ERROR, counted in stats.unknown_break_strategy, and input is cut only
+ *    at BRKMAX (extras/BUGS.md B1).
  *
  * Our own choices, not wire facts: the asker keeps ONE frame unacknowledged at a time, so a
  * frame the host refuses with XENSE is simply rebuilt and sent again at the stepped-down number
@@ -230,6 +235,14 @@ typedef struct TadAskerStats
 } TadAskerStats;
 
 /** The session. Keep it alive while attached; the node holds a pointer to it. */
+/** What a strategy 7 break table says (see the file comment). */
+typedef enum
+{
+    TAD_BREAK_TABLE_NONE = 0, /**< all zeros, or no table: no character breaks */
+    TAD_BREAK_TABLE_ALL,      /**< all ones: every character breaks */
+    TAD_BREAK_TABLE_MIXED     /**< some bits set: needs the bit order, not known */
+} TadBreakTable;
+
 typedef struct TadAsker
 {
     XmsgSession base; /**< must be first */
@@ -245,7 +258,8 @@ typedef struct TadAsker
     uint8_t lun[2];        /**< the 0x0B data of the port assignment, as received */
     bool rfi_open;         /**< input granted and not yet used */
     int8_t break_strategy; /**< from the host's BMMX; 1 until one comes (see the file comment) */
-    uint16_t break_max;    /**< BMMX BRKMAX word, as received (not used: strategies 0 and 1 ignore it) */
+    uint16_t break_max;    /**< BMMX BRKMAX word: most bytes per BDAT for strategies 3 and up (0 = no limit) */
+    TadBreakTable break_table; /**< what a strategy 7 table says, when it can be read */
     bool hangup_wanted;    /**< tad_asker_hangup() came before the session port was known */
     uint16_t who_port;     /**< the port the last 7WHO came from: where 7IAM goes */
     bool resync_tried;     /**< the unanswered letter has already drawn one resync */
