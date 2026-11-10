@@ -92,6 +92,32 @@ int tad_writer_add(TadWriter *w, uint8_t opcode, const uint8_t *data, size_t len
     return XMSG_OK;
 }
 
+int tad_writer_add_host(TadWriter *w, uint8_t opcode, const uint8_t *data, size_t len)
+{
+    bool odd_header = (opcode == TAD_OP_ECKM) || (opcode == TAD_OP_BMMX) ||
+                      (opcode == TAD_OP_RAW_07);
+    bool at_odd = (w->len & 1u) != 0;
+
+    if (len > TAD_MAX_DATA || (len > 0 && data == NULL))
+    {
+        return XMSG_EINVAL;
+    }
+    if (w->overflow)
+    {
+        return XMSG_ENOSPC;
+    }
+    if (odd_header != at_odd)
+    {
+        if (w->len + 1u + 2u + len > w->cap)
+        {
+            w->overflow = true;
+            return XMSG_ENOSPC;
+        }
+        w->buf[w->len++] = 0x00; /* fill byte: the header must start on the other offset */
+    }
+    return tad_writer_add(w, opcode, data, len);
+}
+
 size_t tad_writer_length(const TadWriter *w)
 {
     return w->overflow ? 0 : w->len;

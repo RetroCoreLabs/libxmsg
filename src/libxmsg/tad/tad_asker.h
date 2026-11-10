@@ -61,6 +61,12 @@
  * reports the notice (`host_notice`) and ends the session when the application calls
  * tad_asker_hangup(). The RetroIO C# asker answered every 0xFD with DCON; that was the fault.
  *
+ * A DCON FROM the host ends the session (state CLOSED, nothing sent back). No capture holds a
+ * real host sending one - a real host ends with 0xFD and waits for the asker - but the RetroIO
+ * C# host sends DCON when it hangs up, reported live-verified against D100 (TadServer.cs
+ * BuildDconIndication: D100 prints "-- DISCONNECTED BY TAD --" at once), and our own
+ * tad_responder does the same.
+ *
  * tad_asker_abort() drops the session locally and sends nothing, for when the line itself is
  * gone; the host keeps its side until it gives up on its own.
  */
@@ -193,6 +199,7 @@ typedef struct TadAskerStats
     uint32_t restart_resends; /**< frames sent again after the host restarted its count */
     uint32_t who_answers;     /**< 7WHO questions answered with 7IAM */
     uint32_t logouts;         /**< host chains holding SYCN 00 0B: the login ended */
+    uint32_t host_hangups;    /**< DCON from the host: the session ended there */
     uint32_t escapes;         /**< ESCA frames queued by tad_asker_escape() */
     uint32_t resyncs;         /**< unanswered letters that drew a resync */
     uint32_t text_bytes_in;

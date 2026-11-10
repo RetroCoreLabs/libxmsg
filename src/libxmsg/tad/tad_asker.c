@@ -469,6 +469,7 @@ static void answer_terminal_frame(TadAsker *a, const uint8_t *chain, size_t clen
     bool has_fd = false;
     bool has_content = false;
     bool has_logout = false;
+    bool has_dcon = false;
 
     tad_reader_init(&r, chain, clen);
     while (tad_reader_next(&r, &m))
@@ -510,6 +511,9 @@ static void answer_terminal_frame(TadAsker *a, const uint8_t *chain, size_t clen
         case TAD_OP_RAW_FD:
             has_fd = true;
             break;
+        case TAD_OP_DCON:
+            has_dcon = true;
+            break;
         case TAD_OP_SYCN:
             /* SYCN is content (answered with DUMM, as the replayed capture shows). Data 00 0B is
              * the end of the login: see logged_out in tad_asker.h. Other values (0002, 0003,
@@ -528,6 +532,14 @@ static void answer_terminal_frame(TadAsker *a, const uint8_t *chain, size_t clen
         }
     }
 
+    if (has_dcon)
+    {
+        /* The host hung up (see host DCON in tad_asker.h): nothing is sent back. */
+        a->stats.host_hangups++;
+        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_INFO, "host hung up (DCON)");
+        set_state(a, TAD_ASKER_CLOSED, 0, now_ms);
+        return;
+    }
     if (has_logout)
     {
         a->stats.logouts++;

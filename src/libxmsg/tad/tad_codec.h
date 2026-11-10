@@ -12,8 +12,7 @@
  * MEASURED in every asker frame of RetroIO pcap-decode-sample.json, e.g. the session setup
  * `06 00 1B 00 1C 01 00 FF 00` and the terminal setup
  * `0C 01 08 0D 02 00 00 0F 01 1B 1F 03 4C 01 04`. The writer here does exactly that and nothing
- * more. A HOST pads some of its messages to word offsets; that rule is not modelled here because
- * nothing in this library builds host frames yet (the test responder replays captured bytes).
+ * more. A HOST pads its messages to word offsets: tad_writer_add_host() below.
  *
  * Reading: a lone 0x00 between messages is the host's alignment fill and is skipped. 0x00 is
  * not a TAD opcode (the registry has none), so this cannot swallow a real message. A message is
@@ -136,6 +135,23 @@ void tad_writer_init(TadWriter *w, uint8_t *buf, size_t cap);
  *         then marked overflowed and nothing more is appended).
  */
 int tad_writer_add(TadWriter *w, uint8_t opcode, const uint8_t *data, size_t len);
+
+/**
+ * @brief Append one message the way a SINTRAN host lays it out, with a 0x00 fill byte first
+ *        when the message would start on the wrong offset (offsets count from the chain start).
+ *
+ * The rule, from the version J NPL source as the C# TadMessageBuilder.cs quotes it
+ * (20-COS-TAD-POF-CODE.NPL): CREMES lays a message header on an EVEN byte; CRHEOD lays it on an
+ * ODD byte ("EVEN START, CREATE PAD BYTE") so that a payload of whole words lands on a word.
+ * CRHEOD is used for ECKM and BMMX. The port assignment's 0x07 has the same shape (its builder,
+ * TADADM, is not in the source). MEASURED against every host chain in
+ * extras/tests/vectors/tad_connect_d100_d102.h: the banner `00 04 03 01 00 00 00 03 01 01 01 ..`,
+ * the password prompt `01 0A <10> 00 03 01 FF 02 00`, `01 01 5E 00 02 00`, and the port
+ * assignment `00 07 05 .. 1F 03 .. 00 0B 02 ..`. (The C# builder pads an ODD start twice
+ * before ECKM/BMMX; CRHEOD, as quoted, pads only an even one. No capture has that case.)
+ * @return As tad_writer_add().
+ */
+int tad_writer_add_host(TadWriter *w, uint8_t opcode, const uint8_t *data, size_t len);
 
 /**
  * @brief Bytes written so far.

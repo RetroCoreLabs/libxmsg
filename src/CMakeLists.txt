@@ -72,6 +72,7 @@ set(XMSG_SOURCES
     libxmsg/xrout/xrout_walk.c
     libxmsg/tad/tad_codec.c
     libxmsg/tad/tad_asker.c
+    libxmsg/tad/tad_responder.c
     libxmsg/term/term_escape.c
     libxmsg/term/term_line.c
     libxmsg/term/term_report.c
