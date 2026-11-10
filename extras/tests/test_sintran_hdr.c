@@ -8,6 +8,7 @@
  * request 100 -> 103 whose fabricated checksum DE00 once crashed D100 (correct DE07), the worked
  * example in the registry (DE08), and the announce from LapbAnnounceOrderingTests (904F).
  */
+#include <string.h>
 #include "libxmsg/sintran/sintran_hdr.h"
 
 #include "test_util.h"
@@ -72,6 +73,14 @@ static void end_around_carry_is_folded(void)
     CHECK_EQ(sintran_hdr_checksum(h), 0xFFFE);
 }
 
+static void error_names(void)
+{
+    CHECK(strcmp(sintran_error_name(XMSG_XE_XERNA), "XERNA Remote system not available") == 0);
+    CHECK(strncmp(sintran_error_name(XMSG_XE_XEIMA), "XEIMA ", 6) == 0);
+    CHECK(strncmp(sintran_error_name(XMSG_XE_XENSE), "XENSE ", 6) == 0);
+    CHECK(strcmp(sintran_error_name(-1000), "unknown XMSG error") == 0);
+}
+
 int main(void)
 {
     printf("[sintran_hdr]\n");
@@ -80,5 +89,6 @@ int main(void)
     write_fills_the_checksum();
     zero_sum_stays_zero();
     end_around_carry_is_folded();
+    error_names();
     TEST_DONE();
 }

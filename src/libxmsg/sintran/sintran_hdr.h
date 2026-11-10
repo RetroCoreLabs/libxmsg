@@ -54,6 +54,7 @@ extern "C"
 /* XMSG error codes carried in Flags2 of an error frame, as 16-bit two's complement. */
 #define XMSG_XE_XENSE ((int16_t)-34) /**< sequence error: our Flags1 was AHEAD of the expectation */
 #define XMSG_XE_XEIMA ((int16_t)-19) /**< invalid magic number: wrong or closed port */
+#define XMSG_XE_XERNA ((int16_t)-25) /**< remote system not available */
 
 /** A decoded header. */
 typedef struct SintranHeader
@@ -104,6 +105,15 @@ void sintran_hdr_fill(SintranHeader *h, uint8_t subtype, uint16_t dst_node, uint
  *         checksum does not match (the fields are still filled for logging).
  */
 int sintran_hdr_parse(const uint8_t *in, size_t len, SintranHeader *h);
+
+/**
+ * @brief Name and meaning of an XMSG error code (the negative value an error frame carries in
+ *        Flags2), e.g. -25 -> "XERNA Remote system not available". Table taken from RetroIO
+ *        XmsgError.cs, which follows the SINTRAN XMSG error list.
+ * @param code The error code (negative).
+ * @return A constant string; "unknown XMSG error" for a code not in the table.
+ */
+const char *sintran_error_name(int16_t code);
 
 #ifdef __cplusplus
 }

@@ -74,3 +74,71 @@ int sintran_hdr_parse(const uint8_t *in, size_t len, SintranHeader *h)
     }
     return XMSG_OK;
 }
+
+typedef struct
+{
+    int16_t code;
+    const char *text;
+} SintranErrorName;
+
+// clang-format off
+static const SintranErrorName s_error_names[] = {
+    {-1, "XENOT No more XT-blocks free"},
+    {-2, "XEIRM Non-local remote port illegal here"},
+    {-3, "XENIR Network layer initialization reject (purely internal)"},
+    {-4, "XETMM Task is not allowed any more memory"},
+    {-5, "XENIM Facility not yet implemented"},
+    {-6, "XEIBP Illegal message buffer pointer"},
+    {-7, "XEBNY Message buffer not yours"},
+    {-8, "XEIRT Illegal function for RT-programs (only drivers)"},
+    {-9, "XENOP No more ports available"},
+    {-10, "XEIDR Function not available to drivers"},
+    {-11, "XENDM No default message"},
+    {-12, "XEMCH Message is already chained"},
+    {-13, "XEBFC Message is in a queue."},
+    {-14, "XEAIN XMSG Kernel already initialised"},
+    {-15, "XEBNC Return of a bounce message"},
+    {-16, "XEWNA Write Not Allowed (Indirect buffer)"},
+    {-17, "XENVI No Valid Indirect buffer defined"},
+    {-18, "XEILF Illegal function code"},
+    {-19, "XEIMA Invalid magic number"},
+    {-20, "XEMFL Message space full or buffer not available"},
+    {-21, "XEILM Illegal message size or not enough space left"},
+    {-22, "XEIPN Illegal port number"},
+    {-23, "XEPRV Privileged function called without privilege."},
+    {-24, "XEPVR Privilege request refused"},
+    {-25, "XERNA Remote system not available"},
+    {-26, "XEROV Remote task space overflow"},
+    {-27, "XEXBF Message already has XMSG buffer (XFDUB)"},
+    {-28, "XEDRI Driver called XMSG before return from previous"},
+    {-29, "XENDP No port open (so 'default port' param invalid)"},
+    {-30, "XEITL Illegal transfer length for read/write"},
+    {-31, "XEIDP Illegal displacement in read/write"},
+    {-32, "XEILR Illegal use of reentrant segment in XFDIB"},
+    {-33, "XENOS Indirect Buffer not on valid segment"},
+    {-34, "XENSE Network sequencing error (purely internal significance)"},
+    {-35, "XERND Remote system not defined"},
+    {-36, "XEPCL Remote port closed while message queued"},
+    {-37, "XENRU XMSG not running  do not move"},
+    {-38, "XENTO Timeout detected by network layer"},
+    {-39, "XENUS No user segment info defined (XFUSG option)"},
+    {-40, "XEREJ Network remote reject (request retransmit)"},
+    {-41, "XEIXT Driver called XMSG with illegal XT-block"},
+    {-42, "XETMU Too many multi-call functions"},
+    {-43, "XENCE Network checksum error (purely internal significance)"},
+    {-44, "XEICM Function not available to tasks other than COSROUT"},
+    {-63, "XECRA XMSG user error codes (XE*), returned negative in the T-register. /// </summary> public enum XmsgError : int { /// <summary> /// XMSG crash (Info in Basefield)"},
+};
+// clang-format on
+
+const char *sintran_error_name(int16_t code)
+{
+    for (size_t i = 0; i < sizeof s_error_names / sizeof s_error_names[0]; i++)
+    {
+        if (s_error_names[i].code == code)
+        {
+            return s_error_names[i].text;
+        }
+    }
+    return "unknown XMSG error";
+}

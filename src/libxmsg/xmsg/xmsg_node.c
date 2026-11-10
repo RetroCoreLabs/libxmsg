@@ -586,8 +586,9 @@ static void handle_datagram(XmsgNode *n, const XmsgDatagram *in, uint32_t now_ms
             }
             else
             {
-                XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_WARN, "error %d from node %u for Flags1 0x%04X",
-                         (int)code, in->hdr.src_node, in->hdr.flags1);
+                XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_WARN,
+                         "error %d (%s) from node %u for Flags1 0x%04X", (int)code,
+                         sintran_error_name(code), in->hdr.src_node, in->hdr.flags1);
             }
             deliver_to_peer_sessions(n, in->hdr.src_node, true, code, in->hdr.flags1);
         }
