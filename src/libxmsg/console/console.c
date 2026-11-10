@@ -26,6 +26,26 @@
 /* Output                                                                                     */
 /* ------------------------------------------------------------------------------------------ */
 
+static bool plain_number(const char *text, uint16_t *number);
+
+/* Copy a string, cut to fit. Returns false when it was cut. */
+static bool copy_text(char *out, size_t cap, const char *src)
+{
+    size_t n = strlen(src);
+    bool whole = n < cap;
+    if (cap == 0u)
+    {
+        return false;
+    }
+    if (!whole)
+    {
+        n = cap - 1u;
+    }
+    memcpy(out, src, n);
+    out[n] = '\0';
+    return whole;
+}
+
 static bool line_is(const ConsoleSession *s, uint32_t cap)
 {
     return (s->line.caps & cap) != 0u;
@@ -230,7 +250,7 @@ const char *console_tad_user_name(const ConsoleConfig *cfg, const char *user, ch
         {
             return NULL;
         }
-        (void)snprintf(out, cap, "%s", cfg->tad_user);
+        (void)copy_text(out, cap, cfg->tad_user);
         return out;
     }
     n = strlen(user);
@@ -265,12 +285,16 @@ static bool onward_start(ConsoleSession *s, const char *system, uint32_t now_ms)
                                                  name, sizeof name);
     uint16_t number = 0;
     int rc;
-    if (sv->resolve(sv->ctx, system, &number) != 0)
+    if (!plain_number(system, &number) && sv->resolve(sv->ctx, system, &number) != 0)
     {
         sayf(s, "unknown system %s\r\n", system);
         return false;
     }
-    (void)snprintf(s->system, sizeof s->system, "%s", system);
+    if (!copy_text(s->system, sizeof s->system, system))
+    {
+        say(s, "that system name is too long\r\n");
+        return false;
+    }
     s->phase = CONSOLE_PH_SESSION;
     s->onward = CONSOLE_ONWARD_OPENING;
     s->onward_echo = true;
@@ -311,6 +335,57 @@ static void start_login(ConsoleSession *s)
     show_prompt(s);
 }
 
+/* "kind peer" for WHO, each part cut so the whole always fits: the kind to 8 characters, the
+ * peer to what is left. A cut is visible only as a shorter peer text, never a lost kind. */
+static void remote_text(char *out, size_t cap, const char *kind, const char *peer)
+{
+    size_t k = strlen(kind);
+    size_t p = strlen(peer);
+    if (k > 8u)
+    {
+        k = 8u;
+    }
+    if (k + 2u > cap)
+    {
+        out[0] = '\0';
+        return;
+    }
+    memcpy(out, kind, k);
+    out[k] = ' ';
+    if (p > cap - k - 2u)
+    {
+        p = cap - k - 2u;
+    }
+    memcpy(&out[k + 1u], peer, p);
+    out[k + 1u + p] = '\0';
+}
+
+/* A CONNECT argument that is a plain decimal system number, 1..65535: used as it is. Ronny's
+ * rule: "a system number or an alias, never a number read out of a name" - so "102" is a
+ * number, "D102" is a name and goes through resolve. */
+static bool plain_number(const char *text, uint16_t *number)
+{
+    uint32_t v = 0;
+    if (text[0] == '\0')
+    {
+        return false;
+    }
+    for (const char *c = text; *c != '\0'; c++)
+    {
+        if (*c < '0' || *c > '9')
+        {
+            return false;
+        }
+        v = (v * 10u) + (uint32_t)(*c - '0');
+        if (v > 65535u)
+        {
+            return false;
+        }
+    }
+    *number = (uint16_t)v;
+    return v != 0u;
+}
+
 static void start(ConsoleSession *s, const ConsoleLine *line, uint32_t now_ms)
 {
     char peer[CONSOLE_REMOTE_MAX + 1u];
@@ -323,8 +398,8 @@ static void start(ConsoleSession *s, const ConsoleLine *line, uint32_t now_ms)
     {
         line->describe(line->ctx, peer, sizeof peer);
     }
-    (void)snprintf(s->remote, sizeof s->remote, "%s %s", (line->kind != NULL) ? line->kind : "line",
-                   (peer[0] != '\0') ? peer : "?");
+    remote_text(s->remote, sizeof s->remote, (line->kind != NULL) ? line->kind : "line",
+                (peer[0] != '\0') ? peer : "?");
     XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d: on from %s", s->place, s->remote);
     if (s->host->cfg.mode == CONSOLE_MODE_DIRECT)
     {
@@ -338,7 +413,7 @@ static void start(ConsoleSession *s, const ConsoleLine *line, uint32_t now_ms)
     }
     if (line_is(s, CONSOLE_LINE_TRUSTED_ADMIN))
     {
-        (void)snprintf(s->user, sizeof s->user, "%s", AUTH_DEFAULT_ADMIN);
+        (void)copy_text(s->user, sizeof s->user, AUTH_DEFAULT_ADMIN);
         s->level = AUTH_LEVEL_ADMIN;
         s->logged_in = true;
         if (s->line.logged_in != NULL)
@@ -768,7 +843,7 @@ static void cmd_setpw_begin(ConsoleSession *s, const char *name, bool add, AuthL
         return;
     }
     memset(&s->setpw, 0, sizeof s->setpw);
-    (void)snprintf(s->setpw.name, sizeof s->setpw.name, "%s", name);
+    (void)copy_text(s->setpw.name, sizeof s->setpw.name, name);
     s->setpw.level = level;
     s->setpw_add = add;
     s->setpw_again = false;
@@ -1009,7 +1084,7 @@ static void restore_count(ConsoleSession *s, const char *password)
 
 static void logged_in(ConsoleSession *s, AuthLoginNote note)
 {
-    (void)snprintf(s->user, sizeof s->user, "%s", s->login.name);
+    (void)copy_text(s->user, sizeof s->user, s->login.name);
     s->level = auth_login_level(&s->login);
     s->logged_in = true;
     XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d: logged in as %s (%s)%s", s->place,

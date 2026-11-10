@@ -136,6 +136,8 @@ typedef enum ConsoleOnward
 typedef struct ConsoleServices
 {
     void *ctx;
+    /** A CONNECT argument that is a plain decimal number (1..65535) is used as the system
+     *  number as it is, without this call; any other text is a name. */
     /** The number of a system name, from the application's own table (as SINTRAN's
      *  DEF-REMOTE): 0 and `number` filled, or -1 for an unknown name, which CONNECT refuses.
      *  The number is never worked out from the name text. Required. */

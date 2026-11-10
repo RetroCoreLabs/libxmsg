@@ -377,7 +377,17 @@ static void line_close(void *ctx, ConsoleClose why)
 static void line_describe(void *ctx, char *buf, size_t cap)
 {
     const ConsoleTadLine *t = (const ConsoleTadLine *)ctx;
-    (void)snprintf(buf, cap, "%s", t->who);
+    size_t n = strlen(t->who);
+    if (cap == 0u)
+    {
+        return;
+    }
+    if (n >= cap)
+    {
+        n = cap - 1u; /* cut to the caller's buffer */
+    }
+    memcpy(buf, t->who, n);
+    buf[n] = '\0';
 }
 
 void console_tad_line(ConsoleTadLine *t, ConsoleLine *out)

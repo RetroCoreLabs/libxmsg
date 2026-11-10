@@ -27,6 +27,8 @@
  * number comes from our own table, as SINTRAN's DEF-REMOTE: --system NAME is always in it with
  * --peer, and each --route NAME=N adds one (for example --route D102=102). A name that is not in
  * the table is refused at the prompt ("unknown system"). The number is never read from the name.
+ * CONNECT also takes a plain system number (CONNECT 102): Ronny's rule is "a system number or an
+ * alias, never a number read out of a name".
  *
  * Two modes (--mode):
  *  - direct (the default): each telnet client goes straight into a TAD session on --system.

@@ -573,6 +573,20 @@ static void onward_session(void)
     console_onward_state(s, CONSOLE_ONWARD_CLOSED, 0);
     CHECK(strcmp(f.out, "\r\n<session closed>\r\nTAD> ") == 0);
 
+    /* A plain number is a system number as it is; a name is never read as a number. */
+    type(s, "connect 103\r", 150);
+    CHECK_EQ(s_node.opens, 2);
+    CHECK_EQ(s_node.number, 103);
+    console_onward_state(s, CONSOLE_ONWARD_CLOSED, 0);
+    clear(&f);
+    type(s, "connect D103\r", 160);
+    CHECK(has(&f, "unknown system D103"));
+    CHECK_EQ(s_node.opens, 2);
+    type(s, "connect 70000\r", 170);
+    CHECK(has(&f, "unknown system 70000"));
+    type(s, "connect 0\r", 170);
+    CHECK(has(&f, "unknown system 0"));
+
     /* A failure says its error number. */
     type(s, "connect D100\r", 200);
     CHECK_EQ(s_node.number, 100);
