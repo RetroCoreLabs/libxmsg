@@ -120,6 +120,8 @@ static void node_init(XmsgNode *n, uint16_t node, Store *store, XmsgTransportPor
     cfg.lapb.t3_ms = 2000;
     cfg.settle_ms = 20;
     cfg.answer_routing = answer_routing;
+    cfg.reject_closed_ports = (node != 100); /* 100 is a tap: it takes every datagram through
+                                              * unhandled */
     memset(&ports, 0, sizeof ports);
     ports.transport = *tp;
     ports.flags1.ctx = store;
@@ -420,6 +422,38 @@ static void walk_needs_a_ready_link(void)
     CHECK_EQ(xrout_walk_cancel(&w), XMSG_ESTATE);
 }
 
+/* ------------------------------------------------------------------ closed ports */
+
+/* D100's 7WHO from the live TADA hang (2026-11-10 09:44:39.232, info field of the 38-byte
+ * I-frame): to our port 0x00EB, which belonged to a session lost when the board rebooted. */
+#define LIVE_7WHO_TO_DEAD_PORT                                                                      "21 13 00 0E 00 65 00 64 00 4A 00 48 DD 83 21 00 82 14 00 65 00 EB 00 64 09 B6 00 48 00 00 "     "00 02 FC 00"
+
+static void data_to_a_closed_port_gets_xeima_not_an_ack(void)
+{
+    uint8_t live[64];
+    int n = test_hex_to_bytes(LIVE_7WHO_TO_DEAD_PORT, live, sizeof live);
+    CHECK_EQ(n, 34);
+    uint32_t now = bring_up(true);
+    uint32_t acks_before = s_b.stats.acks_received;
+    uint32_t acks_sent_before = s_a.stats.acks_sent;
+
+    host_sends(live, (size_t)n, now);
+    now = run(now, 300);
+    /* Real ND machines answer with a bare error frame, Flags2 XEIMA, and no ACK. */
+    CHECK_EQ(s_a.stats.closed_port_rejects, 1);
+    CHECK_EQ(s_a.stats.acks_sent, acks_sent_before);
+    CHECK_EQ(s_b.stats.acks_received, acks_before);
+    CHECK_EQ(s_b.stats.errors_in, 1);
+
+    /* A letter to port 0 is still acknowledged as before. */
+    uint8_t req[64];
+    size_t rl = host_request(req, sizeof req, 0x0049, 101);
+    host_sends(req, rl, now);
+    (void)run(now, 300);
+    CHECK_EQ(s_a.stats.closed_port_rejects, 1);
+    CHECK_EQ(s_b.stats.acks_received - acks_before, 1);
+}
+
 int main(void)
 {
     printf("[pair_route]\n");
@@ -427,5 +461,6 @@ int main(void)
     walk_reads_the_whole_table();
     walk_times_out_when_the_host_is_silent();
     walk_needs_a_ready_link();
+    data_to_a_closed_port_gets_xeima_not_an_ack();
     TEST_DONE();
 }

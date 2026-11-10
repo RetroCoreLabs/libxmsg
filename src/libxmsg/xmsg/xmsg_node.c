@@ -33,6 +33,7 @@ void xmsg_node_config_default(XmsgNodeConfig *cfg, uint16_t own_node)
     cfg->portword_seed = 0x5A5A;
     cfg->persist_every = 1;
     cfg->answer_routing = true;
+    cfg->reject_closed_ports = true;
     /* The C# Topology's default link index (TopologyNode.Link = 1); real neighbours report 1 or
      * 2 (li-rout-103-tree, li-route-d103-tree). It is our own numbering of our own links. */
     cfg->route_link_index = 1;
@@ -256,6 +257,20 @@ static void queue_short(XmsgNode *n, uint8_t subtype, uint16_t dst_node, uint16_
     n->pending_short[at].flags1 = flags1;
     n->pending_short[at].flags2 = flags2;
     n->pending_count++;
+}
+
+/* True when some attached session owns this local port. Only the port is asked, not the peer
+ * port: a real node rejects on the magic number (our port word) alone. */
+static bool port_is_open(const XmsgNode *n, uint16_t port)
+{
+    for (int i = 0; i < XMSG_MAX_SESSIONS; i++)
+    {
+        if (n->sessions[i] != NULL && n->sessions[i]->local_port == port)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 /* Record a Flags1 seen from a peer in a small per-peer ring; true when it was already there. */
@@ -636,7 +651,30 @@ static void handle_datagram(XmsgNode *n, const XmsgDatagram *in, uint32_t now_ms
     case SINTRAN_SUBTYPE_DATA:
     case SINTRAN_SUBTYPE_FIRST_FRAG:
     case SINTRAN_SUBTYPE_CONTINUATION:
-        /* Every data-carrying frame is acknowledged, fragments included, before anything else. */
+        /* Data for a port nobody here owns gets a bare 14-byte error frame, Flags2 XEIMA (FFED),
+         * at the offending frame's own Flags1, and NO ACK. That is what real ND machines send
+         * (10 of 10 rejects in four captures; e.g. NDInsight TRIO-SEQUENCE-2026-08-11
+         * trio.pcapng #9333 -> #9349), and the sender then gives up on that conversation.
+         * Without it a host waits for ever: D100's TADA hung on a 7WHO to the port of a session
+         * lost in a reboot (live 2026-11-10 09:44:39). Port 0 is XROUT's and always open.
+         * Continuation frames carry no port and are acknowledged as before. */
+        if (n->cfg.reject_closed_ports && in->has_subhdr && in->sub.dst_port != 0 &&
+            !port_is_open(n, in->sub.dst_port))
+        {
+            queue_short(n, (uint8_t)SINTRAN_SUBTYPE_ERROR, in->hdr.src_node, in->hdr.flags1,
+                        (uint16_t)XMSG_XE_XEIMA);
+            n->stats.closed_port_rejects++;
+            XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_INFO,
+                     "data from node %u port 0x%04X to closed port 0x%04X: XEIMA sent",
+                     in->hdr.src_node, in->sub.src_port, in->sub.dst_port);
+            if (n->cb.unhandled != NULL)
+            {
+                n->cb.unhandled(n->cb.ctx, in);
+            }
+            return;
+        }
+        /* Every other data-carrying frame is acknowledged, fragments included, before anything
+         * else. */
         queue_short(n, (uint8_t)SINTRAN_SUBTYPE_ACK, in->hdr.src_node, in->hdr.flags1, 0x0001);
         n->stats.acks_sent++;
         rc = xmsg_reasm_accept(&n->reasm, in, &whole, now_ms);

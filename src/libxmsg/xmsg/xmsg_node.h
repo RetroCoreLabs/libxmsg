@@ -90,6 +90,10 @@ typedef struct XmsgNodeConfig
     bool answer_routing;    /**< answer XSGSY routing questions at port 0; true. When false they
                              *   go to on_letter like any other port-0 datagram */
     uint16_t route_link_index; /**< XSGSY detail for the directly connected peer; 1 */
+    bool reject_closed_ports; /**< answer data to a port no session owns with XEIMA and no ACK,
+                               *   as real ND machines do; true. Turn off ONLY for a node that
+                               *   takes every datagram through its unhandled callback (a test
+                               *   tap standing in for a host); it then ACKs them as before */
 } XmsgNodeConfig;
 
 /** What the node tells the application. Any pointer may be NULL. */
@@ -153,6 +157,7 @@ typedef struct XmsgNodeStats
     uint32_t datagrams_in;
     uint32_t datagrams_out;
     uint32_t acks_sent;
+    uint32_t closed_port_rejects; /**< data to a port no session owns, answered with XEIMA */
     uint32_t acks_received;
     uint32_t bad_headers; /**< frames whose header checksum or layout was wrong */
     uint32_t repeats;     /**< data frames seen before (same peer, same Flags1) */

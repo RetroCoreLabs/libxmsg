@@ -366,6 +366,7 @@ static uint32_t bring_up(uint16_t first_flags1)
     xmsg_node_config_default(&cfg, 102);
     cfg.lapb.t1_ms = 50;
     cfg.settle_ms = 20;
+    cfg.reject_closed_ports = false; /* a tap: it takes every datagram through unhandled */
     memset(&ports, 0, sizeof ports);
     ports.transport = tb;
     memset(&cb, 0, sizeof cb);

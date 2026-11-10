@@ -189,6 +189,7 @@ static uint32_t bring_up(uint16_t a_first, uint16_t b_first)
     xmsg_node_config_default(&cfg, 100);
     cfg.lapb.t1_ms = 50;
     cfg.settle_ms = 20;
+    cfg.reject_closed_ports = false; /* a tap: it takes every datagram through unhandled */
     memset(&ports, 0, sizeof ports);
     ports.transport = ta;
     ports.flags1.ctx = &s_store_a;
