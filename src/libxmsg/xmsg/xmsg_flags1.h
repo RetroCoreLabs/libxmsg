@@ -106,7 +106,9 @@ void xmsg_flags1_reset(XmsgFlags1Table *t, uint16_t node);
  * @param node    The peer.
  * @param refused The Flags1 it refused.
  * @return true when the count was stepped to `refused - 1`; false when giving up (too many steps
- *         in a row, or the refused number was 0), in which case the count is left alone.
+ *         in a row, or the refused number was 0) or when `refused` was not sent at the current
+ *         count (it is not below `next`: a frame from before a reset or an earlier step), in
+ *         which case the count is left alone.
  */
 bool xmsg_flags1_on_xense(XmsgFlags1Table *t, uint16_t node, uint16_t refused);
 

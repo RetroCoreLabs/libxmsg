@@ -159,16 +159,47 @@ static void xense_steps_down_then_gives_up(void)
     /* Eight steps in a row are tolerated, the ninth gives up and leaves the count alone. */
     for (int i = 0; i < 7; i++)
     {
-        CHECK(xmsg_flags1_on_xense(&t, 100, (uint16_t)(0x2E - i)));
+        /* Each refusal is of the frame just sent at the stepped count. */
+        CHECK_EQ(xmsg_flags1_allocate(&t, 100, &f), XMSG_OK);
+        CHECK(xmsg_flags1_on_xense(&t, 100, f));
     }
+    CHECK_EQ(xmsg_flags1_allocate(&t, 100, &f), XMSG_OK);
     uint16_t before = xmsg_flags1_peek(&t, 100);
-    CHECK(!xmsg_flags1_on_xense(&t, 100, 0x27));
+    CHECK(!xmsg_flags1_on_xense(&t, 100, f));
     CHECK_EQ(xmsg_flags1_peek(&t, 100), before);
     /* A delivery clears the run of steps. */
     xmsg_flags1_on_delivered(&t, 100);
-    CHECK(xmsg_flags1_on_xense(&t, 100, 0x27));
+    CHECK(xmsg_flags1_on_xense(&t, 100, f));
     /* Refusing number 0 cannot be stepped below. */
     CHECK(!xmsg_flags1_on_xense(&t, 100, 0));
+}
+
+/* XMSGGW to D100, 2026-11-10 17:18:31 (HDLC capture pane A): a question went at 0x0044, the
+ * reachability reply reset the count, the question went again at 0x0000, and only then did
+ * D100's XENSE for 0x0044 arrive. That late refusal must not move the count. */
+static void xense_for_a_frame_before_the_reset_is_ignored(void)
+{
+    FakeStore store;
+    memset(&store, 0, sizeof store);
+    XmsgFlags1Port port = {&store, fake_load, fake_save, NULL, NULL};
+    XmsgFlags1Table t;
+    uint16_t f;
+    xmsg_flags1_init(&t, &port, 1);
+    for (int i = 0; i < 0x45; i++)
+    {
+        xmsg_flags1_allocate(&t, 100, &f);
+    }
+    CHECK_EQ(f, 0x44);
+    xmsg_flags1_reset(&t, 100);
+    CHECK_EQ(xmsg_flags1_allocate(&t, 100, &f), XMSG_OK);
+    CHECK_EQ(f, 0x0000);
+    CHECK(!xmsg_flags1_on_xense(&t, 100, 0x0044));
+    CHECK_EQ(xmsg_flags1_peek(&t, 100), 0x0001);
+    /* A refusal of a number the count has stepped back over is stale too. */
+    CHECK_EQ(xmsg_flags1_allocate(&t, 100, &f), XMSG_OK);
+    CHECK(xmsg_flags1_on_xense(&t, 100, f));
+    CHECK(!xmsg_flags1_on_xense(&t, 100, 0x0002));
+    CHECK_EQ(xmsg_flags1_peek(&t, 100), 0x0000);
 }
 
 static void peers_are_independent_and_0xffff_is_skipped(void)
@@ -212,6 +243,7 @@ int main(void)
     persist_every_n_saves_a_bound_ahead();
     reachability_resets_to_zero_and_saves();
     xense_steps_down_then_gives_up();
+    xense_for_a_frame_before_the_reset_is_ignored();
     peers_are_independent_and_0xffff_is_skipped();
     table_full_is_reported();
     TEST_DONE();

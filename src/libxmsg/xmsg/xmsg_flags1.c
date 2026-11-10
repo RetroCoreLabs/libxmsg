@@ -143,6 +143,21 @@ bool xmsg_flags1_on_xense(XmsgFlags1Table *t, uint16_t node, uint16_t refused)
     {
         return false;
     }
+    /* Only a number we sent at the current count can be stepped from: one of 1..0x7FFF below
+     * `next` (serial-number distance, so a wrap past 0xFFFF still works). Anything else was sent
+     * before a reachability reset or before an earlier step, and the peer refusing it says
+     * nothing about the count now. Live, XMSGGW 2026-11-10 17:18:31: a frame went at 0x0044, the
+     * reset came, the frame went again at 0x0000 (accepted), and then D100's refusal of the old
+     * 0x0044 arrived; stepping from it set the count to 0x0043 and every later frame was refused. */
+    uint16_t distance = (uint16_t)(e->next - refused);
+    if (distance == 0u || distance >= 0x8000u)
+    {
+        XMSG_LOG(XMSG_LOG_FLAGS1, XMSG_LOG_INFO,
+                 "node %u: XENSE at Flags1 0x%04X is for a frame sent before the count became "
+                 "0x%04X; ignored",
+                 node, refused, e->next);
+        return false;
+    }
     e->xense_steps++;
     if (e->xense_steps > XMSG_FLAGS1_MAX_XENSE_STEPS || refused == 0)
     {
