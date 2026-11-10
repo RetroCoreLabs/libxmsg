@@ -40,6 +40,8 @@
  *                         we are linked to routes it on)
  *      LIST               the routing table of the host we are linked to, read with XSGSY
  *                         (xrout_walk.h): system, how it is reached, detail, hops and WANs
+ *      NAMES              the name table of the host we are linked to, read with XSGNI
+ *                         (xrout_names_walk.h): system names and named ports, as LIST-NAMES
  *      WHO                every client on the tool: terminal, user, address, time, what it does
  *      INFO               the link: our node, the peer, link state, line, counters, uptime
  *      PASSWORD           change one's own password (old, new, again)
@@ -866,6 +868,8 @@ typedef struct Place
     size_t ready_len;
     XroutWalk walk;
     bool listing;
+    XroutNamesWalk names_walk;
+    bool naming; /* a NAMES walk is running for this place */
 } Place;
 
 typedef enum BridgeMode
@@ -1053,6 +1057,46 @@ static void svc_list_cancel(void *ctx, int place)
     (void)ctx;
     p->listing = false; /* first: the cancel calls walk_done, which then tells nobody */
     (void)xrout_walk_cancel(&p->walk);
+}
+
+static void names_row(void *ctx, const XroutNameRow *row)
+{
+    Place *p = (Place *)ctx;
+    if (p->naming)
+    {
+        console_names_row(console_host_session(&s_console, (int)(p - s_places)), row);
+    }
+}
+
+static void names_done(void *ctx, int result, unsigned rows)
+{
+    Place *p = (Place *)ctx;
+    if (!p->naming)
+    {
+        return; /* cancelled: the user went away */
+    }
+    p->naming = false;
+    console_names_done(console_host_session(&s_console, (int)(p - s_places)), result, rows);
+}
+
+static int svc_names(void *ctx, int place)
+{
+    Place *p = &s_places[place];
+    XroutNamesWalkCallbacks cb = {p, names_row, names_done};
+    int rc;
+    (void)ctx;
+    /* The host's XMSG system number is taken to be its node number, as for LIST. */
+    rc = xrout_names_walk_start(&p->names_walk, &s_node, s_peer, s_peer, 10000, &cb, now_ms());
+    p->naming = (rc == XMSG_OK);
+    return rc;
+}
+
+static void svc_names_cancel(void *ctx, int place)
+{
+    Place *p = &s_places[place];
+    (void)ctx;
+    p->naming = false; /* first: the cancel calls names_done, which then tells nobody */
+    (void)xrout_names_walk_cancel(&p->names_walk);
 }
 
 static void svc_link_info(void *ctx, TermLinkInfo *li)
@@ -1598,6 +1642,10 @@ static void line_read(uint8_t *buf, size_t cap, uint32_t now)
         {
             (void)xrout_walk_cancel(&p->walk); /* walk_done tells the user */
         }
+        if (p->naming)
+        {
+            (void)xrout_names_walk_cancel(&p->names_walk); /* names_done tells the user */
+        }
         if (p->pending)
         {
             svc_hangup(NULL, i);
@@ -1654,6 +1702,8 @@ static int console_setup(void)
     cfg.services.onward_hangup = svc_hangup;
     cfg.services.list_start = svc_list;
     cfg.services.list_cancel = svc_list_cancel;
+    cfg.services.names_start = svc_names;
+    cfg.services.names_cancel = svc_names_cancel;
     cfg.services.link_info = svc_link_info;
     tad_setup();
     return console_host_init(&s_console, &cfg, s_sessions, HOST_PLACES);

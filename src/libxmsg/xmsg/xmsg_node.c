@@ -6,6 +6,7 @@
  */
 #include "libxmsg/xmsg/xmsg_node.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "libhdlc/hdlc.h"
@@ -37,6 +38,8 @@ void xmsg_node_config_default(XmsgNodeConfig *cfg, uint16_t own_node)
     /* The C# Topology's default link index (TopologyNode.Link = 1); real neighbours report 1 or
      * 2 (li-rout-103-tree, li-route-d103-tree). It is our own numbering of our own links. */
     cfg->route_link_index = 1;
+    cfg->answer_names = true;
+    /* system_name stays "": the own-name row is then "D" + own_system (name_auto_rows). */
 }
 
 static void notify_link(XmsgNode *n, LapbState state, const char *reason)
@@ -425,9 +428,59 @@ static bool route_reply_queued(const XmsgNode *n, uint16_t peer_node, uint16_t r
     return false;
 }
 
+/* Start a reply to an XROUT question at port 0: who asked, and for a repeat (same Flags1) the
+ * number the first reply went out on. Returns false when nothing is to be sent: the reply to the
+ * first copy is still waiting in the queue. */
+static bool xrout_reply_begin(const XmsgNode *n, const XmsgDatagram *dg, XmsgPendingRoute *p)
+{
+    memset(p, 0, sizeof *p);
+    p->peer_node = dg->hdr.src_node;
+    p->req_flags1 = dg->hdr.flags1;
+    p->asker_system = dg->sub.src_system;
+    p->asker_port = dg->sub.src_port;
+    if (!dg->repeat)
+    {
+        return true;
+    }
+    if (route_reply_queued(n, p->peer_node, p->req_flags1))
+    {
+        return false; /* the reply to the first copy has not even gone out yet */
+    }
+    for (int i = 0; i < XMSG_NODE_ROUTE_MEMORY; i++)
+    {
+        const XmsgRouteAnswer *a = &n->route_answers[i];
+        if (a->in_use && a->peer_node == p->peer_node && a->req_flags1 == p->req_flags1)
+        {
+            p->is_repeat = true;
+            p->reply_flags1 = a->reply_flags1;
+            break;
+        }
+    }
+    /* Not remembered (the first copy was dropped, or the memory moved on): a new answer. */
+    return true;
+}
+
+/* Queue a finished reply. Returns false when the queue is full; the host asks again when no
+ * reply comes, so nothing is lost but time. */
+static bool xrout_reply_queue(XmsgNode *n, const XmsgPendingRoute *p)
+{
+    if (n->pending_route_count >= XMSG_NODE_PENDING_ROUTE)
+    {
+        XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_WARN,
+                 "XROUT reply queue full: question F1=0x%04X from node %u not answered",
+                 p->req_flags1, p->peer_node);
+        return false;
+    }
+    n->pending_route[(n->pending_route_head + n->pending_route_count) % XMSG_NODE_PENDING_ROUTE] =
+        *p;
+    n->pending_route_count++;
+    return true;
+}
+
 static void handle_route_request(XmsgNode *n, const XmsgDatagram *dg)
 {
     XmsgPendingRoute p;
+    XroutRouteEntry entry;
     uint16_t asked = 0;
     uint8_t serial = 0;
 
@@ -442,58 +495,136 @@ static void handle_route_request(XmsgNode *n, const XmsgDatagram *dg)
                  dg->hdr.src_node, dg->hdr.flags1, (unsigned)dg->body_len);
         return;
     }
-    memset(&p, 0, sizeof p);
-    p.peer_node = dg->hdr.src_node;
-    p.req_flags1 = dg->hdr.flags1;
-    p.asker_system = dg->sub.src_system;
-    p.asker_port = dg->sub.src_port;
-    p.serial = serial;
-
-    if (dg->repeat)
+    if (!xrout_reply_begin(n, dg, &p))
     {
-        if (route_reply_queued(n, p.peer_node, p.req_flags1))
-        {
-            return; /* the reply to the first copy has not even gone out yet */
-        }
-        for (int i = 0; i < XMSG_NODE_ROUTE_MEMORY; i++)
-        {
-            const XmsgRouteAnswer *a = &n->route_answers[i];
-            if (a->in_use && a->peer_node == p.peer_node && a->req_flags1 == p.req_flags1)
-            {
-                p.is_repeat = true;
-                p.reply_flags1 = a->reply_flags1;
-                break;
-            }
-        }
-        /* Not remembered (the first copy was dropped, or the memory moved on): a new answer. */
-    }
-
-    route_auto_entries(n);
-    (void)xrout_route_lookup(&n->routes, asked, &p.entry); /* a miss answers system 0 */
-    if (n->pending_route_count >= XMSG_NODE_PENDING_ROUTE)
-    {
-        /* The host asks again when no reply comes; nothing is lost but time. */
-        n->stats.route_bad++;
-        XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_WARN,
-                 "routing reply queue full: question F1=0x%04X from node %u not answered",
-                 p.req_flags1, p.peer_node);
         return;
     }
-    n->pending_route[(n->pending_route_head + n->pending_route_count) % XMSG_NODE_PENDING_ROUTE] =
-        p;
-    n->pending_route_count++;
+    route_auto_entries(n);
+    (void)xrout_route_lookup(&n->routes, asked, &entry); /* a miss answers system 0 */
+    xrout_route_reply_write(p.body, serial, &entry);
+    p.body_len = (uint8_t)XROUT_ROUTE_REP_SIZE;
+    if (!xrout_reply_queue(n, &p))
+    {
+        n->stats.route_bad++;
+        return;
+    }
     XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_DEBUG,
              "routing question from node %u F1=0x%04X for system %u%s: answer system %u (%s)",
-             p.peer_node, p.req_flags1, asked, p.is_repeat ? " (repeat)" : "", p.entry.system,
-             xrout_route_how_name(p.entry.how));
+             p.peer_node, p.req_flags1, asked, p.is_repeat ? " (repeat)" : "", entry.system,
+             xrout_route_how_name(entry.how));
 }
 
-/* Send the oldest waiting XSGSY reply. The caller has checked a window slot is free. Returns
- * true when the reply went into the window. */
+/* ------------------------------------------------------------------------------------------ */
+/* Name questions (XSGNI); the rules are in xmsg_node.h                                       */
+/* ------------------------------------------------------------------------------------------ */
+
+/* Put our own system name row in, unless the application already has one there. */
+static void name_auto_rows(XmsgNode *n)
+{
+    XroutNameRow r;
+    char text[XROUT_NAME_LEN_MAX + 1u];
+    const char *name = n->cfg.system_name;
+    if (xrout_name_has(&n->names, n->cfg.own_system, XROUT_NAME_SYSTEM_PORT))
+    {
+        return;
+    }
+    if (memchr(name, 0, sizeof n->cfg.system_name) == NULL || name[0] == '\0')
+    {
+        /* Every captured system name is "D" + the number (D100 ... D19999). Used when the
+         * configured name is empty, or has no end inside its array (never read past it). */
+        (void)snprintf(text, sizeof text, "D%u", (unsigned)n->cfg.own_system);
+        name = text;
+    }
+    if (xrout_name_row_set(&r, n->cfg.own_system, XROUT_NAME_SYSTEM_PORT, name,
+                           XROUT_NAME_NO_FREE) != XMSG_OK ||
+        xrout_name_put(&n->names, &r) != XMSG_OK)
+    {
+        /* Only a full table can do this: the name fits by its array size. */
+        XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_WARN, "own system name row %u:0001 could not be added",
+                 (unsigned)n->cfg.own_system);
+    }
+}
+
+int xmsg_node_name_put(XmsgNode *n, const XroutNameRow *r)
+{
+    if (n == NULL)
+    {
+        return XMSG_EINVAL;
+    }
+    return xrout_name_put(&n->names, r);
+}
+
+int xmsg_node_name_remove(XmsgNode *n, uint16_t system, uint16_t port)
+{
+    if (n == NULL)
+    {
+        return XMSG_EINVAL;
+    }
+    return xrout_name_remove(&n->names, system, port);
+}
+
+const XroutNameTable *xmsg_node_names(XmsgNode *n)
+{
+    if (n == NULL)
+    {
+        return NULL;
+    }
+    name_auto_rows(n);
+    return &n->names;
+}
+
+/* An XSGNI question: XMCSM 0x0100 and service byte 0x45 (capture listnames-hub, 2026-11-10). */
+static bool is_name_request(const XmsgDatagram *dg)
+{
+    return dg->has_subhdr && dg->sub.xmcsm == XROUT_NAME_XMCSM && dg->body_len >= 2 &&
+           dg->body[1] == XROUT_NAME_SERVICE;
+}
+
+static void handle_name_request(XmsgNode *n, const XmsgDatagram *dg)
+{
+    XmsgPendingRoute p;
+    XroutNameRow row;
+    uint32_t asked = 0;
+    uint8_t serial = 0;
+    size_t len;
+    bool found;
+
+    n->stats.name_requests++;
+    if (xrout_name_request_read(dg->body, dg->body_len, &serial, &asked) != XMSG_OK)
+    {
+        n->stats.name_bad++;
+        XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_WARN,
+                 "name question from node %u F1=0x%04X has no magic number (%u bytes): "
+                 "not answered",
+                 dg->hdr.src_node, dg->hdr.flags1, (unsigned)dg->body_len);
+        return;
+    }
+    if (!xrout_reply_begin(n, dg, &p))
+    {
+        return;
+    }
+    p.is_name = true;
+    name_auto_rows(n);
+    found = xrout_name_lookup(&n->names, asked, &row);
+    /* Every row in the table passed xrout_name_put(), so it is writable; 0 cannot happen. */
+    len = xrout_name_reply_write(p.body, serial, found ? &row : NULL);
+    p.body_len = (uint8_t)len;
+    if (len == 0 || !xrout_reply_queue(n, &p))
+    {
+        n->stats.name_bad++;
+        return;
+    }
+    XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_DEBUG,
+             "name question from node %u F1=0x%04X from 0x%08lX%s: answer %s 0x%08lX",
+             p.peer_node, p.req_flags1, (unsigned long)asked, p.is_repeat ? " (repeat)" : "",
+             found ? row.name : "(end)", (unsigned long)(found ? xrout_name_magic(&row) : 0u));
+}
+
+/* Send the oldest waiting XROUT reply (XSGSY or XSGNI). The caller has checked a window slot is
+ * free. Returns true when the reply went into the window. */
 static bool send_route_reply(XmsgNode *n, uint32_t now_ms)
 {
     XmsgPendingRoute *p = &n->pending_route[n->pending_route_head];
-    uint8_t body[XROUT_ROUTE_REP_SIZE];
     XmsgSubhdr sub;
     uint16_t flags1;
     uint8_t *info;
@@ -502,7 +633,8 @@ static bool send_route_reply(XmsgNode *n, uint32_t now_ms)
 
     /* Both address fields carry the ASKER's system and port: the reply goes back to the port
      * that asked, and XROUT allocates none of its own (C# ListRoutingServer.cs; every captured
-     * reply, e.g. list-routing-info frame 10: 0066 02A5 0066 02A5). */
+     * reply, e.g. list-routing-info frame 10: 0066 02A5 0066 02A5, and every XSGNI reply of
+     * listnames-hub: 0066 06B2 0066 06B2). XSGSY and XSGNI replies have the same sub-header. */
     sub.frame_flags = XROUT_ROUTE_REP_FRAME_FLAGS;
     sub.role = XROUT_ROUTE_REP_ROLE;
     sub.dst_system = p->asker_system;
@@ -510,7 +642,6 @@ static bool send_route_reply(XmsgNode *n, uint32_t now_ms)
     sub.src_system = p->asker_system;
     sub.src_port = p->asker_port;
     sub.xmcsm = XROUT_ROUTE_XMCSM;
-    xrout_route_reply_write(body, p->serial, &p->entry);
 
     /* Reserve the slot BEFORE spending a number: a number spent on nothing is a gap the peer
      * would wait for (the same rule as xmsg_node_send_commit). */
@@ -528,13 +659,13 @@ static bool send_route_reply(XmsgNode *n, uint32_t now_ms)
         return false;
     }
     written = xmsg_dg_write_data(info, cap, (uint8_t)SINTRAN_SUBTYPE_DATA, p->peer_node,
-                                 n->cfg.own_node, flags1, XROUT_ROUTE_XMCSM, &sub, body,
-                                 sizeof body);
+                                 n->cfg.own_node, flags1, XROUT_ROUTE_XMCSM, &sub, p->body,
+                                 p->body_len);
     if (written == 0 || lapb_tx_commit(&n->lapb, written, now_ms) != XMSG_OK)
     {
         lapb_tx_cancel(&n->lapb);
         XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_ERROR,
-                 "routing reply F1=0x%04X could not be built: the number is lost", flags1);
+                 "XROUT reply F1=0x%04X could not be built: the number is lost", flags1);
         return false;
     }
     if (!p->is_repeat)
@@ -547,9 +678,16 @@ static bool send_route_reply(XmsgNode *n, uint32_t now_ms)
         n->route_answer_next = (uint8_t)((n->route_answer_next + 1) % XMSG_NODE_ROUTE_MEMORY);
     }
     n->stats.datagrams_out++;
-    n->stats.route_replies++;
-    XMSG_LOG(XMSG_LOG_DG, XMSG_LOG_TRACE, "TX ROUTING REPLY to %u F1=0x%04X for question 0x%04X",
-             p->peer_node, flags1, p->req_flags1);
+    if (p->is_name)
+    {
+        n->stats.name_replies++;
+    }
+    else
+    {
+        n->stats.route_replies++;
+    }
+    XMSG_LOG(XMSG_LOG_DG, XMSG_LOG_TRACE, "TX %s REPLY to %u F1=0x%04X for question 0x%04X",
+             p->is_name ? "NAME" : "ROUTING", p->peer_node, flags1, p->req_flags1);
     n->pending_route_head = (uint8_t)((n->pending_route_head + 1) % XMSG_NODE_PENDING_ROUTE);
     n->pending_route_count--;
     return true;
@@ -693,6 +831,11 @@ static void handle_datagram(XmsgNode *n, const XmsgDatagram *in, uint32_t now_ms
             if (n->cfg.answer_routing && is_route_request(&whole))
             {
                 handle_route_request(n, &whole);
+                return;
+            }
+            if (n->cfg.answer_names && is_name_request(&whole))
+            {
+                handle_name_request(n, &whole);
                 return;
             }
             if (n->cb.on_letter != NULL)

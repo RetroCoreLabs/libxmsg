@@ -170,6 +170,22 @@ static void wipe(ConsoleSession *s)
     s->phase = CONSOLE_PH_FREE;
 }
 
+/* Stop a running LIST or NAMES walk of a user who went away. */
+static void walk_cancel(ConsoleSession *s)
+{
+    const ConsoleServices *sv = &s->host->cfg.services;
+    if (s->listing && s->listing_names && sv->names_cancel != NULL)
+    {
+        sv->names_cancel(sv->ctx, s->place);
+    }
+    else if (s->listing && !s->listing_names && sv->list_cancel != NULL)
+    {
+        sv->list_cancel(sv->ctx, s->place);
+    }
+    s->listing = false;
+    s->listing_names = false;
+}
+
 /* The core ends the line. The session is free at once: a close never comes with an onward
  * session still open (EXIT is typed at the prompt; direct mode closes after the end). */
 static void close_line(ConsoleSession *s, ConsoleClose why)
@@ -177,10 +193,7 @@ static void close_line(ConsoleSession *s, ConsoleClose why)
     ConsoleLine line = s->line;
     XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d: closing the line (%d)", s->place,
              (int)why);
-    if (s->listing && s->host->cfg.services.list_cancel != NULL)
-    {
-        s->host->cfg.services.list_cancel(s->host->cfg.services.ctx, s->place);
-    }
+    walk_cancel(s);
     if (s->dirty && line.flush != NULL)
     {
         line.flush(line.ctx);
@@ -610,6 +623,7 @@ static void cmd_help(ConsoleSession *s)
 {
     say(s, "CONNECT <system>   connect to a SINTRAN system, e.g. CONNECT D102\r\n"
            "LIST               the routing table of the host we are linked to\r\n"
+           "NAMES              the system names and named ports the host knows\r\n"
            "WHO                the users on this bridge\r\n"
            "INFO               the link to the SINTRAN machine\r\n"
            "PASSWORD           change your password\r\n"
@@ -686,39 +700,48 @@ static void cmd_info(ConsoleSession *s)
     }
 }
 
+/* Say why a LIST or NAMES walk could not start. Returns true when it did start (rc 0). */
+static bool walk_started(ConsoleSession *s, const char *what, int rc)
+{
+    if (rc == XMSG_ESTATE)
+    {
+        sayf(s, "%s: the link to the host is not ready\r\n", what);
+        return false;
+    }
+    if (rc == XMSG_ENOSPC)
+    {
+        sayf(s, "%s: every session slot is in use; try again later\r\n", what);
+        return false;
+    }
+    if (rc == XMSG_EAGAIN)
+    {
+        sayf(s, "%s: another user's %s is running; try again\r\n", what, what);
+        return false;
+    }
+    if (rc != 0)
+    {
+        sayf(s, "%s: cannot start (%d)\r\n", what, rc);
+        return false;
+    }
+    return true;
+}
+
 /* Returns true when the prompt comes back from console_list_done(). */
 static bool cmd_list(ConsoleSession *s)
 {
     const ConsoleServices *sv = &s->host->cfg.services;
     TermLinkInfo li;
-    int rc;
     if (sv->list_start == NULL)
     {
         say(s, "LIST: not available here\r\n");
         return false;
     }
-    rc = sv->list_start(sv->ctx, s->place);
-    if (rc == XMSG_ESTATE)
+    if (!walk_started(s, "LIST", sv->list_start(sv->ctx, s->place)))
     {
-        say(s, "LIST: the link to the host is not ready\r\n");
-        return false;
-    }
-    if (rc == XMSG_ENOSPC)
-    {
-        say(s, "LIST: every session slot is in use; try again later\r\n");
-        return false;
-    }
-    if (rc == XMSG_EAGAIN)
-    {
-        say(s, "LIST: another user's LIST is running; try again\r\n");
-        return false;
-    }
-    if (rc != 0)
-    {
-        sayf(s, "LIST: cannot start (%d)\r\n", rc);
         return false;
     }
     s->listing = true;
+    s->listing_names = false;
     memset(&li, 0, sizeof li);
     if (sv->link_info != NULL)
     {
@@ -989,6 +1012,34 @@ static void cmd_admin(ConsoleSession *s, TermCmd cmd, const char *arg)
     }
 }
 
+/* Returns true when the prompt comes back from console_names_done(). */
+static bool cmd_names(ConsoleSession *s)
+{
+    const ConsoleServices *sv = &s->host->cfg.services;
+    TermLinkInfo li;
+    if (sv->names_start == NULL)
+    {
+        say(s, "NAMES: not available here\r\n");
+        return false;
+    }
+    if (!walk_started(s, "NAMES", sv->names_start(sv->ctx, s->place)))
+    {
+        return false;
+    }
+    s->listing = true;
+    s->listing_names = true;
+    memset(&li, 0, sizeof li);
+    if (sv->link_info != NULL)
+    {
+        sv->link_info(sv->ctx, &li);
+    }
+    /* The port column is the port word >> 7, as LIST-NAMES prints it (0x0401 -> 8). */
+    sayf(s, "Names known to node %u:\r\n"
+            "  name              system  port  free\r\n",
+         (unsigned)li.peer_node_cfg);
+    return true;
+}
+
 /* One line typed at the prompt. */
 /* size exemption: command table */
 static void prompt_line(ConsoleSession *s, const char *text, uint32_t now_ms)
@@ -997,7 +1048,7 @@ static void prompt_line(ConsoleSession *s, const char *text, uint32_t now_ms)
     TermCmd cmd = term_cmd_parse(text, arg, sizeof arg);
     if (s->listing)
     {
-        say(s, "LIST is still running\r\n");
+        say(s, s->listing_names ? "NAMES is still running\r\n" : "LIST is still running\r\n");
         return;
     }
     switch (cmd)
@@ -1018,6 +1069,12 @@ static void prompt_line(ConsoleSession *s, const char *text, uint32_t now_ms)
         break;
     case TERM_CMD_LIST:
         if (cmd_list(s))
+        {
+            return; /* the prompt comes back when the walk ends */
+        }
+        break;
+    case TERM_CMD_NAMES:
+        if (cmd_names(s))
         {
             return; /* the prompt comes back when the walk ends */
         }
@@ -1259,18 +1316,12 @@ void console_escape(ConsoleSession *s)
 
 void console_line_lost(ConsoleSession *s)
 {
-    const ConsoleServices *sv;
     if (s == NULL || s->phase == CONSOLE_PH_FREE || s->phase == CONSOLE_PH_DRAIN)
     {
         return;
     }
-    sv = &s->host->cfg.services;
     XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d: the line is gone", s->place);
-    if (s->listing && sv->list_cancel != NULL)
-    {
-        sv->list_cancel(sv->ctx, s->place);
-    }
-    s->listing = false;
+    walk_cancel(s);
     if (s->phase == CONSOLE_PH_SESSION &&
         (s->onward == CONSOLE_ONWARD_OPENING || s->onward == CONSOLE_ONWARD_RUNNING))
     {
@@ -1380,7 +1431,7 @@ void console_onward_logout(ConsoleSession *s)
 
 void console_list_entry(ConsoleSession *s, const XroutRouteEntry *e)
 {
-    if (s == NULL || e == NULL || !s->listing)
+    if (s == NULL || e == NULL || !s->listing || s->listing_names)
     {
         return;
     }
@@ -1391,7 +1442,7 @@ void console_list_entry(ConsoleSession *s, const XroutRouteEntry *e)
 
 void console_list_done(ConsoleSession *s, int result, unsigned entries)
 {
-    if (s == NULL || !s->listing)
+    if (s == NULL || !s->listing || s->listing_names)
     {
         return;
     }
@@ -1408,6 +1459,53 @@ void console_list_done(ConsoleSession *s, int result, unsigned entries)
     {
         sayf(s, "LIST: the host refused the question (error %d, after %u system(s))\r\n",
              result, entries);
+    }
+    show_prompt(s);
+    flush(s);
+}
+
+void console_names_row(ConsoleSession *s, const XroutNameRow *row)
+{
+    if (s == NULL || row == NULL || !s->listing || !s->listing_names)
+    {
+        return;
+    }
+    if (xrout_name_is_system(row))
+    {
+        sayf(s, "  %-16s  %6u  system\r\n", row->name, (unsigned)row->system);
+    }
+    else if (row->free == XROUT_NAME_NO_FREE)
+    {
+        sayf(s, "  %-16s  %6u  %4u\r\n", row->name, (unsigned)row->system,
+             (unsigned)(row->port >> 7u));
+    }
+    else
+    {
+        sayf(s, "  %-16s  %6u  %4u  %4ld\r\n", row->name, (unsigned)row->system,
+             (unsigned)(row->port >> 7u), (long)row->free);
+    }
+}
+
+void console_names_done(ConsoleSession *s, int result, unsigned rows)
+{
+    if (s == NULL || !s->listing || !s->listing_names)
+    {
+        return;
+    }
+    s->listing = false;
+    s->listing_names = false;
+    if (result == XMSG_OK)
+    {
+        sayf(s, "%u name(s)\r\n", rows);
+    }
+    else if (result == XMSG_ETIMEDOUT)
+    {
+        sayf(s, "NAMES: the host did not answer (after %u name(s))\r\n", rows);
+    }
+    else
+    {
+        sayf(s, "NAMES: the host refused the question (error %d, after %u name(s))\r\n",
+             result, rows);
     }
     show_prompt(s);
     flush(s);

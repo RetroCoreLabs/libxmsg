@@ -45,6 +45,7 @@
 #include "libxmsg/xmsg/xmsg_portword.h"
 #include "libxmsg/xmsg/xmsg_session.h"
 #include "libxmsg/xmsg_config.h"
+#include "libxmsg/xrout/xrout_name.h"
 #include "libxmsg/xrout/xrout_route.h"
 #include "libxmsg/xmsg_errors.h"
 #include "libxmsg/xmsg_ports.h"
@@ -64,11 +65,12 @@ typedef enum XmsgFraming
 /** Short frames (ACK, reachability reply) waiting for a window slot. */
 #define XMSG_NODE_PENDING_SHORT 32
 
-/** XSGSY replies waiting for a window slot. The host asks two per system, see XMSG-PROTOCOL.md
- *  section 9.1.1; four covers that with room. */
+/** XROUT replies (XSGSY, XSGNI) waiting for a window slot. The host asks two XSGSY per system,
+ *  see XMSG-PROTOCOL.md section 9.1.1, and LIST-NAMES one XSGNI at a time; four covers that with
+ *  room. */
 #define XMSG_NODE_PENDING_ROUTE 4
 
-/** XSGSY replies remembered, so a repeated request gets the same reply at the same Flags1. */
+/** XROUT replies remembered, so a repeated request gets the same reply at the same Flags1. */
 #define XMSG_NODE_ROUTE_MEMORY 4
 
 /** Recent Flags1 values received per peer, for repeat detection. */
@@ -90,6 +92,11 @@ typedef struct XmsgNodeConfig
     bool answer_routing;    /**< answer XSGSY routing questions at port 0; true. When false they
                              *   go to on_letter like any other port-0 datagram */
     uint16_t route_link_index; /**< XSGSY detail for the directly connected peer; 1 */
+    bool answer_names;      /**< answer XSGNI "get next name" questions at port 0; true. When
+                             *   false they go to on_letter like any other port-0 datagram */
+    char system_name[XROUT_NAME_LEN_MAX + 1u]; /**< our own system name, the XSGNI row
+                             *   own_system:0001; "" (the default) = "D" + own_system in
+                             *   decimal, the form of every captured system name (D100, D19999) */
     bool reject_closed_ports; /**< answer data to a port no session owns with XEIMA and no ACK,
                                *   as real ND machines do; true. Turn off ONLY for a node that
                                *   takes every datagram through its unhandled callback (a test
@@ -119,20 +126,22 @@ typedef struct XmsgPendingShort
     uint16_t flags2;
 } XmsgPendingShort;
 
-/** An XSGSY reply waiting to be sent. */
+/** An XROUT reply (XSGSY or XSGNI) waiting to be sent. Both have the same frame: only the body
+ *  differs, and it is written when the request is read. */
 typedef struct XmsgPendingRoute
 {
     uint16_t peer_node;
     uint16_t req_flags1;   /**< the request's number, to remember the answer by */
     uint16_t asker_system; /**< the request's source system and port, echoed in both */
     uint16_t asker_port;   /**< address fields of the reply (C# ListRoutingServer.cs) */
-    uint8_t serial;
     bool is_repeat;        /**< send again at reply_flags1, spend no new number */
+    bool is_name;          /**< XSGNI (counted in name_replies) rather than XSGSY */
     uint16_t reply_flags1;
-    XroutRouteEntry entry;
+    uint8_t body[XROUT_NAME_REP_MAX]; /**< the reply body, XROUT head on */
+    uint8_t body_len;
 } XmsgPendingRoute;
 
-/** An XSGSY reply that went out. */
+/** An XROUT reply that went out. */
 typedef struct XmsgRouteAnswer
 {
     bool in_use;
@@ -171,6 +180,9 @@ typedef struct XmsgNodeStats
     uint32_t route_requests; /**< XSGSY questions received at port 0 */
     uint32_t route_replies;  /**< XSGSY replies sent, repeats included */
     uint32_t route_bad;      /**< XSGSY questions that could not be read or queued */
+    uint32_t name_requests;  /**< XSGNI questions received at port 0 */
+    uint32_t name_replies;   /**< XSGNI replies sent, repeats included */
+    uint32_t name_bad;       /**< XSGNI questions that could not be read or queued */
 } XmsgNodeStats;
 
 /** The node. Large: keep it static or in a long-lived struct, never on a small stack. */
@@ -203,8 +215,9 @@ struct XmsgNode
                                                   message's two ACKs are reported once */
     bool pumping;                            /**< the pump is running: no re-entry */
 
-    /* XSGSY: our routing table, replies waiting, replies sent */
+    /* XSGSY and XSGNI: our routing and name tables, replies waiting, replies sent */
     XroutRouteTable routes;
+    XroutNameTable names;
     XmsgPendingRoute pending_route[XMSG_NODE_PENDING_ROUTE];
     uint8_t pending_route_head;
     uint8_t pending_route_count;
@@ -358,6 +371,40 @@ int xmsg_node_route_put(XmsgNode *n, const XroutRouteEntry *e);
 
 /** @brief The routing table the node answers from (the automatic entries appear once known). */
 const XroutRouteTable *xmsg_node_routes(XmsgNode *n);
+
+/*
+ * Name questions (XSGNI, XROUT service 69)
+ *
+ * A SINTRAN host's LIST-NAMES reads our XROUT's name table one row at a time: "first row with
+ * magic >= 0", then ">= previous magic + 1", until the end form (xrout_name.h has the bytes). The
+ * node answers by itself, from `names`, which always holds our own system name row
+ * (own_system:0001, cfg.system_name) plus the rows the application adds with xmsg_node_name_put():
+ * other system names (aliases, port word 0x0001) and named ports (*TADADM, ...) with their port
+ * word and, for a connection port, the free-seat count. A row the application puts at
+ * own_system:0001 replaces the automatic one.
+ *
+ * The reply is sent exactly as the XSGSY reply above (our own next Flags1, both address fields =
+ * the asker's, repeat = same reply at the same number), which is what D100 does in the capture of
+ * 2026-11-10: its replies run 0x0011..0x001E on its own count while 102's requests run
+ * 0x0012..0x001F.
+ */
+
+/**
+ * @brief Add a name row, or replace the one with the same system and port word.
+ * @return XMSG_OK, XMSG_EINVAL (NULL, a row xrout_name_row_set() refuses), XMSG_ENOSPC
+ *         (XROUT_NAME_ROWS_MAX rows).
+ */
+int xmsg_node_name_put(XmsgNode *n, const XroutNameRow *r);
+
+/**
+ * @brief Remove a name row (a named port that closed).
+ * @return XMSG_OK, or XMSG_EINVAL when there is no such row. The automatic own-name row comes
+ *         back at the next question.
+ */
+int xmsg_node_name_remove(XmsgNode *n, uint16_t system, uint16_t port);
+
+/** @brief The name table the node answers from (the own-name row included). */
+const XroutNameTable *xmsg_node_names(XmsgNode *n);
 
 /** @brief Send a reachability request (our restart announcement). Does not touch our count. */
 int xmsg_node_send_reach(XmsgNode *n, uint16_t peer_node, uint32_t now_ms);

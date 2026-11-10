@@ -111,6 +111,9 @@ typedef struct FakeNode
     int list_rc;
     int lists;
     int list_cancels;
+    int names_rc;
+    int names;
+    int names_cancels;
 } FakeNode;
 
 static int fn_resolve(void *ctx, const char *system, uint16_t *number)
@@ -175,6 +178,19 @@ static void fn_list_cancel(void *ctx, int place)
 {
     (void)place;
     ((FakeNode *)ctx)->list_cancels++;
+}
+
+static int fn_names(void *ctx, int place)
+{
+    (void)place;
+    ((FakeNode *)ctx)->names++;
+    return ((FakeNode *)ctx)->names_rc;
+}
+
+static void fn_names_cancel(void *ctx, int place)
+{
+    (void)place;
+    ((FakeNode *)ctx)->names_cancels++;
 }
 
 static void fn_info(void *ctx, TermLinkInfo *li)
@@ -317,6 +333,8 @@ static void setup(ConsoleMode mode)
     cfg.services.onward_hangup = fn_hangup;
     cfg.services.list_start = fn_list;
     cfg.services.list_cancel = fn_list_cancel;
+    cfg.services.names_start = fn_names;
+    cfg.services.names_cancel = fn_names_cancel;
     cfg.services.link_info = fn_info;
     CHECK_EQ(console_host_init(&s_host, &cfg, s_sessions, 3), 0);
 }
@@ -454,6 +472,49 @@ static void commands(void)
     s_node.list_rc = XMSG_EAGAIN;
     type(s, "list\r", 3);
     CHECK(has(&f, "another user's LIST is running"));
+    clear(&f);
+
+    /* NAMES: rows from the captured D100 table (listnames-hub, 2026-11-10). */
+    XroutNameRow row;
+    type(s, "names\r", 3);
+    CHECK_EQ(s_node.names, 1);
+    CHECK(has(&f, "Names known to node 100:"));
+    CHECK(!has(&f, "TAD> "));
+    type(s, "who\r", 3);
+    CHECK(has(&f, "NAMES is still running"));
+    /* A LIST feed while NAMES runs is not shown. */
+    console_list_entry(s, &e);
+    CHECK(!has(&f, "     102"));
+    CHECK_EQ(xrout_name_row_set(&row, 100, 0x0001, "D100", XROUT_NAME_NO_FREE), XMSG_OK);
+    console_names_row(s, &row);
+    CHECK_EQ(xrout_name_row_set(&row, 100, 0x0401, "*TADADM", XROUT_NAME_NO_FREE), XMSG_OK);
+    console_names_row(s, &row);
+    CHECK_EQ(xrout_name_row_set(&row, 100, 0x04CE, "*FA-FSA", 2), XMSG_OK);
+    console_names_row(s, &row);
+    console_names_done(s, XMSG_OK, 3);
+    CHECK(has(&f, "  D100                 100  system\r\n"));
+    CHECK(has(&f, "  *TADADM              100     8\r\n"));
+    CHECK(has(&f, "  *FA-FSA              100     9     2\r\n"));
+    CHECK(has(&f, "3 name(s)\r\nTAD> "));
+    clear(&f);
+    console_names_done(s, XMSG_OK, 3); /* not running: nothing */
+    CHECK(!has(&f, "name(s)"));
+    s_node.names_rc = XMSG_ESTATE;
+    type(s, "names\r", 3);
+    CHECK(has(&f, "NAMES: the link to the host is not ready"));
+    clear(&f);
+    s_node.names_rc = 0;
+    type(s, "names\r", 3);
+    console_names_done(s, XMSG_ETIMEDOUT, 0);
+    CHECK(has(&f, "NAMES: the host did not answer (after 0 name(s))"));
+    clear(&f);
+    /* A user who goes away during NAMES has the NAMES walk stopped, not the LIST one. */
+    type(s, "names\r", 3);
+    int list_cancels = s_node.list_cancels;
+    console_line_lost(s);
+    CHECK_EQ(s_node.names_cancels, 1);
+    CHECK_EQ(s_node.list_cancels, list_cancels);
+    s = login(&f, &l, "alice", "pw");
     clear(&f);
 
     type(s, "users\r", 3);

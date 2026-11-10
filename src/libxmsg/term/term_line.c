@@ -154,7 +154,7 @@ TermCmd term_cmd_parse(const char *line, char *arg, size_t cap)
         {"LIST", TERM_CMD_LIST}, {"HELP", TERM_CMD_HELP},     {"?", TERM_CMD_HELP},
         {"WHO", TERM_CMD_WHO},   {"INFO", TERM_CMD_INFO},     {"EXIT", TERM_CMD_EXIT},
         {"QUIT", TERM_CMD_EXIT}, {"LOGOUT", TERM_CMD_EXIT},     {"PASSWORD", TERM_CMD_PASSWORD},
-        {"USERS", TERM_CMD_USERS},
+        {"USERS", TERM_CMD_USERS}, {"NAMES", TERM_CMD_NAMES},
     };
     char word[16];
     char extra[2];

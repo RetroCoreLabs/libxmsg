@@ -68,6 +68,7 @@
 #include "libxmsg/term/term_escape.h"
 #include "libxmsg/term/term_line.h"
 #include "libxmsg/term/term_report.h"
+#include "libxmsg/xrout/xrout_name.h"
 #include "libxmsg/xrout/xrout_route.h"
 
 #ifdef __cplusplus
@@ -161,6 +162,12 @@ typedef struct ConsoleServices
     int (*list_start)(void *ctx, int place);
     /** Stop the walk of a user who went away. No console_list_done() is needed after it. */
     void (*list_cancel)(void *ctx, int place);
+    /** Start reading the host's name table (XSGNI, xrout_names_walk.h). Returns 0
+     *  (console_names_row() and console_names_done() follow) or the same errors as list_start.
+     *  NULL: no NAMES. */
+    int (*names_start)(void *ctx, int place);
+    /** Stop the NAMES walk of a user who went away. No console_names_done() is needed after it. */
+    void (*names_cancel)(void *ctx, int place);
     /** The link facts for INFO. NULL: INFO says they are not available. */
     void (*link_info)(void *ctx, TermLinkInfo *out);
     /** More INFO lines of the application's own (CR LF ended), after the link facts. May be
@@ -243,7 +250,8 @@ typedef struct ConsoleSession
     ConsoleOnward onward;
     bool onward_echo; /**< the onward host wants typed keys shown (its ECKM) */
     bool hangup_sent;
-    bool listing;
+    bool listing;        /**< a LIST or NAMES walk is running; the prompt waits for its end */
+    bool listing_names;  /**< ... and it is NAMES */
     bool far_echo_known; /**< OWN_ECHO line: the echo state last sent */
     bool far_echo;
     bool dirty; /**< output written since the last flush */
@@ -404,6 +412,21 @@ void console_list_entry(ConsoleSession *s, const XroutRouteEntry *e);
  * @param entries Entries reported.
  */
 void console_list_done(ConsoleSession *s, int result, unsigned entries);
+
+/**
+ * @brief One row of the host's name table, during NAMES.
+ * @param s   Session.
+ * @param row The row.
+ */
+void console_names_row(ConsoleSession *s, const XroutNameRow *row);
+
+/**
+ * @brief The NAMES walk ended.
+ * @param s      Session.
+ * @param result XMSG_OK (the host said "no more"), XMSG_ETIMEDOUT, or another error.
+ * @param rows   Rows reported.
+ */
+void console_names_done(ConsoleSession *s, int result, unsigned rows);
 
 /**
  * @brief The 7-bit text rule for one byte of the core's own text.
