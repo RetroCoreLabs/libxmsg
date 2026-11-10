@@ -838,7 +838,7 @@ bool tad_responder_is_status_query(const XmsgDatagram *dg)
 {
     int32_t p4 = -1;
 
-    return read_letter(dg, NULL, &p4) && p4 == 1;
+    return read_letter(dg, NULL, &p4) && p4 >= 0;
 }
 
 int tad_responder_status_reply(XmsgNode *node, const XmsgDatagram *dg, uint16_t in_use,
@@ -976,7 +976,7 @@ int tad_responder_offer(TadResponder *r, XmsgNode *node, const XmsgDatagram *dg,
     {
         return 0;
     }
-    if (p4 == 1)
+    if (p4 >= 0)
     {
         /* A status question (LI-SYS), not a call: answered, no session (see the header). The
          * counts come from the application; without its callback this responder only knows

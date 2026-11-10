@@ -234,7 +234,7 @@ typedef struct TadResponderConfig
 typedef struct TadResponderStats
 {
     uint32_t letters;       /**< connect letters taken */
-    uint32_t status_queries; /**< status questions answered (parameter 4 = 1) */
+    uint32_t status_queries; /**< status questions answered (parameter 4 present) */
     uint32_t refused;       /**< of which refused by the application */
     uint32_t frames_in;
     uint32_t frames_out;
@@ -337,7 +337,13 @@ bool tad_responder_is_connect(const XmsgDatagram *dg);
 
 /**
  * @brief Whether a port-0 datagram is a *TADADM STATUS question rather than a call: the letter
- *        carries integer parameter 4 = 1 (`04 02 00 01` after the system name).
+ *        carries integer parameter 4, of any value (`04 02 00 01` or `04 02 00 00` after the
+ *        system name).
+ *
+ * MEASURED, live D100 2026-11-10 19:09:27 (XMSGGW): plain LI-SYS at D100's own @ prompt sends
+ * the letter with parameter 4 = 0. Answered with the fixed call accept, D100 printed its two
+ * integers as "in use / free" and sent no session setup - the same as for 1. What 0 versus 1
+ * means is not known; no capture of a real machine answering 0 exists here.
  *
  * MEASURED: D102 and D103 send such letters to D100 (pcap-decode-sample.json records 218, 378,
  * 446) and D100 answers each with the plain accept from its *TADADM port, after which the asker

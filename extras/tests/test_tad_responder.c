@@ -825,6 +825,14 @@ static void status_question_is_answered_without_a_session(void)
         CHECK_BYTES(f + 26, s_seen.lens[0] - 26, "040000410008010200030202000"
                     "5");
     }
+    /* Plain LI-SYS at D100's @ prompt (live 2026-11-10 19:09:27) sends parameter 4 = 0: also
+     * a status question, never a call. */
+    len = test_hex_to_bytes("2113000E0065006400960400D97F210086E400650000006409E8040000410014FF07"
+                            "2A54414441444D00FE044431303104020000",
+                            raw, sizeof raw);
+    CHECK_EQ(len, 52);
+    CHECK_EQ(xmsg_dg_parse(raw, (size_t)len, &dg), XMSG_OK);
+    CHECK(tad_responder_is_status_query(&dg));
     /* A call letter (no parameter 4) is not a status question. */
     len = test_hex_to_bytes(k_tad_asker_frames[0].hex, raw, sizeof raw);
     CHECK_EQ(xmsg_dg_parse(raw, (size_t)len, &dg), XMSG_OK);
