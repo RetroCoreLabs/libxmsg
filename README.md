@@ -106,7 +106,7 @@ The tool has two modes, chosen with `--mode`:
 | `direct` (default) | a TAD session on `--system` at once | the session is hung up and the telnet connection closed |
 | `prompt` | `login:` / `password:`, then the tool's `TAD>` command line | the session is hung up and the user is back at `TAD>` |
 
-At `TAD>`: `CONNECT <system>` (for example `CONNECT D102`), `LIST` (not implemented yet), `WHO`
+At `TAD>`: `CONNECT <system>` (for example `CONNECT D102`), `LIST` (the routing table of the host we are linked to), `WHO`
 (the clients on the tool), `INFO` (the link: nodes, state, counters, uptime), `HELP`, and
 `EXIT`/`LOGOUT`/`QUIT`, and `PASSWORD` (change your own password: old, new, again). Admins also have
 `USERS` (the users, level and change flag), `ADDUSER name [admin]` (asks the password twice; the new

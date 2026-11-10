@@ -32,6 +32,10 @@ void xmsg_node_config_default(XmsgNodeConfig *cfg, uint16_t own_node)
     cfg->hdlc_accm = BYTE_FRAME_ACCM_NONE;
     cfg->portword_seed = 0x5A5A;
     cfg->persist_every = 1;
+    cfg->answer_routing = true;
+    /* The C# Topology's default link index (TopologyNode.Link = 1); real neighbours report 1 or
+     * 2 (li-rout-103-tree, li-route-d103-tree). It is our own numbering of our own links. */
+    cfg->route_link_index = 1;
 }
 
 static void notify_link(XmsgNode *n, LapbState state, const char *reason)
@@ -52,6 +56,7 @@ static void on_lapb_state(void *ctx, LapbState state, bool up, const char *reaso
         n->ready = false;
         n->stage_open = false;
         n->pending_count = 0;
+        n->pending_route_count = 0;
         /* A reachability reply can no longer come on this link: stop waiting for it, or every
          * later xmsg_node_resync() to that peer would send nothing (found by the XMSGGW port,
          * 2026-11-09). */
@@ -324,6 +329,217 @@ static void deliver_to_peer_sessions(XmsgNode *n, uint16_t peer_node, bool is_er
     }
 }
 
+/* ------------------------------------------------------------------------------------------ */
+/* Routing questions (XSGSY); the rules are in xmsg_node.h                                    */
+/* ------------------------------------------------------------------------------------------ */
+
+static void forget_route_answers(XmsgNode *n, uint16_t peer_node)
+{
+    for (int i = 0; i < XMSG_NODE_ROUTE_MEMORY; i++)
+    {
+        if (n->route_answers[i].peer_node == peer_node)
+        {
+            n->route_answers[i].in_use = false;
+        }
+    }
+}
+
+/* Put the two automatic entries in, unless the application already has one for that system. */
+static void route_auto_entries(XmsgNode *n)
+{
+    XroutRouteEntry e;
+    int32_t peer = lapb_peer_node(&n->lapb);
+    if (!xrout_route_has(&n->routes, n->cfg.own_system))
+    {
+        /* Every captured reply about the answering machine itself: 04, own number, 0. */
+        e.system = n->cfg.own_system;
+        e.how = XROUT_REACH_LOCAL;
+        e.detail = n->cfg.own_system;
+        e.distance = 0;
+        (void)xrout_route_put(&n->routes, &e); /* fails only when the app filled the table */
+    }
+    if (peer > 0 && (uint16_t)peer != n->cfg.own_system &&
+        !xrout_route_has(&n->routes, (uint16_t)peer))
+    {
+        /* Captured neighbour entries: 01, link index, 1 hop (li-rout-103-tree: 100 about 102). */
+        e.system = (uint16_t)peer;
+        e.how = XROUT_REACH_NEIGHBOUR;
+        e.detail = n->cfg.route_link_index;
+        e.distance = 1;
+        (void)xrout_route_put(&n->routes, &e);
+    }
+}
+
+int xmsg_node_route_put(XmsgNode *n, const XroutRouteEntry *e)
+{
+    if (n == NULL)
+    {
+        return XMSG_EINVAL;
+    }
+    return xrout_route_put(&n->routes, e);
+}
+
+const XroutRouteTable *xmsg_node_routes(XmsgNode *n)
+{
+    if (n == NULL)
+    {
+        return NULL;
+    }
+    route_auto_entries(n);
+    return &n->routes;
+}
+
+/* An XSGSY question: XMCSM 0x0100 and service byte 0x4B (XMCSM_XSGSY_REQUEST, tad_wire.h). */
+static bool is_route_request(const XmsgDatagram *dg)
+{
+    return dg->has_subhdr && dg->sub.xmcsm == XROUT_ROUTE_XMCSM && dg->body_len >= 2 &&
+           dg->body[1] == XROUT_ROUTE_SERVICE;
+}
+
+static bool route_reply_queued(const XmsgNode *n, uint16_t peer_node, uint16_t req_flags1)
+{
+    for (uint8_t k = 0; k < n->pending_route_count; k++)
+    {
+        const XmsgPendingRoute *p =
+            &n->pending_route[(n->pending_route_head + k) % XMSG_NODE_PENDING_ROUTE];
+        if (p->peer_node == peer_node && p->req_flags1 == req_flags1)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void handle_route_request(XmsgNode *n, const XmsgDatagram *dg)
+{
+    XmsgPendingRoute p;
+    uint16_t asked = 0;
+    uint8_t serial = 0;
+
+    n->stats.route_requests++;
+    if (xrout_route_request_read(dg->body, dg->body_len, &serial, &asked) != XMSG_OK)
+    {
+        /* No system number to look up: the C# throws here and sends nothing. Say so loudly. */
+        n->stats.route_bad++;
+        XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_WARN,
+                 "routing question from node %u F1=0x%04X has no system number (%u bytes): "
+                 "not answered",
+                 dg->hdr.src_node, dg->hdr.flags1, (unsigned)dg->body_len);
+        return;
+    }
+    memset(&p, 0, sizeof p);
+    p.peer_node = dg->hdr.src_node;
+    p.req_flags1 = dg->hdr.flags1;
+    p.asker_system = dg->sub.src_system;
+    p.asker_port = dg->sub.src_port;
+    p.serial = serial;
+
+    if (dg->repeat)
+    {
+        if (route_reply_queued(n, p.peer_node, p.req_flags1))
+        {
+            return; /* the reply to the first copy has not even gone out yet */
+        }
+        for (int i = 0; i < XMSG_NODE_ROUTE_MEMORY; i++)
+        {
+            const XmsgRouteAnswer *a = &n->route_answers[i];
+            if (a->in_use && a->peer_node == p.peer_node && a->req_flags1 == p.req_flags1)
+            {
+                p.is_repeat = true;
+                p.reply_flags1 = a->reply_flags1;
+                break;
+            }
+        }
+        /* Not remembered (the first copy was dropped, or the memory moved on): a new answer. */
+    }
+
+    route_auto_entries(n);
+    (void)xrout_route_lookup(&n->routes, asked, &p.entry); /* a miss answers system 0 */
+    if (n->pending_route_count >= XMSG_NODE_PENDING_ROUTE)
+    {
+        /* The host asks again when no reply comes; nothing is lost but time. */
+        n->stats.route_bad++;
+        XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_WARN,
+                 "routing reply queue full: question F1=0x%04X from node %u not answered",
+                 p.req_flags1, p.peer_node);
+        return;
+    }
+    n->pending_route[(n->pending_route_head + n->pending_route_count) % XMSG_NODE_PENDING_ROUTE] =
+        p;
+    n->pending_route_count++;
+    XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_DEBUG,
+             "routing question from node %u F1=0x%04X for system %u%s: answer system %u (%s)",
+             p.peer_node, p.req_flags1, asked, p.is_repeat ? " (repeat)" : "", p.entry.system,
+             xrout_route_how_name(p.entry.how));
+}
+
+/* Send the oldest waiting XSGSY reply. The caller has checked a window slot is free. Returns
+ * true when the reply went into the window. */
+static bool send_route_reply(XmsgNode *n, uint32_t now_ms)
+{
+    XmsgPendingRoute *p = &n->pending_route[n->pending_route_head];
+    uint8_t body[XROUT_ROUTE_REP_SIZE];
+    XmsgSubhdr sub;
+    uint16_t flags1;
+    uint8_t *info;
+    size_t cap;
+    size_t written;
+
+    /* Both address fields carry the ASKER's system and port: the reply goes back to the port
+     * that asked, and XROUT allocates none of its own (C# ListRoutingServer.cs; every captured
+     * reply, e.g. list-routing-info frame 10: 0066 02A5 0066 02A5). */
+    sub.frame_flags = XROUT_ROUTE_REP_FRAME_FLAGS;
+    sub.role = XROUT_ROUTE_REP_ROLE;
+    sub.dst_system = p->asker_system;
+    sub.dst_port = p->asker_port;
+    sub.src_system = p->asker_system;
+    sub.src_port = p->asker_port;
+    sub.xmcsm = XROUT_ROUTE_XMCSM;
+    xrout_route_reply_write(body, p->serial, &p->entry);
+
+    /* Reserve the slot BEFORE spending a number: a number spent on nothing is a gap the peer
+     * would wait for (the same rule as xmsg_node_send_commit). */
+    if (lapb_tx_reserve(&n->lapb, &info, &cap) != XMSG_OK)
+    {
+        return false;
+    }
+    if (p->is_repeat)
+    {
+        flags1 = p->reply_flags1;
+    }
+    else if (xmsg_flags1_allocate(&n->flags1, p->peer_node, &flags1) != XMSG_OK)
+    {
+        lapb_tx_cancel(&n->lapb);
+        return false;
+    }
+    written = xmsg_dg_write_data(info, cap, (uint8_t)SINTRAN_SUBTYPE_DATA, p->peer_node,
+                                 n->cfg.own_node, flags1, XROUT_ROUTE_XMCSM, &sub, body,
+                                 sizeof body);
+    if (written == 0 || lapb_tx_commit(&n->lapb, written, now_ms) != XMSG_OK)
+    {
+        lapb_tx_cancel(&n->lapb);
+        XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_ERROR,
+                 "routing reply F1=0x%04X could not be built: the number is lost", flags1);
+        return false;
+    }
+    if (!p->is_repeat)
+    {
+        XmsgRouteAnswer *a = &n->route_answers[n->route_answer_next];
+        a->in_use = true;
+        a->peer_node = p->peer_node;
+        a->req_flags1 = p->req_flags1;
+        a->reply_flags1 = flags1;
+        n->route_answer_next = (uint8_t)((n->route_answer_next + 1) % XMSG_NODE_ROUTE_MEMORY);
+    }
+    n->stats.datagrams_out++;
+    n->stats.route_replies++;
+    XMSG_LOG(XMSG_LOG_DG, XMSG_LOG_TRACE, "TX ROUTING REPLY to %u F1=0x%04X for question 0x%04X",
+             p->peer_node, flags1, p->req_flags1);
+    n->pending_route_head = (uint8_t)((n->pending_route_head + 1) % XMSG_NODE_PENDING_ROUTE);
+    n->pending_route_count--;
+    return true;
+}
+
 static void handle_datagram(XmsgNode *n, const XmsgDatagram *in, uint32_t now_ms)
 {
     XmsgDatagram whole;
@@ -367,6 +583,7 @@ static void handle_datagram(XmsgNode *n, const XmsgDatagram *in, uint32_t now_ms
         XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_INFO, "reachability request from node %u",
                  in->hdr.src_node);
         xmsg_flags1_reset(&n->flags1, in->hdr.src_node);
+        forget_route_answers(n, in->hdr.src_node); /* their numbers belong to the old count */
         /* The reply carries the request's own Flags1. RetroIO pcap-decode-sample.json: request
          * 342 (FFFF) -> reply 360 (FFFF), and request 1379 (0028, the sender's next number) ->
          * reply 1451 (0028). A fixed FFFF is right only for the first kind; D100 sends 0000. */
@@ -434,6 +651,11 @@ static void handle_datagram(XmsgNode *n, const XmsgDatagram *in, uint32_t now_ms
         }
         if (whole.sub.dst_port == 0)
         {
+            if (n->cfg.answer_routing && is_route_request(&whole))
+            {
+                handle_route_request(n, &whole);
+                return;
+            }
             if (n->cb.on_letter != NULL)
             {
                 n->cb.on_letter(n->cb.ctx, &whole, now_ms);
@@ -794,6 +1016,17 @@ static void fill_window(XmsgNode *n, uint32_t now_ms)
         }
         n->pending_head = (uint8_t)((n->pending_head + 1) % XMSG_NODE_PENDING_SHORT);
         n->pending_count--;
+    }
+
+    /* Then routing replies: the host's operator command is waiting on them. They are written
+     * straight into the window, not through the staging buffer, so an open send does not block
+     * them. */
+    while (n->ready && n->pending_route_count > 0 && lapb_tx_free_slots(&n->lapb) > 0)
+    {
+        if (!send_route_reply(n, now_ms))
+        {
+            break;
+        }
     }
 
     /* Then sessions, round robin, one datagram each per pass while slots remain. */

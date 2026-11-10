@@ -68,6 +68,8 @@ set(XMSG_SOURCES
     libxmsg/xmsg/xmsg_frag.c
     libxmsg/xmsg/xmsg_node.c
     libxmsg/xrout/xrout_letter.c
+    libxmsg/xrout/xrout_route.c
+    libxmsg/xrout/xrout_walk.c
     libxmsg/tad/tad_codec.c
     libxmsg/tad/tad_asker.c
     libxmsg/term/term_escape.c

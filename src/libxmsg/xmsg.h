@@ -12,7 +12,7 @@
  *   lapb/     the ND dialect of LAPB: link bring-up, numbered frames, retransmission
  *   sintran/  the 14-byte SINTRAN datagram header and its checksum
  *   xmsg/     datagrams, acknowledgements, fragments, the per-peer sequence, the node
- *   xrout/    the letter that reaches a named service on the far machine
+ *   xrout/    the letter that reaches a named service on the far machine, and routing info
  *   tad/      a terminal session to a SINTRAN host
  *   gen/      constants and accessors generated from the protocol registry - never edited by hand
  */
@@ -38,6 +38,8 @@
 #include "libxmsg/xmsg/xmsg_session.h"
 #include "libxmsg/xmsg/xmsg_subhdr.h"
 #include "libxmsg/xrout/xrout_letter.h"
+#include "libxmsg/xrout/xrout_route.h"
+#include "libxmsg/xrout/xrout_walk.h"
 #include "libxmsg/tad/tad_codec.h"
 #include "libxmsg/tad/tad_asker.h"
 #include "libxmsg/term/term_escape.h"

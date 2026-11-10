@@ -24,7 +24,8 @@
  *    the --users file), then gets the tool's own command line "TAD> ":
  *      CONNECT <system>   a TAD session on that system (the connect letter names it; the host
  *                         we are linked to routes it on)
- *      LIST               the systems that can be reached (not implemented yet)
+ *      LIST               the routing table of the host we are linked to, read with XSGSY
+ *                         (xrout_walk.h): system, how it is reached, detail, hops and WANs
  *      WHO                every client on the tool: terminal, user, address, time, what it does
  *      INFO               the link: our node, the peer, link state, line, counters, uptime
  *      PASSWORD           change one's own password (old, new, again)
@@ -790,6 +791,8 @@ typedef struct Client
     char remote[80]; /* the client's address, for WHO */
     uint32_t connected_at;
     TermEscape esc;
+    XroutWalk walk; /* LIST: reading the host's routing table */
+    bool listing;   /* a LIST is running; the prompt comes back when it ends */
 } Client;
 
 typedef enum BridgeMode
@@ -1024,10 +1027,76 @@ static void cmd_info(Client *self, uint32_t now)
     }
 }
 
+/* LIST: one line per entry of the host's routing table. */
+static void list_entry(void *ctx, const XroutRouteEntry *e)
+{
+    Client *c = (Client *)ctx;
+    if (!c->used || !c->listing)
+    {
+        return;
+    }
+    client_say(c, "  %6u  %u %-19s %6u  %4u  %4u\r\n", e->system, e->how,
+               xrout_route_how_name(e->how), e->detail, xrout_route_hops(e),
+               xrout_route_wans(e));
+}
+
+static void list_done(void *ctx, int result, unsigned entries)
+{
+    Client *c = (Client *)ctx;
+    if (!c->used || !c->listing)
+    {
+        return; /* the client went away; nothing to tell */
+    }
+    c->listing = false;
+    if (result == XMSG_OK)
+    {
+        client_say(c, "%u system(s)\r\n", entries);
+    }
+    else if (result == XMSG_ETIMEDOUT)
+    {
+        client_say(c, "LIST: the host did not answer (after %u system(s))\r\n", entries);
+    }
+    else
+    {
+        client_say(c, "LIST: the host refused the question (error %d, after %u system(s))\r\n",
+                   result, entries);
+    }
+    show_prompt(c);
+}
+
+/* Returns true when the prompt will come back from list_done. */
+static bool cmd_list(Client *c, uint32_t now)
+{
+    XroutWalkCallbacks cb = {c, list_entry, list_done};
+    /* The host's XMSG system number is taken to be its node number, as on every captured
+     * machine (xmsg_node.h, "Routing questions"). */
+    int rc = xrout_walk_start(&c->walk, &s_node, s_peer, s_peer, 10000, &cb, now);
+    if (rc == XMSG_ESTATE)
+    {
+        client_text(c, "LIST: the link to the host is not ready\r\n");
+        return false;
+    }
+    if (rc == XMSG_ENOSPC)
+    {
+        client_text(c, "LIST: every session slot is in use; try again later\r\n");
+        return false;
+    }
+    if (rc != XMSG_OK)
+    {
+        client_say(c, "LIST: cannot start (%d)\r\n", rc);
+        return false;
+    }
+    c->listing = true;
+    client_say(c, "Routing table of node %u:\r\n"
+                  "  system  how                   detail  hops  WANs\r\n",
+               s_peer);
+    return true;
+}
+
 static void cmd_help(Client *c)
 {
     client_text(c, "CONNECT <system>   connect to a SINTRAN system, e.g. CONNECT D102\r\n"
-                   "LIST               the systems that can be reached\r\n"
+                   "LIST               the routing table of the host we are linked to\r\n"
                    "WHO                the clients on this bridge\r\n"
                    "INFO               the link to the SINTRAN machine\r\n"
                    "PASSWORD           change your password\r\n"
@@ -1219,6 +1288,11 @@ static void prompt_line(Client *c, const char *text, uint32_t now)
 {
     char arg[AUTH_NAME_MAX + 1u];
     TermCmd cmd = term_cmd_parse(text, arg, sizeof arg);
+    if (c->listing)
+    {
+        client_text(c, "LIST is still running\r\n");
+        return;
+    }
     if (strlen(arg) > AUTH_NAME_MAX)
     {
         cmd = TERM_CMD_UNKNOWN;
@@ -1237,9 +1311,10 @@ static void prompt_line(Client *c, const char *text, uint32_t now)
         client_start(c, arg); /* no prompt after it: the host's banner comes */
         return;
     case TERM_CMD_LIST:
-        /* TODO(ronny): LIST must ask the host we are linked to for its routing information
-         * (which systems it reaches). How is being worked out; until then it says so. */
-        client_text(c, "LIST: not implemented yet\r\n");
+        if (cmd_list(c, now))
+        {
+            return; /* the prompt comes back when the walk ends */
+        }
         break;
     case TERM_CMD_WHO:
         cmd_who(c, now);
@@ -1589,6 +1664,11 @@ static void client_drop(Client *c, uint32_t now)
 {
     printf("client %d: gone\n", c->index);
     c->used = false; /* before the hang-up: its state callbacks then know the client is gone */
+    if (c->listing)
+    {
+        c->listing = false;
+        (void)xrout_walk_cancel(&c->walk); /* frees its session slot; list_done sees no client */
+    }
     /* Hang up as a real asker does when its user is done: DCON to the session port. Before
      * there is a session there is nothing to hang up, so drop it locally. */
     if (c->phase == PH_SESSION && tad_asker_hangup(&c->asker, now) != XMSG_OK)

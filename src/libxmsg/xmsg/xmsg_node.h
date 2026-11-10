@@ -17,6 +17,8 @@
  *  - an error frame carrying XENSE steps our count down (xmsg_flags1.h) and the sessions on that
  *    peer are told; XEIMA and other codes are only reported;
  *  - INNAK (0x17) is logged and counted - what it asks for is not established;
+ *  - an XSGSY routing question to our port 0 is answered by the node itself, from its routing
+ *    table (see "Routing questions" below); the application does nothing for it;
  *  - after the link comes up, no data is sent until it has been quiet for `settle_ms`: the ND
  *    kernel sends bursts of SABMs at start-up and a frame between two resets draws an FRMR.
  *
@@ -43,6 +45,7 @@
 #include "libxmsg/xmsg/xmsg_portword.h"
 #include "libxmsg/xmsg/xmsg_session.h"
 #include "libxmsg/xmsg_config.h"
+#include "libxmsg/xrout/xrout_route.h"
 #include "libxmsg/xmsg_errors.h"
 #include "libxmsg/xmsg_ports.h"
 
@@ -61,6 +64,13 @@ typedef enum XmsgFraming
 /** Short frames (ACK, reachability reply) waiting for a window slot. */
 #define XMSG_NODE_PENDING_SHORT 32
 
+/** XSGSY replies waiting for a window slot. The host asks two per system, see XMSG-PROTOCOL.md
+ *  section 9.1.1; four covers that with room. */
+#define XMSG_NODE_PENDING_ROUTE 4
+
+/** XSGSY replies remembered, so a repeated request gets the same reply at the same Flags1. */
+#define XMSG_NODE_ROUTE_MEMORY 4
+
 /** Recent Flags1 values received per peer, for repeat detection. */
 #define XMSG_NODE_RECENT_RX 4
 
@@ -77,6 +87,9 @@ typedef struct XmsgNodeConfig
     uint32_t hdlc_accm; /**< async framing: BYTE_FRAME_ACCM_NONE (nd100x) or ALL_CONTROL (USB gateway) */
     uint16_t portword_seed; /**< seed for minting port words */
     uint8_t persist_every;  /**< Flags1 store policy; 1 = save every frame */
+    bool answer_routing;    /**< answer XSGSY routing questions at port 0; true. When false they
+                             *   go to on_letter like any other port-0 datagram */
+    uint16_t route_link_index; /**< XSGSY detail for the directly connected peer; 1 */
 } XmsgNodeConfig;
 
 /** What the node tells the application. Any pointer may be NULL. */
@@ -101,6 +114,28 @@ typedef struct XmsgPendingShort
     uint16_t flags1;
     uint16_t flags2;
 } XmsgPendingShort;
+
+/** An XSGSY reply waiting to be sent. */
+typedef struct XmsgPendingRoute
+{
+    uint16_t peer_node;
+    uint16_t req_flags1;   /**< the request's number, to remember the answer by */
+    uint16_t asker_system; /**< the request's source system and port, echoed in both */
+    uint16_t asker_port;   /**< address fields of the reply (C# ListRoutingServer.cs) */
+    uint8_t serial;
+    bool is_repeat;        /**< send again at reply_flags1, spend no new number */
+    uint16_t reply_flags1;
+    XroutRouteEntry entry;
+} XmsgPendingRoute;
+
+/** An XSGSY reply that went out. */
+typedef struct XmsgRouteAnswer
+{
+    bool in_use;
+    uint16_t peer_node;
+    uint16_t req_flags1;
+    uint16_t reply_flags1;
+} XmsgRouteAnswer;
 
 /** Recently received Flags1 from one peer, for repeat detection. */
 typedef struct XmsgRecentRx
@@ -128,6 +163,9 @@ typedef struct XmsgNodeStats
     uint32_t resyncs; /**< our own count reset after a resync (xmsg_node_resync) */
     uint32_t unhandled;
     uint32_t short_queue_full;
+    uint32_t route_requests; /**< XSGSY questions received at port 0 */
+    uint32_t route_replies;  /**< XSGSY replies sent, repeats included */
+    uint32_t route_bad;      /**< XSGSY questions that could not be read or queued */
 } XmsgNodeStats;
 
 /** The node. Large: keep it static or in a long-lived struct, never on a small stack. */
@@ -159,6 +197,14 @@ struct XmsgNode
     XmsgRecentRx recent_ack[XMSG_MAX_PEERS]; /**< acknowledged Flags1, so a fragmented
                                                   message's two ACKs are reported once */
     bool pumping;                            /**< the pump is running: no re-entry */
+
+    /* XSGSY: our routing table, replies waiting, replies sent */
+    XroutRouteTable routes;
+    XmsgPendingRoute pending_route[XMSG_NODE_PENDING_ROUTE];
+    uint8_t pending_route_head;
+    uint8_t pending_route_count;
+    XmsgRouteAnswer route_answers[XMSG_NODE_ROUTE_MEMORY];
+    uint8_t route_answer_next;
 
     /* the staging buffer a session builds its body in */
     uint8_t stage[XMSG_DG_MAX_BODY];
@@ -269,6 +315,44 @@ int xmsg_node_send_repeat(XmsgNode *n, uint16_t peer_node, const XmsgSubhdr *sub
 
 /** @brief Give up an open send. */
 void xmsg_node_send_cancel(XmsgNode *n);
+
+/*
+ * Routing questions (XSGSY, XROUT service 75)
+ *
+ * A SINTRAN host's LIST-ROUTING-INFO asks our XROUT (port 0) for its route to a system. The node
+ * answers by itself, from `routes`, which always holds:
+ *   - ourselves:            how 4 (local), detail = our system number, distance 0;
+ *   - the machine at the other end of the link, once LAPB has learned its node number:
+ *                           how 1 (neighbour), detail = cfg.route_link_index, distance 1 hop.
+ *     Its system number is taken to be its node number, as in every capture and in the C#
+ *     Topology.BuildRoutingEntries (an assumption: no capture has a node whose two differ).
+ * plus whatever the application adds with xmsg_node_route_put() (an entry it adds for one of
+ * those two systems wins).
+ *
+ * How the answer is sent, each point taken from real machines in the captures:
+ *   - the request is acknowledged like every data frame (list-routing-info-100-102-then-102-100,
+ *     frame 9: D100 acknowledges 102's request 0x012B);
+ *   - the reply is an ordinary data frame on OUR OWN Flags1 count to that peer. It is not the
+ *     request's number: in the same capture D100 answers request 0x012B with reply 0x00F4, and
+ *     test1.pcapng and the route-through capture show the same. (The C# node and XMSG-PROTOCOL.md
+ *     9.1.1 echo the request's number; that was read off captures where both counts happened to
+ *     be level, and it would put the reply one AHEAD in the live D100 case: request 0x0029 while
+ *     our next was 0x0028.)
+ *   - sub-header 86 60, both address fields = the asker's system and port, XMCSM 0x0100, body
+ *     01 00 00 10 + p1..p4 (every captured reply; C# ListRoutingServer.BuildResponse);
+ *   - two requests with different numbers (the host sends two per system) get two replies;
+ *   - a REPEAT of a request (same Flags1) gets the same reply again at the same Flags1 and spends
+ *     no number (house rule for retransmissions; no capture shows a host repeating one).
+ */
+
+/**
+ * @brief Add a routing entry, or replace the one for that system - the two automatic ones too.
+ * @return XMSG_OK, XMSG_EINVAL (NULL, system 0), XMSG_ENOSPC (XROUT_ROUTE_MAX entries).
+ */
+int xmsg_node_route_put(XmsgNode *n, const XroutRouteEntry *e);
+
+/** @brief The routing table the node answers from (the automatic entries appear once known). */
+const XroutRouteTable *xmsg_node_routes(XmsgNode *n);
 
 /** @brief Send a reachability request (our restart announcement). Does not touch our count. */
 int xmsg_node_send_reach(XmsgNode *n, uint16_t peer_node, uint32_t now_ms);
