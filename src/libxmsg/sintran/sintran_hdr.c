@@ -119,7 +119,7 @@ static const SintranErrorName s_error_names[] = {
     {-34, "XENSE Network sequencing error (purely internal significance)"},
     {-35, "XERND Remote system not defined"},
     {-36, "XEPCL Remote port closed while message queued"},
-    {-37, "XENRU XMSG not running  do not move"},
+    {-37, "XENRU XMSG not running"},
     {-38, "XENTO Timeout detected by network layer"},
     {-39, "XENUS No user segment info defined (XFUSG option)"},
     {-40, "XEREJ Network remote reject (request retransmit)"},
@@ -127,7 +127,7 @@ static const SintranErrorName s_error_names[] = {
     {-42, "XETMU Too many multi-call functions"},
     {-43, "XENCE Network checksum error (purely internal significance)"},
     {-44, "XEICM Function not available to tasks other than COSROUT"},
-    {-63, "XECRA XMSG user error codes (XE*), returned negative in the T-register. /// </summary> public enum XmsgError : int { /// <summary> /// XMSG crash (Info in Basefield)"},
+    {-63, "XECRA XMSG crash (Info in Basefield)"},
 };
 // clang-format on
 
