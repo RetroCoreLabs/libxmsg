@@ -76,6 +76,7 @@ set(XMSG_SOURCES
     libxmsg/tad/tad_asker.c
     libxmsg/tad/tad_responder.c
     libxmsg/term/term_escape.c
+    libxmsg/term/term_keyseq.c
     libxmsg/term/term_line.c
     libxmsg/term/term_report.c
     libxmsg/term/term_telnet.c

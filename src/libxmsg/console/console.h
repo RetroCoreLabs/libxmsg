@@ -66,6 +66,7 @@
 #include "libxmsg/auth/auth_login.h"
 #include "libxmsg/auth/auth_user.h"
 #include "libxmsg/term/term_escape.h"
+#include "libxmsg/term/term_keyseq.h"
 #include "libxmsg/term/term_line.h"
 #include "libxmsg/term/term_report.h"
 #include "libxmsg/xrout/xrout_name.h"
@@ -149,8 +150,13 @@ typedef struct ConsoleServices
      *  FAILED follows), or a negative XMSG error when it cannot start at all. */
     int (*onward_open)(void *ctx, int place, const char *system, uint16_t number,
                        const char *tad_user);
-    /** Typed bytes for the onward session. Returns the count taken (0 when it cannot take any
-     *  now; the core offers the rest again later). */
+    /** Typed bytes for the onward session: ONE call is ONE TAD data letter (tad_asker_write
+     *  when the host has granted input). Returns the count taken (0 when it cannot take any
+     *  now; the core offers the rest again later). A function key's escape sequence is always
+     *  offered alone, in its own call, and must be taken whole or not at all: SINTRAN reads a
+     *  key only when all its bytes come in one letter (term_keyseq.h, measured 2026-11-10).
+     *  Do not gather the bytes of several calls into one buffer that is cut into letters
+     *  later; such a cut can split a key. */
     int (*onward_write)(void *ctx, int place, const uint8_t *bytes, size_t len);
     /** The user pressed the escape key (TAD ESCA). */
     void (*onward_escape)(void *ctx, int place);
@@ -205,7 +211,8 @@ typedef struct ConsoleConfig
     const char *tad_user_suffix; /**< set: "<user>@<suffix>" when that fits in 16 characters,
                                       else the user name alone (XMSGGW: "xmsggw"); NULL = off */
     uint32_t iterations;         /**< PBKDF2 count for new and re-stored records: 100000 */
-    uint32_t escape_ms;          /**< lone-ESC wait (term_escape.h): 50; 0 = ESC is text */
+    uint32_t escape_ms;          /**< lone-ESC wait (term_keyseq.h): 50; 0 = ESC is text */
+    uint32_t keyseq_ms;          /**< wait for the next byte of a function key: 200 */
     uint32_t login_tries;        /**< AUTH_LOGIN_TRIES */
     uint32_t login_delay_ms;     /**< AUTH_LOGIN_DELAY_MS */
     AuthUserStore store;         /**< lookup and save */
@@ -237,7 +244,7 @@ typedef struct ConsoleSession
     ConsoleLine line;
     TermLine edit;   /**< the command line / login line editor */
     AuthLogin login; /**< prompt mode */
-    TermEscape esc;  /**< lone ESC, in a session on a line without ESCAPE_MSG */
+    TermKeyseq keys; /**< function keys whole, and the lone ESC on a line without ESCAPE_MSG */
     char user[AUTH_NAME_MAX + 1u];
     AuthLevel level;
     bool logged_in;
@@ -256,6 +263,7 @@ typedef struct ConsoleSession
     bool far_echo;
     bool dirty; /**< output written since the last flush */
     uint8_t typed[CONSOLE_TYPED_MAX];
+    uint8_t typed_key[CONSOLE_TYPED_MAX]; /**< at a key's first byte: its length; else 0 */
     size_t typed_len;
 } ConsoleSession;
 

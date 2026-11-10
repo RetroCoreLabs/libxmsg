@@ -1,11 +1,12 @@
 /*
- * test_term.c - the lone-ESC detector, the line editor, the command words, WHO/INFO text and
+ * test_term.c - the lone-ESC detector, the function key gatherer, the line editor, the command words, WHO/INFO text and
  * the telnet codec.
  *
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Ronny Hansen
  */
 #include "libxmsg/term/term_escape.h"
+#include "libxmsg/term/term_keyseq.h"
 #include "libxmsg/term/term_line.h"
 #include "libxmsg/term/term_report.h"
 #include "libxmsg/term/term_telnet.h"
@@ -132,6 +133,236 @@ static void zero_means_always_data(void)
     CHECK_EQ(r.n, 1);
     CHECK_EQ(r.out[0], 0x1B);
     CHECK_EQ(term_escape_byte(NULL, 0, 0, NULL, NULL), -1);
+}
+
+/* ------------------------------------------------------------------ function keys */
+
+/* What the key gatherer gave, in order: 0x100 = escape, 0x200 + n = the start of a unit of n
+ * bytes (its bytes follow), 0x300 = a plain byte (it follows). */
+typedef struct KRun
+{
+    int out[128];
+    size_t n;
+    unsigned whole; /* units that ended on their final byte */
+} KRun;
+
+static void k_take(KRun *r, const TermKeyOut *o)
+{
+    if (o->escape)
+    {
+        r->out[r->n++] = 0x100;
+    }
+    if (o->unit_len != 0u)
+    {
+        r->out[r->n++] = 0x200 + (int)o->unit_len;
+        for (size_t i = 0; i < o->unit_len; i++)
+        {
+            r->out[r->n++] = o->unit[i];
+        }
+        if (o->whole)
+        {
+            r->whole++;
+        }
+    }
+    if (o->has_byte)
+    {
+        r->out[r->n++] = 0x300;
+        r->out[r->n++] = o->byte;
+    }
+}
+
+static void k_feed(TermKeyseq *k, KRun *r, const uint8_t *b, size_t n, uint32_t now)
+{
+    for (size_t i = 0; i < n; i++)
+    {
+        TermKeyOut o;
+        CHECK_EQ(term_keyseq_byte(k, b[i], now, &o), 0);
+        k_take(r, &o);
+    }
+}
+
+static void k_poll(TermKeyseq *k, KRun *r, uint32_t now)
+{
+    TermKeyOut o;
+    if (term_keyseq_poll(k, now, &o))
+    {
+        k_take(r, &o);
+    }
+}
+
+/* The bytes measured live 2026-11-10 10:55:07: the TDV HELP key, ESC [ 4 6 _. */
+static const uint8_t k_help[] = {0x1B, 0x5B, 0x34, 0x36, 0x5F};
+
+static void k_is_help_unit(const KRun *r, size_t at)
+{
+    CHECK(r->n >= at + 6u);
+    CHECK_EQ(r->out[at], 0x205);
+    for (size_t i = 0; i < sizeof k_help && at + 1u + i < r->n; i++)
+    {
+        CHECK_EQ(r->out[at + 1u + i], k_help[i]);
+    }
+}
+
+static void keyseq_help_key_in_one_chunk(void)
+{
+    TermKeyseq k;
+    KRun r = {{0}, 0, 0};
+    term_keyseq_init(&k, TERM_KEYSEQ_ESC_MS, TERM_KEYSEQ_SEQ_MS);
+    k_feed(&k, &r, k_help, 4, 1000);
+    CHECK_EQ(r.n, 0); /* ESC [ 4 6: held, no final byte yet */
+    CHECK(term_keyseq_holding(&k));
+    k_feed(&k, &r, &k_help[4], 1, 1000);
+    CHECK_EQ(r.n, 6); /* one unit of five, nothing else */
+    k_is_help_unit(&r, 0);
+    CHECK_EQ(r.whole, 1);
+    CHECK(!term_keyseq_holding(&k));
+    k_poll(&k, &r, 5000);
+    CHECK_EQ(r.n, 6); /* nothing left over */
+}
+
+static void keyseq_help_key_split_with_small_gaps(void)
+{
+    /* As TCP may cut it: ESC | [ 4 | 6 | _, polled in between. */
+    TermKeyseq k;
+    KRun r = {{0}, 0, 0};
+    term_keyseq_init(&k, TERM_KEYSEQ_ESC_MS, TERM_KEYSEQ_SEQ_MS);
+    k_feed(&k, &r, &k_help[0], 1, 100);
+    k_poll(&k, &r, 120);
+    k_feed(&k, &r, &k_help[1], 2, 130); /* 30 ms after the ESC: inside the lone-ESC wait */
+    k_poll(&k, &r, 200);
+    k_feed(&k, &r, &k_help[3], 1, 250);
+    k_poll(&k, &r, 300);
+    CHECK_EQ(r.n, 0);
+    k_feed(&k, &r, &k_help[4], 1, 400); /* 150 ms gap: still inside the sequence wait */
+    CHECK_EQ(r.n, 6);
+    k_is_help_unit(&r, 0);
+    CHECK_EQ(r.whole, 1);
+}
+
+static void keyseq_other_shapes(void)
+{
+    static const uint8_t up[] = {0x1B, '[', 'A'};        /* VT100 cursor up */
+    static const uint8_t page[] = {0x1B, '[', '5', '~'}; /* VT220 prev screen */
+    static const uint8_t pf1[] = {0x1B, 'O', 'P'};       /* SS3 PF1 */
+    static const uint8_t two[] = {0x1B, '='};            /* ESC + one byte */
+    static const uint8_t inter[] = {0x1B, ' ', 'F'};     /* intermediate, then final */
+    TermKeyseq k;
+    KRun r = {{0}, 0, 0};
+    term_keyseq_init(&k, TERM_KEYSEQ_ESC_MS, TERM_KEYSEQ_SEQ_MS);
+    k_feed(&k, &r, up, sizeof up, 10);
+    k_feed(&k, &r, page, sizeof page, 20);
+    k_feed(&k, &r, pf1, sizeof pf1, 30);
+    k_feed(&k, &r, two, sizeof two, 40);
+    k_feed(&k, &r, inter, sizeof inter, 50);
+    CHECK_EQ(r.whole, 5);
+    CHECK_EQ(r.n, 4u + 5u + 4u + 3u + 4u);
+    CHECK_EQ(r.out[0], 0x203);
+    CHECK_EQ(r.out[4], 0x204);
+    CHECK_EQ(r.out[9], 0x203);
+    CHECK_EQ(r.out[13], 0x202);
+    CHECK_EQ(r.out[16], 0x203);
+}
+
+static void keyseq_unterminated(void)
+{
+    TermKeyseq k;
+    KRun r = {{0}, 0, 0};
+    uint8_t many[TERM_KEYSEQ_MAX + 2u];
+    static const uint8_t cut[] = {0x1B, '[', '4', '\r'};
+    term_keyseq_init(&k, TERM_KEYSEQ_ESC_MS, TERM_KEYSEQ_SEQ_MS);
+
+    /* It stops coming: after the sequence wait it goes on as data, every byte. */
+    k_feed(&k, &r, k_help, 3, 0);
+    k_poll(&k, &r, 199);
+    CHECK_EQ(r.n, 0);
+    k_poll(&k, &r, 200);
+    CHECK_EQ(r.n, 4);
+    CHECK_EQ(r.out[0], 0x203);
+    CHECK_EQ(r.out[1], 0x1B);
+    CHECK_EQ(r.out[3], '4');
+    CHECK_EQ(r.whole, 0);
+
+    /* Broken by a byte that cannot be in it: held bytes, then that byte on its own. */
+    r.n = 0;
+    k_feed(&k, &r, cut, sizeof cut, 1000);
+    CHECK_EQ(r.n, 6);
+    CHECK_EQ(r.out[0], 0x203);
+    CHECK_EQ(r.out[4], 0x300);
+    CHECK_EQ(r.out[5], '\r');
+
+    /* Too long to be a key: out as data at the cap; the rest are plain bytes. */
+    r.n = 0;
+    many[0] = 0x1B;
+    many[1] = '[';
+    for (size_t i = 2; i < sizeof many; i++)
+    {
+        many[i] = '1';
+    }
+    k_feed(&k, &r, many, sizeof many, 2000);
+    CHECK_EQ(r.out[0], 0x200 + (int)TERM_KEYSEQ_MAX);
+    CHECK_EQ(r.n, 1u + TERM_KEYSEQ_MAX + 4u);
+    CHECK_EQ(r.out[1u + TERM_KEYSEQ_MAX], 0x300);
+    CHECK_EQ(r.whole, 0);
+}
+
+static void keyseq_esc_esc(void)
+{
+    static const uint8_t ee[] = {0x1B, 0x1B};
+    TermKeyseq k;
+    KRun r = {{0}, 0, 0};
+    term_keyseq_init(&k, TERM_KEYSEQ_ESC_MS, TERM_KEYSEQ_SEQ_MS);
+    k_feed(&k, &r, ee, sizeof ee, 0); /* the first goes on as data, the second is held */
+    CHECK_EQ(r.n, 2);
+    CHECK_EQ(r.out[0], 0x201);
+    CHECK_EQ(r.out[1], 0x1B);
+    k_poll(&k, &r, 50);
+    CHECK_EQ(r.n, 3);
+    CHECK_EQ(r.out[2], 0x100); /* ... and is the escape key when nothing follows */
+
+    /* ESC ESC [ 4 6 _: a data ESC, then the whole key. */
+    r.n = 0;
+    k_feed(&k, &r, ee, 1, 1000);
+    k_feed(&k, &r, k_help, sizeof k_help, 1000);
+    CHECK_EQ(r.n, 2u + 6u);
+    CHECK_EQ(r.out[0], 0x201);
+    k_is_help_unit(&r, 2);
+}
+
+static void keyseq_lone_esc(void)
+{
+    TermKeyseq k;
+    KRun r = {{0}, 0, 0};
+    term_keyseq_init(&k, TERM_KEYSEQ_ESC_MS, TERM_KEYSEQ_SEQ_MS);
+    k_feed(&k, &r, k_help, 1, 1000);
+    k_poll(&k, &r, 1049);
+    CHECK_EQ(r.n, 0);
+    k_poll(&k, &r, 1050);
+    CHECK_EQ(r.n, 1);
+    CHECK_EQ(r.out[0], 0x100);
+    k_poll(&k, &r, 3000);
+    CHECK_EQ(r.n, 1); /* used up */
+
+    /* Not polled, the next key came late: the escape, then that key as a plain byte. */
+    r.n = 0;
+    k_feed(&k, &r, k_help, 1, 5000);
+    k_feed(&k, &r, (const uint8_t *)"x", 1, 5200);
+    CHECK_EQ(r.n, 3);
+    CHECK_EQ(r.out[0], 0x100);
+    CHECK_EQ(r.out[1], 0x300);
+    CHECK_EQ(r.out[2], 'x');
+
+    /* esc_ms 0 (the escape key comes as its own message): a lone ESC is data, after the wait. */
+    term_keyseq_init(&k, 0, TERM_KEYSEQ_SEQ_MS);
+    r.n = 0;
+    k_feed(&k, &r, k_help, 1, 0);
+    k_poll(&k, &r, 100);
+    CHECK_EQ(r.n, 0);
+    k_poll(&k, &r, 200);
+    CHECK_EQ(r.n, 2);
+    CHECK_EQ(r.out[0], 0x201);
+    CHECK_EQ(r.out[1], 0x1B);
+    CHECK_EQ(term_keyseq_byte(NULL, 0, 0, NULL), -1);
+    CHECK(!term_keyseq_poll(NULL, 0, NULL));
 }
 
 /* ------------------------------------------------------------------ line editor */
@@ -386,6 +617,12 @@ int main(void)
     late_byte_after_an_unpolled_esc();
     two_esc_in_a_row();
     zero_means_always_data();
+    keyseq_help_key_in_one_chunk();
+    keyseq_help_key_split_with_small_gaps();
+    keyseq_other_shapes();
+    keyseq_unterminated();
+    keyseq_esc_esc();
+    keyseq_lone_esc();
     line_editing();
     command_words();
     who_text();

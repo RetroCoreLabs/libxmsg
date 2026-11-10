@@ -15,6 +15,7 @@
  * Then our own asker talks to the responder (peer to peer), and the edges: refusal, status
  * question, escape on and off, the asker hanging up, the output window, BDAT splitting.
  */
+#include "libxmsg/console/console.h"
 #include "libxmsg/tad/tad_asker.h"
 #include "libxmsg/tad/tad_codec.h"
 #include "libxmsg/tad/tad_responder.h"
@@ -832,6 +833,150 @@ static void status_question_is_answered_without_a_session(void)
     (void)now;
 }
 
+/* ------------------------------------------------------------------ a console user's keys */
+
+/* The bridge path end to end: a telnet user on a ConsoleHost, its onward session our own
+ * asker on node 100, the responder on 102 standing in for D100. One onward_write call is one
+ * tad_asker_write (as host_tad_telnet.c does since 2026-11-10). */
+static ConsoleHost s_ch;
+static ConsoleSession s_cs[1];
+static char s_cl_out[1024];
+static size_t s_cl_len;
+
+static int cl_write(void *ctx, const uint8_t *b, size_t n)
+{
+    (void)ctx;
+    if (s_cl_len + n <= sizeof s_cl_out)
+    {
+        memcpy(s_cl_out + s_cl_len, b, n);
+        s_cl_len += n;
+    }
+    return (int)n;
+}
+
+static void cl_close(void *ctx, ConsoleClose why)
+{
+    (void)ctx;
+    (void)why;
+}
+
+static int cs_resolve(void *ctx, const char *system, uint16_t *number)
+{
+    (void)ctx;
+    (void)system;
+    *number = 102;
+    return 0;
+}
+
+static int cs_open(void *ctx, int place, const char *system, uint16_t number,
+                   const char *tad_user)
+{
+    (void)ctx;
+    (void)place;
+    (void)system;
+    (void)number;
+    (void)tad_user;
+    return 0; /* the asker is already connected by the test */
+}
+
+static uint32_t s_cs_now;
+
+static int cs_write(void *ctx, int place, const uint8_t *b, size_t n)
+{
+    int took;
+    (void)ctx;
+    (void)place;
+    if (!tad_asker_may_type(&s_asker))
+    {
+        return 0;
+    }
+    took = tad_asker_write(&s_asker, b, n, s_cs_now);
+    return (took > 0) ? took : 0;
+}
+
+static void cs_hangup(void *ctx, int place)
+{
+    (void)ctx;
+    (void)place;
+}
+
+/* Run the pair and the console poll together. */
+static uint32_t run_console(uint32_t now, int ms)
+{
+    for (int i = 0; i < ms; i++)
+    {
+        now++;
+        s_cs_now = now;
+        pump(now);
+        console_host_poll(&s_ch, now);
+    }
+    return now;
+}
+
+static void console_function_key_is_one_bdat(void)
+{
+    static const uint8_t help[] = {0x1B, 0x5B, 0x34, 0x36, 0x5F}; /* TDV HELP, measured */
+    static const uint8_t wire[] = {0x1B, 0xDB, 0xB4, 0x36, 0x5F}; /* even parity in bit 7 */
+    TadResponderConfig rcfg;
+    TadResponderCallbacks rcb = {&s_app, app_incoming, app_state, app_text_in, app_escape,
+                                 app_status};
+    ConsoleConfig cfg;
+    ConsoleLine l;
+    ConsoleSession *s;
+    uint32_t now = bring_up(0, 0);
+
+    memset(&s_app, 0, sizeof s_app);
+    tad_responder_config_default(&rcfg);
+    rcfg.strip_parity = false; /* the BDAT bytes exactly as on the wire */
+    CHECK_EQ(tad_responder_init(&s_resp, &rcfg, &rcb), XMSG_OK);
+    now = peer_session(now);
+    CHECK_EQ(tad_responder_echo(&s_resp, 0x01), XMSG_OK);
+    CHECK_EQ(tad_responder_grant_input(&s_resp), XMSG_OK);
+    now = run(now, 300);
+    CHECK(tad_asker_may_type(&s_asker));
+
+    console_config_default(&cfg);
+    cfg.mode = CONSOLE_MODE_DIRECT;
+    cfg.direct_system = "D102";
+    cfg.services.resolve = cs_resolve;
+    cfg.services.onward_open = cs_open;
+    cfg.services.onward_write = cs_write;
+    cfg.services.onward_hangup = cs_hangup;
+    CHECK_EQ(console_host_init(&s_ch, &cfg, s_cs, 1), 0);
+    memset(&l, 0, sizeof l);
+    l.kind = "telnet";
+    l.write = cl_write;
+    l.close = cl_close;
+    s = console_host_open(&s_ch, &l, now);
+    CHECK(s != NULL);
+    console_onward_state(s, CONSOLE_ONWARD_RUNNING, 0);
+    s_cl_len = 0;
+
+    /* The user's one write reaches the host as one BDAT, nothing echoed. */
+    s_cs_now = now;
+    console_input(s, help, sizeof help, now);
+    now = run_console(now, 300);
+    CHECK_EQ(s_app.inputs, 1);
+    CHECK(s_app.typed_len == sizeof wire && memcmp(s_app.typed, wire, sizeof wire) == 0);
+    CHECK_EQ(s_cl_len, 0);
+
+    /* A letter is in flight (the grant is used): the next key waits for the next grant and
+     * then goes whole, in one BDAT. */
+    s_app.typed_len = 0;
+    console_input(s, help, 2, now);
+    now = run_console(now, 20);
+    console_input(s, &help[2], 3, now);
+    now = run_console(now, 300);
+    CHECK_EQ(s_app.inputs, 1);
+    CHECK_EQ(s_app.typed_len, 0);
+    CHECK_EQ(tad_responder_grant_input(&s_resp), XMSG_OK);
+    now = run_console(now, 300);
+    CHECK_EQ(s_app.inputs, 2);
+    CHECK(s_app.typed_len == sizeof wire && memcmp(s_app.typed, wire, sizeof wire) == 0);
+    CHECK_EQ(s_cl_len, 0);
+    console_line_lost(s);
+}
+
 int main(void)
 {
     printf("[tad_responder]\n");
@@ -841,5 +986,6 @@ int main(void)
     output_waits_for_the_askers_answers();
     refusal();
     status_question_is_answered_without_a_session();
+    console_function_key_is_one_bdat();
     TEST_DONE();
 }

@@ -46,6 +46,7 @@
 #include "libxmsg/tad/tad_asker.h"
 #include "libxmsg/tad/tad_responder.h"
 #include "libxmsg/term/term_escape.h"
+#include "libxmsg/term/term_keyseq.h"
 #include "libxmsg/term/term_line.h"
 #include "libxmsg/term/term_report.h"
 #include "libxmsg/term/term_telnet.h"

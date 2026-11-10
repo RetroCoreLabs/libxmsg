@@ -864,8 +864,6 @@ typedef struct Place
     ConsoleOnward end_state;
     int end_error;
     bool logout;        /* the host said its login ended */
-    uint8_t ready[1024]; /* typed bytes waiting for an input grant */
-    size_t ready_len;
     XroutWalk walk;
     bool listing;
     XroutNamesWalk names_walk;
@@ -887,7 +885,7 @@ static uint16_t s_own;
 static const char *s_system;
 static bool s_raw_keys; /* --raw-keys: typed bytes leave without the parity bit */
 static BridgeMode s_mode = MODE_DIRECT;
-static uint32_t s_esc_ms = TERM_ESCAPE_DEFAULT_MS;
+static uint32_t s_esc_ms = TERM_KEYSEQ_ESC_MS;
 static uint16_t s_term_type;
 static const char *s_iam_user = "TELNET";
 static char s_line_name[160]; /* the HDLC line, for INFO */
@@ -968,7 +966,6 @@ static int svc_open(void *ctx, int place, const char *system, uint16_t number,
     {
         return XMSG_EINVAL;
     }
-    p->ready_len = 0;
     p->running_seen = false;
     p->ended = false;
     p->logout = false;
@@ -976,15 +973,21 @@ static int svc_open(void *ctx, int place, const char *system, uint16_t number,
     return 0;
 }
 
+/* One call is one TAD data letter, sent at once when the host has granted input; otherwise
+ * nothing is taken and the console keeps the bytes and offers them again (console.h
+ * onward_write). Gathering the calls in a buffer here and cutting it into letters later split
+ * a function key across two letters (term_keyseq.h, measured 2026-11-10). */
 static int svc_write(void *ctx, int place, const uint8_t *bytes, size_t len)
 {
     Place *p = &s_places[place];
-    size_t room = sizeof p->ready - p->ready_len;
-    size_t n = (len < room) ? len : room;
+    int took;
     (void)ctx;
-    memcpy(p->ready + p->ready_len, bytes, n);
-    p->ready_len += n;
-    return (int)n;
+    if (!tad_asker_may_type(&p->asker))
+    {
+        return 0;
+    }
+    took = tad_asker_write(&p->asker, bytes, len, now_ms());
+    return (took > 0) ? took : 0;
 }
 
 static void svc_escape(void *ctx, int place)
@@ -1156,20 +1159,9 @@ static void place_service(int i, uint32_t now)
     if (p->ended)
     {
         p->ended = false;
-        p->ready_len = 0;
         console_onward_state(s, p->end_state, p->end_error);
     }
-    /* Typed bytes go as soon as the host lets us type: up to TAD_MAX_DATA per grant. */
-    if (p->ready_len > 0 && tad_asker_may_type(&p->asker))
-    {
-        size_t n = (p->ready_len > TAD_MAX_DATA) ? TAD_MAX_DATA : p->ready_len;
-        int took = tad_asker_write(&p->asker, p->ready, n, now);
-        if (took > 0)
-        {
-            memmove(p->ready, p->ready + took, p->ready_len - (size_t)took);
-            p->ready_len -= (size_t)took;
-        }
-    }
+    /* Typed bytes go from the console straight to the asker (svc_write) at each grant. */
 }
 
 /* ------------------------------------------------------------------------------------------ */

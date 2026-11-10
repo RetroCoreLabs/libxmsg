@@ -106,6 +106,7 @@ typedef struct FakeNode
     uint8_t typed[512];
     size_t typed_len;
     int take; /* how many bytes onward_write takes; -1 = all */
+    unsigned writes; /* onward_write calls that took bytes */
     int escapes;
     int hangups;
     int list_rc;
@@ -152,6 +153,10 @@ static int fn_write(void *ctx, int place, const uint8_t *b, size_t len)
     (void)place;
     memcpy(n->typed + n->typed_len, b, k);
     n->typed_len += k;
+    if (k != 0u)
+    {
+        n->writes++;
+    }
     return (int)k;
 }
 
@@ -599,16 +604,70 @@ static void onward_session(void)
     console_onward_text(s, (const uint8_t *)"[HOST]\r\n", 8);
     CHECK(has(&f, "[HOST]")); /* the host's bytes untouched */
 
-    /* Lone ESC: an escape after the wait; ESC [ at once: text. */
+    /* Lone ESC: an escape after the wait. */
     console_input(s, &esc, 1, 20);
     console_host_poll(&s_host, 30);
     CHECK_EQ(s_node.escapes, 0);
     console_host_poll(&s_host, 80);
     CHECK_EQ(s_node.escapes, 1);
+
+    /* ESC [ that never ends: held, then on as data after the sequence wait, not echoed. */
+    clear(&f);
     s_node.typed_len = 0;
     type(s, "\x1b[", 100);
     CHECK_EQ(s_node.escapes, 1);
-    CHECK(s_node.typed_len == 2 && s_node.typed[0] == 0x1B);
+    CHECK_EQ(s_node.typed_len, 0);
+    console_host_poll(&s_host, 299);
+    CHECK_EQ(s_node.typed_len, 0);
+    console_host_poll(&s_host, 300);
+    CHECK(s_node.typed_len == 2 && s_node.typed[0] == 0x1B && s_node.typed[1] == '[');
+    CHECK_EQ(f.len, 0);
+
+    /* The TDV HELP key as measured live (2026-11-10 10:55:07): one write, one onward_write
+     * call with all five bytes, nothing echoed. */
+    {
+        static const uint8_t help[] = {0x1B, 0x5B, 0x34, 0x36, 0x5F};
+        s_node.typed_len = 0;
+        s_node.writes = 0;
+        console_input(s, help, sizeof help, 400);
+        CHECK_EQ(s_node.writes, 1);
+        CHECK(s_node.typed_len == 5 && memcmp(s_node.typed, help, 5) == 0);
+        CHECK_EQ(f.len, 0);
+
+        /* Split across reads with small gaps: still one call. */
+        s_node.typed_len = 0;
+        s_node.writes = 0;
+        console_input(s, help, 1, 500);
+        console_host_poll(&s_host, 520);
+        console_input(s, &help[1], 2, 530);
+        console_host_poll(&s_host, 560);
+        CHECK_EQ(s_node.typed_len, 0);
+        console_input(s, &help[3], 2, 600);
+        CHECK_EQ(s_node.writes, 1);
+        CHECK(s_node.typed_len == 5 && memcmp(s_node.typed, help, 5) == 0);
+        CHECK_EQ(f.len, 0);
+
+        /* Plain text around a key: the key goes in its own call; only the text is echoed. */
+        s_node.typed_len = 0;
+        s_node.writes = 0;
+        console_input(s, (const uint8_t *)"a\x1b[46_b", 7, 700);
+        CHECK_EQ(s_node.writes, 3);
+        CHECK(s_node.typed_len == 7 && memcmp(s_node.typed, "a\x1b[46_b", 7) == 0);
+        CHECK(f.len == 2 && memcmp(f.out, "ab", 2) == 0);
+        clear(&f);
+
+        /* The node cannot take it now: the key waits, then goes whole. */
+        s_node.typed_len = 0;
+        s_node.writes = 0;
+        s_node.take = 0;
+        console_input(s, help, sizeof help, 800);
+        CHECK_EQ(s_node.typed_len, 0);
+        s_node.take = -1;
+        console_host_poll(&s_host, 810);
+        CHECK_EQ(s_node.writes, 1);
+        CHECK(s_node.typed_len == 5 && memcmp(s_node.typed, help, 5) == 0);
+        CHECK_EQ(f.len, 0);
+    }
 
     /* The host's echo wish. */
     clear(&f);

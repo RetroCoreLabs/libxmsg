@@ -313,8 +313,9 @@ static bool onward_start(ConsoleSession *s, const char *system, uint32_t now_ms)
     s->onward_echo = true;
     s->typed_len = 0;
     s->hangup_sent = false;
-    term_escape_init(&s->esc,
-                     line_is(s, CONSOLE_LINE_ESCAPE_MSG) ? 0u : s->host->cfg.escape_ms);
+    term_keyseq_init(&s->keys,
+                     line_is(s, CONSOLE_LINE_ESCAPE_MSG) ? 0u : s->host->cfg.escape_ms,
+                     s->host->cfg.keyseq_ms);
     (void)now_ms;
     rc = sv->onward_open(sv->ctx, s->place, s->system, number, tad_user);
     if (rc != 0)
@@ -453,7 +454,8 @@ void console_config_default(ConsoleConfig *cfg)
     cfg->mode = CONSOLE_MODE_PROMPT;
     cfg->prompt = "TAD> ";
     cfg->iterations = AUTH_DEFAULT_ITERATIONS;
-    cfg->escape_ms = TERM_ESCAPE_DEFAULT_MS;
+    cfg->escape_ms = TERM_KEYSEQ_ESC_MS;
+    cfg->keyseq_ms = TERM_KEYSEQ_SEQ_MS;
     cfg->login_tries = AUTH_LOGIN_TRIES;
     cfg->login_delay_ms = AUTH_LOGIN_DELAY_MS;
 }
@@ -556,26 +558,57 @@ void console_host_counts(const ConsoleHost *h, uint16_t *in_use, uint16_t *total
     *total = (uint16_t)h->count;
 }
 
-/* Offer the typed bytes to the onward session; keep what it does not take. */
+static void session_keys(ConsoleSession *s, const TermKeyOut *ko);
+
+/* Drop the first `n` typed bytes (taken by the onward session). */
+static void typed_drop(ConsoleSession *s, size_t n)
+{
+    memmove(s->typed, s->typed + n, s->typed_len - n);
+    memmove(s->typed_key, s->typed_key + n, s->typed_len - n);
+    s->typed_len -= n;
+}
+
+/* Offer the typed bytes to the onward session; keep what it does not take. Each call is one
+ * letter: plain bytes up to the next function key, or one function key alone (whole). */
 static void typed_flush(ConsoleSession *s)
 {
     const ConsoleServices *sv = &s->host->cfg.services;
-    int took;
-    if (s->typed_len == 0u || s->onward != CONSOLE_ONWARD_RUNNING)
+    while (s->typed_len != 0u && s->onward == CONSOLE_ONWARD_RUNNING)
     {
-        return;
+        size_t chunk = s->typed_key[0];
+        bool key = (chunk != 0u);
+        int took;
+        if (!key)
+        {
+            chunk = 1;
+            while (chunk < s->typed_len && s->typed_key[chunk] == 0u)
+            {
+                chunk++;
+            }
+        }
+        took = sv->onward_write(sv->ctx, s->place, s->typed, chunk);
+        if (took <= 0)
+        {
+            return;
+        }
+        if ((size_t)took > chunk)
+        {
+            took = (int)chunk;
+        }
+        if (key && (size_t)took != chunk)
+        {
+            /* Against the onward_write contract: the key went out split. Said, not hidden. */
+            XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_WARN,
+                     "place %d: a function key was split (%d of %u bytes taken)", s->place, took,
+                     (unsigned)chunk);
+            s->typed_key[took] = (uint8_t)(chunk - (size_t)took);
+        }
+        typed_drop(s, (size_t)took);
+        if ((size_t)took != chunk)
+        {
+            return; /* it takes no more now */
+        }
     }
-    took = sv->onward_write(sv->ctx, s->place, s->typed, s->typed_len);
-    if (took <= 0)
-    {
-        return;
-    }
-    if ((size_t)took > s->typed_len)
-    {
-        took = (int)s->typed_len;
-    }
-    memmove(s->typed, s->typed + took, s->typed_len - (size_t)took);
-    s->typed_len -= (size_t)took;
 }
 
 static void onward_escape(ConsoleSession *s)
@@ -605,9 +638,10 @@ void console_host_poll(ConsoleHost *h, uint32_t now_ms)
         }
         if (s->phase == CONSOLE_PH_SESSION)
         {
-            if (term_escape_poll(&s->esc, now_ms))
+            TermKeyOut ko;
+            if (term_keyseq_poll(&s->keys, now_ms, &ko))
             {
-                onward_escape(s); /* a held ESC with nothing after it: the escape key */
+                session_keys(s, &ko); /* a lone ESC: the escape key; or an unfinished key */
             }
             typed_flush(s);
         }
@@ -1257,25 +1291,43 @@ static void session_echo(ConsoleSession *s, uint8_t b)
     out_raw(s, &b, 1);
 }
 
-/* A byte for the onward session: the lone-ESC rule, then queued in order. */
-static void session_byte(ConsoleSession *s, uint8_t k, uint32_t now_ms)
+/* A function key's held bytes into the typed queue as ONE unit, never echoed. All or none:
+ * a queue too full for the whole key keeps none of it (the host is not taking input and the
+ * user typed far ahead of it, as for a plain byte). */
+static void typed_unit(ConsoleSession *s, const uint8_t *b, size_t n)
 {
-    uint8_t out[2];
-    bool escape = false;
-    int n = term_escape_byte(&s->esc, k, now_ms, out, &escape);
-    if (escape)
+    if (n == 0u || s->typed_len + n > sizeof s->typed)
+    {
+        return;
+    }
+    memcpy(s->typed + s->typed_len, b, n);
+    memset(s->typed_key + s->typed_len, 0, n);
+    s->typed_key[s->typed_len] = (uint8_t)n;
+    s->typed_len += n;
+}
+
+/* Act on what the key detector gave: escape first, then the held unit, then a plain byte. */
+static void session_keys(ConsoleSession *s, const TermKeyOut *ko)
+{
+    if (ko->escape)
     {
         onward_escape(s);
     }
-    for (int i = 0; i < n; i++)
+    typed_unit(s, ko->unit, ko->unit_len);
+    if (ko->has_byte && s->typed_len < sizeof s->typed)
     {
-        if (s->typed_len >= sizeof s->typed)
-        {
-            return; /* the host is not taking input; the user typed far ahead of it */
-        }
-        s->typed[s->typed_len++] = out[i];
-        session_echo(s, out[i]);
+        s->typed_key[s->typed_len] = 0;
+        s->typed[s->typed_len++] = ko->byte;
+        session_echo(s, ko->byte);
     }
+}
+
+/* A byte for the onward session: whole function keys and the lone-ESC rule, then queued. */
+static void session_byte(ConsoleSession *s, uint8_t k, uint32_t now_ms)
+{
+    TermKeyOut ko;
+    (void)term_keyseq_byte(&s->keys, k, now_ms, &ko);
+    session_keys(s, &ko);
 }
 
 void console_input(ConsoleSession *s, const uint8_t *bytes, size_t len, uint32_t now_ms)
