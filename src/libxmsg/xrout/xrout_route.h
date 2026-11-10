@@ -61,7 +61,12 @@ extern "C"
 /** XMCSM of both request and reply: the high half of XMCSM_XSGSY_REQUEST (tad_wire.h). */
 #define XROUT_ROUTE_XMCSM 0x0100u
 
-/** Serial byte of every captured request and reply. What it means is not known. */
+/** Serial number our requests carry. Every XROUT message starts with a serial number the CALLER
+ *  picks (high bit 0); XROUT reuses the request buffer for the reply, so byte 0 comes back
+ *  unchanged and byte 1 (the service number) is overwritten by the status. The serial is how a
+ *  caller with several requests outstanding matches a reply to its request. Source: ND XMSG manual
+ *  Appendix B section 2, as recorded in RetroIO XroutReply.cs and XroutMessageBuilder.cs. Every
+ *  capture uses 01; any value works, so the answer side must echo what it got, never write 01. */
 #define XROUT_ROUTE_SERIAL 0x01u
 
 /** Sub-header bytes of every captured request (frame flags, role) and reply. */
