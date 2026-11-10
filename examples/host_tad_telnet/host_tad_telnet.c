@@ -973,10 +973,9 @@ static int svc_open(void *ctx, int place, const char *system, uint16_t number,
     return 0;
 }
 
-/* One call is one TAD data letter, sent at once when the host has granted input; otherwise
- * nothing is taken and the console keeps the bytes and offers them again (console.h
- * onward_write). Gathering the calls in a buffer here and cutting it into letters later split
- * a function key across two letters (term_keyseq.h, measured 2026-11-10). */
+/* One call is at most one TAD data letter, sent at once when the host has granted input;
+ * otherwise nothing is taken and the console keeps the bytes and offers them again (console.h
+ * onward_write). The asker cuts the letter at the host's break character (tad_asker.h). */
 static int svc_write(void *ctx, int place, const uint8_t *bytes, size_t len)
 {
     Place *p = &s_places[place];

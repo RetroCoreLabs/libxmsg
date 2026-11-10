@@ -46,6 +46,18 @@
  *  - input: typing is allowed after an RFI and closes again with each BDAT sent, so
  *    tad_asker_write() takes at most 255 bytes per grant. MEASURED: every typed BDAT in the
  *    capture follows an RFI.
+ *  - break setting: the host's BMMX (opcode 0x04, data: strategy byte, BRKMAX word) says which
+ *    typed character ends a piece of input. One BDAT carries bytes up to and including the
+ *    first such character, then the asker waits for the next RFI. Strategies (SINTRAN Monitor
+ *    Calls, MON BRKM / InputString): 0 every character, 1 control characters (below 32, and
+ *    DEL; the default before any BMMX), negative none. MEASURED 2026-11-10 on the RetroServer
+ *    hub: in S3-CONFIG D100 sends BMMX 00 0000 and the real D102 asker sends the TDV key
+ *    ESC [ 4 8 _ as five one-byte BDATs, each after its own RFI; D100 accepts it. The whole key
+ *    in one letter is refused (BEL). Typed lines at the command prompt (strategy 1) go whole up
+ *    to their CR (SYSTEM CR in one BDAT, SET-T-T,,93 CR in one). Strategy 9 changes only
+ *    BRKMAX and keeps the strategy. Strategies 2..8 and their break tables are not
+ *    implemented: the BMMX is logged as an ERROR, counted in stats.unknown_break_strategy, and
+ *    input is not cut (extras/BUGS.md B1).
  *
  * Our own choices, not wire facts: the asker keeps ONE frame unacknowledged at a time, so a
  * frame the host refuses with XENSE is simply rebuilt and sent again at the stepped-down number
@@ -214,6 +226,7 @@ typedef struct TadAskerStats
     uint32_t resyncs;         /**< unanswered letters that drew a resync */
     uint32_t text_bytes_in;
     uint32_t text_bytes_out;
+    uint32_t unknown_break_strategy; /**< BMMX with a strategy this file does not implement */
 } TadAskerStats;
 
 /** The session. Keep it alive while attached; the node holds a pointer to it. */
@@ -231,6 +244,8 @@ typedef struct TadAsker
     uint16_t session_port; /**< from the port assignment */
     uint8_t lun[2];        /**< the 0x0B data of the port assignment, as received */
     bool rfi_open;         /**< input granted and not yet used */
+    int8_t break_strategy; /**< from the host's BMMX; 1 until one comes (see the file comment) */
+    uint16_t break_max;    /**< BMMX BRKMAX word, as received (not used: strategies 0 and 1 ignore it) */
     bool hangup_wanted;    /**< tad_asker_hangup() came before the session port was known */
     uint16_t who_port;     /**< the port the last 7WHO came from: where 7IAM goes */
     bool resync_tried;     /**< the unanswered letter has already drawn one resync */

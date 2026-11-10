@@ -458,6 +458,52 @@ static void asker_tick(XmsgSession *s, uint32_t now_ms)
     }
 }
 
+/* The host's break setting (BMMX, see the header): strategy byte, BRKMAX word. */
+static void take_break_setting(TadAsker *a, const TadMessage *m)
+{
+    int8_t strategy;
+    if (m->len < 1)
+    {
+        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_WARN, "host BMMX without data, ignored");
+        return;
+    }
+    strategy = (int8_t)m->data[0];
+    a->break_max = (m->len >= 3) ? (uint16_t)((m->data[1] << 8) | m->data[2]) : 0u;
+    if (strategy == 9)
+    {
+        /* MON BRKM: 9 changes only BRKMAX; the strategy in force stays. */
+        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_DEBUG, "host BRKMAX %u", (unsigned)a->break_max);
+        return;
+    }
+    a->break_strategy = strategy;
+    if (strategy > 1)
+    {
+        a->stats.unknown_break_strategy++;
+        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_ERROR,
+                 "host break strategy %d (BRKMAX %u) is not implemented; input is not cut",
+                 (int)strategy, (unsigned)a->break_max);
+    }
+    else
+    {
+        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_DEBUG, "host break strategy %d", (int)strategy);
+    }
+}
+
+/* Does this typed (7-bit) character end a piece of input under the host's break setting? */
+static bool is_break_char(const TadAsker *a, uint8_t c)
+{
+    uint8_t c7 = (uint8_t)(c & 0x7Fu);
+    switch (a->break_strategy)
+    {
+    case 0:
+        return true;
+    case 1:
+        return c7 < 32u || c7 == 127u;
+    default:
+        return false; /* negative: none; 2..8: not implemented (see take_break_setting) */
+    }
+}
+
 /* The reply rule (see the header): one reply per host terminal frame. */
 static void answer_terminal_frame(TadAsker *a, const uint8_t *chain, size_t clen, uint32_t now_ms)
 {
@@ -497,6 +543,10 @@ static void answer_terminal_frame(TadAsker *a, const uint8_t *chain, size_t clen
         case TAD_OP_RFI:
             has_content = true;
             has_rfi = true;
+            break;
+        case TAD_OP_BMMX:
+            has_content = true;
+            take_break_setting(a, &m);
             break;
         case TAD_OP_CESC:
             has_content = true;
@@ -762,6 +812,7 @@ int tad_asker_init(TadAsker *a, const TadAskerConfig *cfg, const TadAskerCallbac
         return XMSG_EINVAL;
     }
     memset(a, 0, sizeof *a);
+    a->break_strategy = 1; /* SINTRAN's default until the host sends a BMMX */
     a->cfg = *cfg;
     memcpy(a->system_name, cfg->system_name, name_len + 1);
     a->cfg.system_name = a->system_name;
@@ -812,6 +863,8 @@ int tad_asker_connect(TadAsker *a, XmsgNode *node, uint32_t now_ms)
     a->xense_tries = 0;
     a->line_len = 0;
     a->rfi_open = false;
+    a->break_strategy = 1;
+    a->break_max = 0;
     a->tadadm_port = 0;
     a->session_port = 0;
     a->error = 0;
@@ -847,6 +900,14 @@ int tad_asker_write(TadAsker *a, const uint8_t *bytes, size_t len, uint32_t now_
         return XMSG_EAGAIN;
     }
     take = (len > TAD_MAX_DATA) ? TAD_MAX_DATA : len;
+    for (size_t i = 0; i < take; i++)
+    {
+        if (is_break_char(a, bytes[i]))
+        {
+            take = i + 1; /* the break character ends this BDAT; the rest waits for an RFI */
+            break;
+        }
+    }
     for (size_t i = 0; i < take; i++)
     {
         a->line[i] = a->cfg.keystroke_parity ? tad_even_parity(bytes[i]) : bytes[i];

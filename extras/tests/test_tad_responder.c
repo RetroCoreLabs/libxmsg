@@ -913,7 +913,7 @@ static uint32_t run_console(uint32_t now, int ms)
     return now;
 }
 
-static void console_function_key_is_one_bdat(void)
+static void console_function_key_follows_break_setting(void)
 {
     static const uint8_t help[] = {0x1B, 0x5B, 0x34, 0x36, 0x5F}; /* TDV HELP, measured */
     static const uint8_t wire[] = {0x1B, 0xDB, 0xB4, 0x36, 0x5F}; /* even parity in bit 7 */
@@ -952,27 +952,33 @@ static void console_function_key_is_one_bdat(void)
     console_onward_state(s, CONSOLE_ONWARD_RUNNING, 0);
     s_cl_len = 0;
 
-    /* The user's one write reaches the host as one BDAT, nothing echoed. */
+    /* The host has sent no BMMX, so its break setting is SINTRAN's default (1: control
+     * characters break, tad_asker.h). The key's ESC ends the first BDAT; the rest goes after the
+     * next grant. Nothing is echoed to the user. */
     s_cs_now = now;
     console_input(s, help, sizeof help, now);
     now = run_console(now, 300);
     CHECK_EQ(s_app.inputs, 1);
-    CHECK(s_app.typed_len == sizeof wire && memcmp(s_app.typed, wire, sizeof wire) == 0);
+    CHECK(s_app.typed_len == 1 && s_app.typed[0] == 0x1B);
+    s_app.typed_len = 0;
+    CHECK_EQ(tad_responder_grant_input(&s_resp), XMSG_OK);
+    now = run_console(now, 300);
+    CHECK_EQ(s_app.inputs, 2);
+    CHECK(s_app.typed_len == sizeof wire - 1 && memcmp(s_app.typed, wire + 1, sizeof wire - 1) == 0);
     CHECK_EQ(s_cl_len, 0);
 
-    /* A letter is in flight (the grant is used): the next key waits for the next grant and
-     * then goes whole, in one BDAT. */
+    /* No grant: nothing goes; the key waits whole in the console until the host grants. */
     s_app.typed_len = 0;
     console_input(s, help, 2, now);
     now = run_console(now, 20);
     console_input(s, &help[2], 3, now);
     now = run_console(now, 300);
-    CHECK_EQ(s_app.inputs, 1);
+    CHECK_EQ(s_app.inputs, 2);
     CHECK_EQ(s_app.typed_len, 0);
     CHECK_EQ(tad_responder_grant_input(&s_resp), XMSG_OK);
     now = run_console(now, 300);
-    CHECK_EQ(s_app.inputs, 2);
-    CHECK(s_app.typed_len == sizeof wire && memcmp(s_app.typed, wire, sizeof wire) == 0);
+    CHECK_EQ(s_app.inputs, 3);
+    CHECK(s_app.typed_len == 1 && s_app.typed[0] == 0x1B);
     CHECK_EQ(s_cl_len, 0);
     console_line_lost(s);
 }
@@ -986,6 +992,6 @@ int main(void)
     output_waits_for_the_askers_answers();
     refusal();
     status_question_is_answered_without_a_session();
-    console_function_key_is_one_bdat();
+    console_function_key_follows_break_setting();
     TEST_DONE();
 }

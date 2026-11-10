@@ -939,6 +939,76 @@ static void unanswered_letter_draws_one_resync(void)
     CHECK(s_host.count >= 1); /* the letter */
 }
 
+/* Feed one host terminal frame to the asker through its session entry: a body of lead word
+ * 0000, the chain length, then the chain (the shape of every captured host terminal frame). */
+static void give_chain(TadAsker *a, const char *chain_hex)
+{
+    uint8_t body[64];
+    XmsgDatagram dg;
+    int n = test_hex_to_bytes(chain_hex, body + 4, sizeof body - 4);
+    CHECK(n > 0);
+    body[0] = 0x00;
+    body[1] = 0x00;
+    body[2] = (uint8_t)((unsigned)n >> 8);
+    body[3] = (uint8_t)n;
+    memset(&dg, 0, sizeof dg);
+    dg.has_subhdr = true;
+    dg.body = body;
+    dg.body_len = (size_t)n + 4u;
+    a->base.ops->on_datagram(&a->base, &dg, 0);
+}
+
+/* The host's break setting cuts typed input (tad_asker.h). Bytes and order from the RetroServer
+ * hub capture 2026-11-10 11:55:32: D100 in S3-CONFIG sends
+ *   00 04 03 00 00 00 00 03 01 FF 02 00   (pad, BMMX strategy 0 BRKMAX 0, pad, ECKM FF, RFI)
+ * and the real D102 asker answers with 1B, DB, B4, B8, 5F, one BDAT each. */
+static void break_setting_rules(void)
+{
+    TadAsker a;
+    TadAskerConfig cfg;
+    static const uint8_t slutt[5] = {0x1B, 0x5B, 0x34, 0x38, 0x5F};
+    static const char *const expect[5] = {"1B", "DB", "B4", "B8", "5F"};
+    tad_asker_config_default(&cfg, 102, "D102");
+    CHECK_EQ(tad_asker_init(&a, &cfg, NULL), XMSG_OK);
+    a.state = TAD_ASKER_RUNNING;
+
+    /* Default (strategy 1): a line goes whole up to its CR; ESC is a control character. */
+    a.rfi_open = true;
+    CHECK_EQ(tad_asker_write(&a, (const uint8_t *)"SYSTEM\r", 7, 0), 7);
+    a.line_len = 0;
+    a.rfi_open = true;
+    CHECK_EQ(tad_asker_write(&a, slutt, 5, 0), 1);
+    CHECK_BYTES(a.line, a.line_len, "1B");
+    a.line_len = 0;
+    a.rfi_open = true;
+    CHECK_EQ(tad_asker_write(&a, slutt + 1, 4, 0), 4);
+    CHECK_BYTES(a.line, a.line_len, "DBB4B85F");
+
+    /* S3-CONFIG: strategy 0, one byte per grant, parity on. */
+    a.line_len = 0;
+    give_chain(&a, "000403000000000301FF0200");
+    CHECK_EQ(a.break_strategy, 0);
+    CHECK(a.rfi_open);
+    for (size_t i = 0; i < 5; i++)
+    {
+        a.line_len = 0;
+        a.rfi_open = true;
+        CHECK_EQ(tad_asker_write(&a, slutt + i, 5 - i, 0), 1);
+        CHECK_BYTES(a.line, a.line_len, expect[i]);
+    }
+
+    /* Back to strategy 1 (D100 at the exit, frame 1033: 00 04 03 01 00 00). */
+    give_chain(&a, "0004030100000200");
+    CHECK_EQ(a.break_strategy, 1);
+
+    /* A strategy this file does not implement is counted and logged, and input is not cut. */
+    give_chain(&a, "0004030300100200");
+    CHECK_EQ(a.stats.unknown_break_strategy, 1);
+    a.line_len = 0;
+    a.rfi_open = true;
+    CHECK_EQ(tad_asker_write(&a, slutt, 5, 0), 5);
+}
+
 static void typing_rules(void)
 {
     TadAsker a;
@@ -967,6 +1037,8 @@ static void typing_rules(void)
     a.state = TAD_ASKER_RUNNING;
     a.rfi_open = true;
     CHECK_EQ(tad_asker_write(&a, many, sizeof many, 0), 255);
+
+    break_setting_rules();
 
     cfg.system_name = "";
     CHECK_EQ(tad_asker_init(&a, &cfg, NULL), XMSG_EINVAL);

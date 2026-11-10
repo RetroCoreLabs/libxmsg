@@ -5,12 +5,17 @@
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Ronny Hansen
  *
- * Why: a SINTRAN host reads a function key only when all its bytes come in ONE TAD data letter.
- * MEASURED live 2026-11-10 10:55:07 (terminal type 93, TDV): the telnet client sent the TDV
- * HELP key, 1B 5B 34 36 5F (ESC [ 4 6 _), in one write; the bridge held only the ESC
- * (term_escape.h), sent ESC [ in one BDAT and 4 6 _ in the next, 406 ms later, and D100 rang
- * BEL. The same key typed straight at D100's own terminal port works. This detector holds the
- * whole sequence and hands it on as one unit.
+ * Why: the console must know where a function key starts and ends, to keep its bytes out of
+ * the local echo and to tell a lone ESC (escape) from the first byte of a key.
+ *
+ * CORRECTION 2026-11-10: this file first said a host reads a key only when all its bytes come in
+ * ONE TAD letter. That is wrong. The real SINTRAN asker (D102 CONNECT-TO D100, S3-CONFIG,
+ * RetroServer hub capture 11:55:32) sends the TDV SLUTT key ESC [ 4 8 _ as five one-byte
+ * letters, each after its own input grant, because the host's break setting there is "every
+ * character"; D100 accepts it and refuses the whole key in one letter (BEL). How a key is cut
+ * into letters is the TAD asker's rule (tad_asker.h, break setting). The earlier HELP failure
+ * at 10:55:07 (ESC [ in one letter, 4 6 _ in the next) is not explained by that rule alone;
+ * it was not re-run.
  *
  * What a TDV sends, from the sources:
  *  - RetroTerm TDV2200KeyRegistry.cs (ND-246 keyboard, from the TDV-2200/9 User's Guide

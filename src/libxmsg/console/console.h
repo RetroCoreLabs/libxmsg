@@ -150,13 +150,14 @@ typedef struct ConsoleServices
      *  FAILED follows), or a negative XMSG error when it cannot start at all. */
     int (*onward_open)(void *ctx, int place, const char *system, uint16_t number,
                        const char *tad_user);
-    /** Typed bytes for the onward session: ONE call is ONE TAD data letter (tad_asker_write
+    /** Typed bytes for the onward session: ONE call is at most ONE TAD data letter (tad_asker_write
      *  when the host has granted input). Returns the count taken (0 when it cannot take any
-     *  now; the core offers the rest again later). A function key's escape sequence is always
-     *  offered alone, in its own call, and must be taken whole or not at all: SINTRAN reads a
-     *  key only when all its bytes come in one letter (term_keyseq.h, measured 2026-11-10).
-     *  Do not gather the bytes of several calls into one buffer that is cut into letters
-     *  later; such a cut can split a key. */
+     *  now; the core offers the rest again later). A function key's escape sequence is
+     *  offered alone, in its own call. How many bytes one letter carries is the TAD asker's
+     *  decision under the host's break setting (tad_asker.h): in S3-CONFIG the host breaks on
+     *  every character and a key goes one byte per letter, as the real SINTRAN asker sends it
+     *  (measured 2026-11-10). Taking part of a call is therefore normal. Do not gather the
+     *  bytes of several calls into one buffer that is cut into letters later. */
     int (*onward_write)(void *ctx, int place, const uint8_t *bytes, size_t len);
     /** The user pressed the escape key (TAD ESCA). */
     void (*onward_escape)(void *ctx, int place);

@@ -568,8 +568,9 @@ static void typed_drop(ConsoleSession *s, size_t n)
     s->typed_len -= n;
 }
 
-/* Offer the typed bytes to the onward session; keep what it does not take. Each call is one
- * letter: plain bytes up to the next function key, or one function key alone (whole). */
+/* Offer the typed bytes to the onward session; keep what it does not take. Each call offers
+ * plain bytes up to the next function key, or one function key alone; the onward session may
+ * take fewer (the host's break setting, tad_asker.h). */
 static void typed_flush(ConsoleSession *s)
 {
     const ConsoleServices *sv = &s->host->cfg.services;
@@ -597,10 +598,8 @@ static void typed_flush(ConsoleSession *s)
         }
         if (key && (size_t)took != chunk)
         {
-            /* Against the onward_write contract: the key went out split. Said, not hidden. */
-            XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_WARN,
-                     "place %d: a function key was split (%d of %u bytes taken)", s->place, took,
-                     (unsigned)chunk);
+            /* Normal under the host's break setting (tad_asker.h): the rest of the key stays
+             * marked as one key and goes in later calls. */
             s->typed_key[took] = (uint8_t)(chunk - (size_t)took);
         }
         typed_drop(s, (size_t)took);
