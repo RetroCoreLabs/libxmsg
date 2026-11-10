@@ -654,7 +654,8 @@ void console_host_poll(ConsoleHost *h, uint32_t now_ms)
 
 static void cmd_help(ConsoleSession *s)
 {
-    say(s, "CONNECT <system>   connect to a SINTRAN system, e.g. CONNECT D102\r\n"
+    const ConsoleServices *sv = &s->host->cfg.services;
+    say(s,"CONNECT <system>   connect to a SINTRAN system, e.g. CONNECT D102\r\n"
            "LIST               the routing table of the host we are linked to\r\n"
            "NAMES              the system names and named ports the host knows\r\n"
            "WHO                the users on this bridge\r\n"
@@ -662,8 +663,16 @@ static void cmd_help(ConsoleSession *s)
            "PASSWORD           change your password\r\n"
            "HELP               this text\r\n"
            "EXIT, LOGOUT, QUIT close the connection\r\n");
+    if (sv->help_user != NULL)
+    {
+        say(s, sv->help_user);
+    }
     if (s->level == AUTH_LEVEL_ADMIN)
     {
+        if (sv->help_admin != NULL)
+        {
+            say(s, sv->help_admin);
+        }
         say(s, "USERS              the users (admin)\r\n"
                "ADDUSER name [admin]  add a user (admin)\r\n"
                "DELUSER name       delete a user (admin)\r\n"
@@ -1073,6 +1082,26 @@ static bool cmd_names(ConsoleSession *s)
     return true;
 }
 
+/* A line the core does not know: offer it to the application (ConsoleServices.command).
+ * Returns true when the application took it. */
+static bool app_command(ConsoleSession *s, const char *text)
+{
+    const ConsoleServices *sv = &s->host->cfg.services;
+    char out[512];
+    if (sv->command == NULL)
+    {
+        return false;
+    }
+    out[0] = '\0';
+    if (sv->command(sv->ctx, s->place, text, s->level, out, sizeof out) != 1)
+    {
+        return false;
+    }
+    out[sizeof out - 1u] = '\0'; /* whatever the application wrote, it ends here */
+    say(s, out);
+    return true;
+}
+
 /* One line typed at the prompt. */
 /* size exemption: command table */
 static void prompt_line(ConsoleSession *s, const char *text, uint32_t now_ms)
@@ -1140,7 +1169,10 @@ static void prompt_line(ConsoleSession *s, const char *text, uint32_t now_ms)
         cmd_admin(s, cmd, arg);
         break;
     default:
-        say(s, "unknown command; HELP lists them\r\n");
+        if (!app_command(s, text))
+        {
+            say(s, "unknown command; HELP lists them\r\n");
+        }
         break;
     }
     show_prompt(s);

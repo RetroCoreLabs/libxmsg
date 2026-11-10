@@ -180,6 +180,19 @@ typedef struct ConsoleServices
     /** More INFO lines of the application's own (CR LF ended), after the link facts. May be
      *  NULL. Returns the length written. */
     int (*info_more)(void *ctx, char *buf, size_t cap);
+    /** The application's own commands. Called for a prompt line the core does not know, before
+     *  "unknown command", with the line as typed and the user's level. Returns 1 when the line
+     *  was the application's (`out` holds the text to print, zero-terminated, each line ended
+     *  by CR LF; the core applies the 7-bit rule and shows the prompt after it), or 0 when it
+     *  is not (the core says "unknown command"). The application checks the level itself.
+     *  NULL: no application commands. */
+    int (*command)(void *ctx, int place, const char *line, AuthLevel level, char *out,
+                   size_t cap);
+    /** HELP lines for the application's commands, shown to every user (CR LF ended). NULL:
+     *  none. */
+    const char *help_user;
+    /** HELP lines shown to admins only, before the core's admin lines. NULL: none. */
+    const char *help_admin;
 } ConsoleServices;
 
 /** The whole user list, for USERS and DELUSER. Looking one up and saving one go through the

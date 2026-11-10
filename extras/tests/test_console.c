@@ -840,6 +840,57 @@ static void trusted_admin_and_names(void)
     CHECK_EQ(console_host_init(&s_host, &cfg, s_sessions, 3), -1); /* no ports */
 }
 
+/* An application command hook, as XMSGGW's NODE and RESTART use it. */
+static int s_app_calls;
+
+static int fn_command(void *ctx, int place, const char *line, AuthLevel level, char *out,
+                      size_t cap)
+{
+    (void)ctx;
+    s_app_calls++;
+    if (strcmp(line, "node") != 0)
+    {
+        return 0;
+    }
+    (void)snprintf(out, cap, "node %d %s\r\n", place,
+                   (level == AUTH_LEVEL_ADMIN) ? "admin" : "user");
+    return 1;
+}
+
+static void application_commands(void)
+{
+    FakeLine f;
+    ConsoleLine l = make_line(&f, 0);
+    ConsoleSession *s;
+    setup(CONSOLE_MODE_PROMPT);
+    s_app_calls = 0;
+    s_host.cfg.services.command = fn_command;
+    s_host.cfg.services.help_user = "NODE               the node (app)\r\n";
+    s_host.cfg.services.help_admin = "RESTART            restart (app admin)\r\n";
+    s = login(&f, &l, "alice", "pw");
+    type(s, "node\r", 3);
+    CHECK(has(&f, "node 0 admin\r\nTAD> "));
+    clear(&f);
+    type(s, "frobnicate\r", 3);
+    CHECK(has(&f, "unknown command"));
+    CHECK_EQ(s_app_calls, 2);
+    clear(&f);
+    type(s, "who\r", 3); /* a core command never reaches the application */
+    CHECK_EQ(s_app_calls, 2);
+    type(s, "help\r", 3);
+    CHECK(has(&f, "NODE               the node (app)") && has(&f, "RESTART            restart"));
+    {
+        FakeLine g;
+        ConsoleLine m = make_line(&g, 0);
+        ConsoleSession *t = login(&g, &m, "carol", "cpw");
+        type(t, "help\r", 3);
+        CHECK(has(&g, "NODE") && !has(&g, "RESTART"));
+        clear(&g);
+        type(t, "node\r", 3);
+        CHECK(has(&g, "node 1 user"));
+    }
+}
+
 int main(void)
 {
     printf("[console]\n");
@@ -850,5 +901,6 @@ int main(void)
     direct_mode_and_line_lost();
     seven_bit_own_echo_and_esca();
     trusted_admin_and_names();
+    application_commands();
     TEST_DONE();
 }
