@@ -1,5 +1,6 @@
 /*
- * test_term.c - the lone-ESC detector, the line editor, the command words and WHO/INFO text.
+ * test_term.c - the lone-ESC detector, the line editor, the command words, WHO/INFO text and
+ * the telnet codec.
  *
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Ronny Hansen
@@ -7,6 +8,7 @@
 #include "libxmsg/term/term_escape.h"
 #include "libxmsg/term/term_line.h"
 #include "libxmsg/term/term_report.h"
+#include "libxmsg/term/term_telnet.h"
 #include "test_util.h"
 
 /* Feed bytes at given times; collect the data passed on and count escapes, in order. Escapes are
@@ -304,6 +306,77 @@ static void info_text(void)
     CHECK_EQ(term_report_info(&li, buf, 30), -1);
 }
 
+/* Feed socket bytes; collect the data bytes and the answers. */
+static void tn_feed(TermTelnet *t, const char *hex, uint8_t *data, size_t *dn, uint8_t *ans,
+                    size_t *an)
+{
+    uint8_t in[64];
+    int n = test_hex_to_bytes(hex, in, sizeof in);
+    *dn = 0;
+    *an = 0;
+    for (int i = 0; i < n; i++)
+    {
+        uint8_t r[TERM_TELNET_REPLY_MAX];
+        size_t rl = 0;
+        int d = term_telnet_rx(t, in[i], r, &rl);
+        if (d >= 0)
+        {
+            data[(*dn)++] = (uint8_t)d;
+        }
+        memcpy(ans + *an, r, rl);
+        *an += rl;
+    }
+}
+
+static void telnet_codec(void)
+{
+    TermTelnet t;
+    uint8_t out[32];
+    uint8_t data[64];
+    uint8_t ans[64];
+    size_t dn;
+    size_t an;
+    size_t taken;
+    static const uint8_t ff[] = {0x41, 0xFF, 0x42};
+
+    /* Binary (the host tool): WILL ECHO, SGA, BINARY; DO SGA, BINARY. */
+    term_telnet_init(&t, true);
+    CHECK_EQ(term_telnet_open(&t, out, sizeof out), 15);
+    CHECK_BYTES(out, 15, "FFFB01 FFFB03 FFFB00 FFFD03 FFFD00");
+    CHECK_EQ(term_telnet_open(&t, out, 14), -1);
+    /* Agreeing answers change nothing; refused options; a subnegotiation is skipped. */
+    tn_feed(&t, "FFFD01 FFFB03 FFFD18 FFFB1F 41 FFFA1F0050FFF0 42", data, &dn, ans, &an);
+    CHECK_BYTES(data, dn, "41 42");
+    CHECK_BYTES(ans, an, "FFFC18 FFFE1F");
+    /* IAC IAC is 0xFF; in binary CR NUL keeps its NUL. */
+    tn_feed(&t, "FFFF 0D00", data, &dn, ans, &an);
+    CHECK_BYTES(data, dn, "FF 0D 00");
+    /* The client leaves binary: now CR NUL loses its NUL, CR LF stays. */
+    tn_feed(&t, "FFFC00 0D00 0D0A", data, &dn, ans, &an);
+    CHECK_BYTES(ans, an, "FFFE00");
+    CHECK_BYTES(data, dn, "0D 0D 0A");
+    CHECK(!term_telnet_is_on(&t, TERM_TN_BINARY, true));
+    CHECK(term_telnet_is_on(&t, TERM_TN_ECHO, false));
+    /* DONT ECHO turns our echo off and says so; DO again turns it back on. */
+    tn_feed(&t, "FFFE01 FFFD01", data, &dn, ans, &an);
+    CHECK_BYTES(ans, an, "FFFC01 FFFB01");
+
+    /* Not binary (XMSGGW): no BINARY offered; a DO BINARY is refused. */
+    term_telnet_init(&t, false);
+    CHECK_EQ(term_telnet_open(&t, out, sizeof out), 9);
+    CHECK_BYTES(out, 9, "FFFB01 FFFB03 FFFD03");
+    tn_feed(&t, "FFFD00 FFFB00", data, &dn, ans, &an);
+    CHECK_BYTES(ans, an, "FFFC00 FFFE00");
+
+    /* Out: 0xFF doubled, never split. */
+    CHECK_EQ(term_telnet_escape(ff, 3, out, sizeof out, &taken), 4);
+    CHECK_BYTES(out, 4, "41 FF FF 42");
+    CHECK_EQ(taken, 3);
+    CHECK_EQ(term_telnet_escape(ff, 3, out, 2, &taken), 1);
+    CHECK_EQ(taken, 1);
+    CHECK_EQ(term_telnet_rx(NULL, 0, out, &taken), -2);
+}
+
 int main(void)
 {
     printf("[term]\n");
@@ -317,5 +390,6 @@ int main(void)
     command_words();
     who_text();
     info_text();
+    telnet_codec();
     TEST_DONE();
 }

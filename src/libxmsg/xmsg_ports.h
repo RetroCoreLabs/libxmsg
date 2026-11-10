@@ -85,6 +85,7 @@ typedef enum XmsgLogCategory
     XMSG_LOG_TAD,
     XMSG_LOG_COSMOS,
     XMSG_LOG_FTP,
+    XMSG_LOG_CONSOLE, /**< the login and command line (console/) */
     XMSG_LOG_CATEGORY_COUNT
 } XmsgLogCategory;
 

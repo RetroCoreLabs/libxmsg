@@ -46,9 +46,12 @@
 #include "libxmsg/term/term_escape.h"
 #include "libxmsg/term/term_line.h"
 #include "libxmsg/term/term_report.h"
+#include "libxmsg/term/term_telnet.h"
 #include "libxmsg/auth/auth_hash.h"
 #include "libxmsg/auth/auth_user.h"
 #include "libxmsg/auth/auth_login.h"
+#include "libxmsg/console/console.h"
+#include "libxmsg/console/console_tad.h"
 
 #include "libxmsg/gen/sintran_wire.h"
 #include "libxmsg/gen/tad_wire.h"

@@ -16,6 +16,7 @@ static bool s_sink_set = false;
 static uint8_t s_levels[XMSG_LOG_CATEGORY_COUNT] = {
     XMSG_LOG_INFO, XMSG_LOG_INFO, XMSG_LOG_INFO, XMSG_LOG_INFO, XMSG_LOG_INFO,
     XMSG_LOG_INFO, XMSG_LOG_INFO, XMSG_LOG_INFO, XMSG_LOG_INFO, XMSG_LOG_INFO,
+    XMSG_LOG_INFO,
 };
 
 void xmsg_log_set_sink(const XmsgLogPort *sink)

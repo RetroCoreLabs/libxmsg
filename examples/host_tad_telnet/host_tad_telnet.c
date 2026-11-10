@@ -1,20 +1,32 @@
 /*
- * host_tad_telnet.c - telnet to a SINTRAN machine: each telnet client gets its own TAD session.
+ * host_tad_telnet.c - telnet to a SINTRAN machine, and CONNECT-TO from one, on one command line.
  *
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Ronny Hansen
  *
  * The tool dials the HDLC line of a SINTRAN machine (nd100x started with --hdlc=N:PORT listens
- * for it), brings the XMSG link up as node --node, and listens for telnet clients. Up to
- * XMSG_MAX_SESSIONS clients at a time.
+ * for it), brings the XMSG link up as node --node, and listens for telnet clients. A SINTRAN
+ * user may also call us (CONNECT-TO with our node's system name): that caller gets the same
+ * login and command line as a telnet user. Both kinds share HOST_PLACES places (8); up to
+ * HOST_RESPONDERS (4) SINTRAN calls at once. The login and the command line are the library's
+ * console module (src/libxmsg/console/console.h); the telnet option handling is its telnet
+ * codec (term/term_telnet.h). This file only owns the sockets, the files and the node, and
+ * implements the console's ports on its single thread.
  *
  *   host_tad_telnet --hdlc 127.0.0.1:1362 --node 19999 --peer 100 --system D100 --listen 2300
  *                   [--mode direct|prompt] [--users FILE] [--esc-ms N] [--term-type N]
  *                   [--user NAME] [--raw-keys] [--flags1 flags1.txt] [--log info]
+ *                   [--route NAME=N ...]
  *   host_tad_telnet --add-user NAME [--admin] | --del-user NAME | --list-users
  *                   | --reset-password NAME   [--users FILE]
  *
  * The SINTRAN side must know our node: the link is defined there for it, and XMSG is running.
+ *
+ * System names: CONNECT <name> addresses the TARGET system's own number, not the machine at the
+ * other end of our line (tad_asker.h peer_node); the machines between pass the call on. The
+ * number comes from our own table, as SINTRAN's DEF-REMOTE: --system NAME is always in it with
+ * --peer, and each --route NAME=N adds one (for example --route D102=102). A name that is not in
+ * the table is refused at the prompt ("unknown system"). The number is never read from the name.
  *
  * Two modes (--mode):
  *  - direct (the default): each telnet client goes straight into a TAD session on --system.
@@ -43,8 +55,8 @@
  *    a new password twice right after the login, and the file is written before "TAD> " shows.
  *    When the users file is missing or holds no user, the tool creates it with the default
  *    admin (name admin, password admin, must change) and prints a warning.
- *  - in both modes, when the telnet connection drops, the TAD session is hung up at once, which
- *    logs the user out of SINTRAN.
+ *  - in both modes, when the telnet connection drops (or the SINTRAN caller hangs up), the TAD
+ *    session is hung up at once, which logs the user out of SINTRAN.
  *
  * The users file (--users, default host_tad_telnet.users), one line per user, '#' comments:
  *     name:pbkdf2-sha256:<iterations>:<salt hex>:<hash hex>:<flags>
@@ -69,7 +81,10 @@
  *    granted input. An ESC followed in time by more bytes (a function key such as ESC [ 4 6 _)
  *    goes to the host as typed text, unchanged. --esc-ms 0: ESC is always text.
  *  - the tool echoes typed bytes back to the client when the host's ECKM says so (the host
- *    does not echo; ECKM 0xFF, for a password, means no echo).
+ *    does not echo; ECKM 0xFF, for a password, means no echo). Not the Enter key (the host
+ *    sends its own CR LF for it) and not ESC; BS and DEL echo as BS SP BS (console.c).
+ *  - a SINTRAN caller's own machine echoes, and its escape key arrives as ESCA, which goes on
+ *    to the onward host as an ESCA.
  *  - host text goes to the client byte for byte (0xFF doubled, as telnet needs).
  *  - keystrokes carry even parity in bit 7, as the real asker sends them (the library's
  *    keystroke_parity setting, measured); --raw-keys turns it off.
@@ -520,7 +535,7 @@ static int random_fill(void *ctx, uint8_t *buf, size_t len)
 }
 
 /* Read a line from the console with echo off. Returns 0, or -1 on end of input. */
-static int console_password(const char *prompt, char *buf, size_t cap)
+static int tty_password(const char *prompt, char *buf, size_t cap)
 {
     int rc = 0;
     printf("%s", prompt);
@@ -576,8 +591,8 @@ static int console_new_password(const char *name, const AuthUser *base, AuthUser
     char pw1[128];
     char pw2[128];
     int rc = 0;
-    if (console_password("password: ", pw1, sizeof pw1) != 0 ||
-        console_password("again: ", pw2, sizeof pw2) != 0)
+    if (tty_password("password: ", pw1, sizeof pw1) != 0 ||
+        tty_password("again: ", pw2, sizeof pw2) != 0)
     {
         rc = 1;
     }
@@ -725,75 +740,131 @@ static int users_command(const char *cmd, const char *name)
     return rc;
 }
 
+/* The users file as the console's user list (USERS, DELUSER). */
+static int users_get(void *ctx, size_t index, AuthUser *out)
+{
+    static AuthUser all[USERS_MAX];
+    int n = users_read(all, USERS_MAX);
+    int rc = -1;
+    (void)ctx;
+    if (n > 0 && index < (size_t)n)
+    {
+        *out = all[index];
+        rc = 0;
+    }
+    auth_wipe(all, sizeof all);
+    return rc;
+}
+
+static int users_remove(void *ctx, const char *name)
+{
+    static AuthUser all[USERS_MAX];
+    int n = users_read(all, USERS_MAX);
+    int rc = -1;
+    (void)ctx;
+    for (int i = 0; i < n; i++)
+    {
+        if (strcmp(all[i].name, name) == 0)
+        {
+            all[i] = all[n - 1];
+            rc = users_write(all, n - 1);
+            break;
+        }
+    }
+    auth_wipe(all, sizeof all);
+    return rc;
+}
+
 /* ------------------------------------------------------------------------------------------ */
-/* Telnet clients                                                                             */
+/* System names: our own table, as SINTRAN's DEF-REMOTE                                       */
 /* ------------------------------------------------------------------------------------------ */
 
-#define TN_IAC    0xFFu
-#define TN_DONT   0xFEu
-#define TN_DO     0xFDu
-#define TN_WONT   0xFCu
-#define TN_WILL   0xFBu
-#define TN_SB     0xFAu
-#define TN_SE     0xF0u
-#define TN_BINARY 0x00u /* RFC 856: 8-bit data, no CR translation */
-#define TN_ECHO   0x01u /* RFC 857: we echo, the client does not */
-#define TN_SGA    0x03u /* RFC 858: no go-ahead, i.e. character at a time */
+#define ROUTES_MAX 16
 
-#define BRIDGE_PROMPT "TAD> "
-
-typedef enum TelnetRx
+typedef struct Route
 {
-    TN_DATA = 0,
-    TN_GOT_IAC,
-    TN_GOT_VERB,
-    TN_IN_SB,
-    TN_IN_SB_IAC
-} TelnetRx;
+    char name[CONSOLE_SYSTEM_MAX + 1u];
+    uint16_t number;
+} Route;
 
-/* Where a client is. */
-typedef enum Phase
-{
-    PH_LOGIN = 0, /* prompt mode: name and password */
-    PH_PROMPT,    /* prompt mode: at "TAD> " */
-    PH_PASSWD,    /* prompt mode: PASSWORD, changing one's own password (c->login) */
-    PH_SETPW,     /* prompt mode: an admin types a password for ADDUSER or RESETPW */
-    PH_SESSION    /* in a TAD session (direct mode: from the start) */
-} Phase;
+static Route s_routes[ROUTES_MAX];
+static int s_route_count;
 
-typedef struct Client
+/* Add NAME=NUMBER (case kept as typed; looked up without regard to case). */
+static bool route_add(const char *name, size_t len, uint16_t number)
 {
-    bool used;
-    Sock sock;
+    if (len == 0 || len > CONSOLE_SYSTEM_MAX || s_route_count >= ROUTES_MAX)
+    {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++)
+    {
+        char ch = name[i];
+        s_routes[s_route_count].name[i] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : ch;
+    }
+    s_routes[s_route_count].name[len] = '\0';
+    s_routes[s_route_count].number = number;
+    s_route_count++;
+    return true;
+}
+
+/* The console's resolve: a typed name to the TARGET system's number (tad_asker.h peer_node).
+ * Never worked out from the name text. CONNECT arrives in upper case (term_cmd_parse). */
+static int svc_resolve(void *ctx, const char *system, uint16_t *number)
+{
+    char up[CONSOLE_SYSTEM_MAX + 1u];
+    size_t n = strlen(system);
+    (void)ctx;
+    if (n > CONSOLE_SYSTEM_MAX)
+    {
+        return -1;
+    }
+    for (size_t i = 0; i <= n; i++)
+    {
+        char ch = system[i];
+        up[i] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : ch;
+    }
+    for (int i = 0; i < s_route_count; i++)
+    {
+        if (strcmp(s_routes[i].name, up) == 0)
+        {
+            *number = s_routes[i].number;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* Places: one onward TAD session and one LIST walk per console place                         */
+/* ------------------------------------------------------------------------------------------ */
+
+#define HOST_PLACES     8 /* users at once, telnet and SINTRAN callers together */
+#define HOST_RESPONDERS 4 /* SINTRAN calls being set up or running at once */
+#define HOST_CLIENTS    HOST_PLACES
+
+/* Node sessions: one onward session or one LIST per place at a time, two per responder. A
+ * hang-up still in flight can hold one more for a moment. */
+#if XMSG_MAX_SESSIONS < (HOST_PLACES + (2 * HOST_RESPONDERS))
+#error "XMSG_MAX_SESSIONS is too small for HOST_PLACES and HOST_RESPONDERS"
+#endif
+
+typedef struct Place
+{
     TadAsker asker;
-    bool connect_pending; /* waiting for the link before the letter can go */
-    bool logout_seen;     /* the host said the login ended: hang up */
-    TelnetRx tn;
-    uint8_t verb;        /* the WILL/WONT/DO/DONT whose option byte comes next */
-    bool us_on[256];     /* options WE do (agreed): ECHO, SGA, BINARY */
-    bool him_on[256];    /* options the CLIENT does (agreed): SGA, BINARY */
-    bool after_cr;       /* the last data byte was CR (for the NVT CR NUL rule) */
-    bool echo;           /* the host's ECKM: echo typed bytes back to the client */
-    uint8_t ready[1024]; /* typed bytes, in order, waiting for an input grant */
+    char system[CONSOLE_SYSTEM_MAX + 1u];
+    char user[TAD_IAM_USER_SIZE];
+    bool pending;       /* waiting for the link before the connect letter can go */
+    bool running_seen;  /* RUNNING not yet told to the console */
+    bool ended;         /* CLOSED/FAILED not yet told to the console */
+    ConsoleOnward end_state;
+    int end_error;
+    bool logout;        /* the host said its login ended */
+    uint8_t ready[1024]; /* typed bytes waiting for an input grant */
     size_t ready_len;
-    uint8_t out[16384]; /* bytes for the client socket */
-    size_t out_len;
-    bool closing; /* flush and close */
-    int index;
-    Phase phase;
-    TermLine line;   /* the bridge's own command line and login */
-    AuthLogin login; /* prompt mode */
-    char user[AUTH_NAME_MAX + 1u];
-    AuthLevel level;       /* of the logged-in user */
-    AuthUser setpw;        /* PH_SETPW: the record being made (hash only) */
-    bool setpw_again;      /* PH_SETPW: the first entry is in, the second is due */
-    char system[16]; /* the system of the TAD session */
-    char remote[80]; /* the client's address, for WHO */
-    uint32_t connected_at;
-    TermEscape esc;
-    XroutWalk walk; /* LIST: reading the host's routing table */
-    bool listing;   /* a LIST is running; the prompt comes back when it ends */
-} Client;
+    XroutWalk walk;
+    bool listing;
+} Place;
 
 typedef enum BridgeMode
 {
@@ -801,7 +872,9 @@ typedef enum BridgeMode
     MODE_PROMPT
 } BridgeMode;
 
-static Client s_clients[XMSG_MAX_SESSIONS];
+static Place s_places[HOST_PLACES];
+static ConsoleSession s_sessions[HOST_PLACES];
+static ConsoleHost s_console;
 static XmsgNode s_node;
 static uint16_t s_peer;
 static uint16_t s_own;
@@ -812,873 +885,297 @@ static uint32_t s_esc_ms = TERM_ESCAPE_DEFAULT_MS;
 static uint16_t s_term_type;
 static const char *s_iam_user = "TELNET";
 static char s_line_name[160]; /* the HDLC line, for INFO */
+static char s_banner[160];
 static uint32_t s_started_at;
 static const AuthUserStore s_store = {NULL, users_lookup, users_save};
 
-static void client_put(Client *c, const uint8_t *b, size_t n)
+/* Asker callbacks. Text and echo come only from the node's input, so they may feed the console
+ * at once. A state change can come from inside tad_asker_abort(), which the console's
+ * onward_hangup calls, so it is recorded and fed from the loop (console.h rule). */
+static void asker_text(void *ctx, const uint8_t *bytes, size_t len)
 {
-    for (size_t i = 0; i < n; i++)
-    {
-        if (c->out_len + 2 > sizeof c->out)
-        {
-            return; /* the client is not reading; drop rather than block the line */
-        }
-        if (b[i] == TN_IAC)
-        {
-            c->out[c->out_len++] = TN_IAC;
-        }
-        c->out[c->out_len++] = b[i];
-    }
+    Place *p = (Place *)ctx;
+    console_onward_text(console_host_session(&s_console, (int)(p - s_places)), bytes, len);
 }
 
-static void client_text(Client *c, const char *text)
+static void asker_echo(void *ctx, uint8_t eckm)
 {
-    client_put(c, (const uint8_t *)text, strlen(text));
+    Place *p = (Place *)ctx;
+    console_onward_echo(console_host_session(&s_console, (int)(p - s_places)), eckm == 0x01u);
 }
 
-static void client_say(Client *c, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-
-static void client_say(Client *c, const char *fmt, ...)
+static void asker_state(void *ctx, TadAskerState st, int error)
 {
-    char text[256];
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(text, sizeof text, fmt, ap);
-    va_end(ap);
-    if (n > 0)
-    {
-        client_put(c, (const uint8_t *)text,
-                   (size_t)((n < (int)sizeof text) ? n : (int)sizeof text - 1));
-    }
-}
-
-static void show_prompt(Client *c)
-{
-    if (c->phase == PH_LOGIN)
-    {
-        const char *p = auth_login_prompt(&c->login);
-        if (p != NULL)
-        {
-            c->line.echo = auth_login_echo(&c->login);
-            client_text(c, p);
-        }
-        return;
-    }
-    if (c->phase == PH_PASSWD)
-    {
-        const char *p = auth_login_prompt(&c->login);
-        c->line.echo = false;
-        if (p != NULL)
-        {
-            client_text(c, p);
-        }
-        return;
-    }
-    if (c->phase == PH_SETPW)
-    {
-        c->line.echo = false;
-        client_say(c, "%s for %s: ", c->setpw_again ? "again" : "new password", c->setpw.name);
-        return;
-    }
-    if (c->phase == PH_PROMPT)
-    {
-        c->line.echo = true;
-        client_text(c, BRIDGE_PROMPT);
-    }
-}
-
-static void cb_text(void *ctx, const uint8_t *bytes, size_t len)
-{
-    client_put((Client *)ctx, bytes, len);
-}
-
-static void cb_state(void *ctx, TadAskerState st, int error)
-{
-    Client *c = (Client *)ctx;
-    printf("client %d: session %s", c->index, tad_asker_state_name(st));
+    Place *p = (Place *)ctx;
+    printf("place %d: session %s", (int)(p - s_places), tad_asker_state_name(st));
     if (st == TAD_ASKER_FAILED)
     {
         printf(" (error %d%s%s)", error, (error > 0) ? ": " : "",
                (error > 0) ? xrout_error_name((uint8_t)error) : "");
     }
     printf("\n");
-    if (st != TAD_ASKER_CLOSED && st != TAD_ASKER_FAILED)
+    if (st == TAD_ASKER_RUNNING)
     {
-        return;
+        p->running_seen = true;
     }
-    if (!c->used)
+    else if (st == TAD_ASKER_CLOSED || st == TAD_ASKER_FAILED)
     {
-        return; /* the client is gone; this is the DCON of its hang-up being acknowledged */
+        p->ended = true;
+        p->end_state = (st == TAD_ASKER_FAILED) ? CONSOLE_ONWARD_FAILED : CONSOLE_ONWARD_CLOSED;
+        p->end_error = error;
     }
-    client_say(c, "\r\n[session %s]\r\n", tad_asker_state_name(st));
-    if (s_mode == MODE_DIRECT)
-    {
-        c->closing = true;
-        return;
-    }
-    /* Prompt mode: back to the bridge's command line. */
-    c->phase = PH_PROMPT;
-    c->ready_len = 0;
-    c->connect_pending = false;
-    c->logout_seen = false;
-    term_line_init(&c->line, true);
-    show_prompt(c);
 }
 
-static void cb_echo(void *ctx, uint8_t eckm)
+static void asker_logged_out(void *ctx)
 {
-    ((Client *)ctx)->echo = (eckm == 0x01);
+    Place *p = (Place *)ctx;
+    printf("place %d: the SINTRAN login ended\n", (int)(p - s_places));
+    p->logout = true;
 }
 
-static void cb_logged_out(void *ctx)
-{
-    Client *c = (Client *)ctx;
-    printf("client %d: the SINTRAN login ended\n", c->index);
-    c->logout_seen = true; /* hung up from the main loop */
-}
+/* ------------------------------------------------------------------------------------------ */
+/* The console's services port, on this single thread                                         */
+/* ------------------------------------------------------------------------------------------ */
 
-/* Prepare a TAD session to `system`; the connect letter goes once the link is ready. */
-static void client_start(Client *c, const char *system)
+static int svc_open(void *ctx, int place, const char *system, uint16_t number,
+                    const char *tad_user)
 {
+    Place *p = &s_places[place];
     TadAskerConfig cfg;
-    TadAskerCallbacks cb = {c, cb_text, cb_state, NULL, cb_echo, NULL, cb_logged_out};
-    snprintf(c->system, sizeof c->system, "%s", system);
-    tad_asker_config_default(&cfg, s_peer, c->system);
+    TadAskerCallbacks cb = {p, asker_text, asker_state, NULL, asker_echo, NULL, asker_logged_out};
+    (void)ctx;
+    if (p->asker.base.attached)
+    {
+        return XMSG_EAGAIN; /* the last session on this place is still hanging up */
+    }
+    snprintf(p->system, sizeof p->system, "%s", system);
+    snprintf(p->user, sizeof p->user, "%s", (tad_user != NULL) ? tad_user : s_iam_user);
+    /* Addressed to the TARGET's own number, not the link neighbour (tad_asker.h peer_node). */
+    tad_asker_config_default(&cfg, number, p->system);
     cfg.keystroke_parity = !s_raw_keys;
     cfg.ttyp[0] = (uint8_t)(s_term_type >> 8u);
     cfg.ttyp[1] = (uint8_t)(s_term_type & 0xFFu);
-    /* What TADA on the host shows for this session (7IAM): terminal = client slot + 1. */
-    cfg.terminal_number = (uint16_t)((c - s_clients) + 1);
-    cfg.user_name = s_iam_user;
-    if (tad_asker_init(&c->asker, &cfg, &cb) != XMSG_OK)
+    /* What TADA on the host shows for this session (7IAM): terminal = place + 1. */
+    cfg.terminal_number = (uint16_t)(place + 1);
+    cfg.user_name = p->user;
+    if (tad_asker_init(&p->asker, &cfg, &cb) != XMSG_OK)
     {
-        client_say(c, "bad system name\r\n");
-        if (s_mode == MODE_DIRECT)
-        {
-            c->closing = true;
-        }
-        show_prompt(c);
+        return XMSG_EINVAL;
+    }
+    p->ready_len = 0;
+    p->running_seen = false;
+    p->ended = false;
+    p->logout = false;
+    p->pending = true; /* the letter goes once the link is ready (place_service) */
+    return 0;
+}
+
+static int svc_write(void *ctx, int place, const uint8_t *bytes, size_t len)
+{
+    Place *p = &s_places[place];
+    size_t room = sizeof p->ready - p->ready_len;
+    size_t n = (len < room) ? len : room;
+    (void)ctx;
+    memcpy(p->ready + p->ready_len, bytes, n);
+    p->ready_len += n;
+    return (int)n;
+}
+
+static void svc_escape(void *ctx, int place)
+{
+    (void)ctx;
+    (void)tad_asker_escape(&s_places[place].asker, now_ms()); /* refused only before it is up */
+}
+
+static void svc_hangup(void *ctx, int place)
+{
+    Place *p = &s_places[place];
+    (void)ctx;
+    if (p->pending)
+    {
+        p->pending = false; /* the letter never went: nothing to hang up */
+        p->ended = true;
+        p->end_state = CONSOLE_ONWARD_CLOSED;
+        p->end_error = 0;
         return;
     }
-    c->phase = PH_SESSION;
-    c->echo = true;
-    c->ready_len = 0;
-    c->after_cr = false;
-    c->logout_seen = false;
-    term_escape_init(&c->esc, s_esc_ms);
-    c->connect_pending = true;
-}
-
-static void cmd_who(Client *self, uint32_t now)
-{
-    TermWhoEntry e[XMSG_MAX_SESSIONS];
-    char buf[256 + (XMSG_MAX_SESSIONS * 160)];
-    size_t n = 0;
-    for (int i = 0; i < XMSG_MAX_SESSIONS; i++)
+    /* As a real asker does when its user is done: DCON to the session port. */
+    if (tad_asker_hangup(&p->asker, now_ms()) != XMSG_OK)
     {
-        const Client *c = &s_clients[i];
-        if (!c->used)
+        tad_asker_abort(&p->asker); /* its state callback marks the end */
+        if (!p->ended)
         {
-            continue;
+            p->ended = true;
+            p->end_state = CONSOLE_ONWARD_CLOSED;
+            p->end_error = 0;
         }
-        e[n].terminal = i + 1;
-        e[n].user = (s_mode == MODE_DIRECT) ? "(direct)" : ((c->phase == PH_LOGIN) ? NULL : c->user);
-        e[n].remote = c->remote;
-        e[n].connected_s = (now - c->connected_at) / 1000u;
-        e[n].system = (c->phase == PH_SESSION) ? c->system : NULL;
-        e[n].session_state = c->connect_pending ? "waiting for the link"
-                                                : tad_asker_state_name(c->asker.state);
-        e[n].is_self = (c == self);
-        n++;
-    }
-    if (term_report_who(e, n, buf, sizeof buf) > 0)
-    {
-        client_text(self, buf);
     }
 }
 
-static void cmd_info(Client *self, uint32_t now)
+static void walk_entry(void *ctx, const XroutRouteEntry *e)
 {
-    TermLinkInfo li;
-    char buf[1024];
-    const XmsgTransportPort *t = &s_node.ports.transport;
-    memset(&li, 0, sizeof li);
-    li.own_node = s_own;
-    li.own_system = xmsg_node_system(&s_node);
-    li.peer_node_learned = lapb_peer_node(&s_node.lapb);
-    li.peer_node_cfg = s_peer;
-    li.peer_system = s_system;
-    li.link_up = xmsg_node_is_up(&s_node);
-    li.link_ready = xmsg_node_is_ready(&s_node);
-    li.transport = s_line_name;
-    li.line_bps = (t->line_speed != NULL) ? t->line_speed(t->ctx) : 0u;
-    li.line_is_tcp = true; /* this tool only dials HDLC over TCP */
-    li.frames_in = s_node.lapb.stats.frames_in;
-    li.frames_out = s_node.lapb.stats.frames_out;
-    li.retransmissions = s_node.lapb.stats.retransmissions;
-    li.unusual_address = s_node.lapb.stats.unusual_address;
-    li.peer_window = s_node.lapb.peer_window;
-    li.datagrams_in = s_node.stats.datagrams_in;
-    li.datagrams_out = s_node.stats.datagrams_out;
-    li.uptime_s = (now - s_started_at) / 1000u;
-    if (term_report_info(&li, buf, sizeof buf) > 0)
+    Place *p = (Place *)ctx;
+    if (p->listing)
     {
-        client_text(self, buf);
+        console_list_entry(console_host_session(&s_console, (int)(p - s_places)), e);
     }
 }
 
-/* LIST: one line per entry of the host's routing table. */
-static void list_entry(void *ctx, const XroutRouteEntry *e)
+static void walk_done(void *ctx, int result, unsigned entries)
 {
-    Client *c = (Client *)ctx;
-    if (!c->used || !c->listing)
+    Place *p = (Place *)ctx;
+    if (!p->listing)
     {
-        return;
+        return; /* cancelled: the user went away */
     }
-    client_say(c, "  %6u  %u %-19s %6u  %4u  %4u\r\n", e->system, e->how,
-               xrout_route_how_name(e->how), e->detail, xrout_route_hops(e),
-               xrout_route_wans(e));
+    p->listing = false;
+    console_list_done(console_host_session(&s_console, (int)(p - s_places)), result, entries);
 }
 
-static void list_done(void *ctx, int result, unsigned entries)
+static int svc_list(void *ctx, int place)
 {
-    Client *c = (Client *)ctx;
-    if (!c->used || !c->listing)
-    {
-        return; /* the client went away; nothing to tell */
-    }
-    c->listing = false;
-    if (result == XMSG_OK)
-    {
-        client_say(c, "%u system(s)\r\n", entries);
-    }
-    else if (result == XMSG_ETIMEDOUT)
-    {
-        client_say(c, "LIST: the host did not answer (after %u system(s))\r\n", entries);
-    }
-    else
-    {
-        client_say(c, "LIST: the host refused the question (error %d, after %u system(s))\r\n",
-                   result, entries);
-    }
-    show_prompt(c);
-}
-
-/* Returns true when the prompt will come back from list_done. */
-static bool cmd_list(Client *c, uint32_t now)
-{
-    XroutWalkCallbacks cb = {c, list_entry, list_done};
+    Place *p = &s_places[place];
+    XroutWalkCallbacks cb = {p, walk_entry, walk_done};
+    int rc;
+    (void)ctx;
     /* The host's XMSG system number is taken to be its node number, as on every captured
      * machine (xmsg_node.h, "Routing questions"). */
-    int rc = xrout_walk_start(&c->walk, &s_node, s_peer, s_peer, 10000, &cb, now);
-    if (rc == XMSG_ESTATE)
-    {
-        client_text(c, "LIST: the link to the host is not ready\r\n");
-        return false;
-    }
-    if (rc == XMSG_ENOSPC)
-    {
-        client_text(c, "LIST: every session slot is in use; try again later\r\n");
-        return false;
-    }
-    if (rc != XMSG_OK)
-    {
-        client_say(c, "LIST: cannot start (%d)\r\n", rc);
-        return false;
-    }
-    c->listing = true;
-    client_say(c, "Routing table of node %u:\r\n"
-                  "  system  how                   detail  hops  WANs\r\n",
-               s_peer);
-    return true;
+    rc = xrout_walk_start(&p->walk, &s_node, s_peer, s_peer, 10000, &cb, now_ms());
+    p->listing = (rc == XMSG_OK);
+    return rc;
 }
 
-static void cmd_help(Client *c)
+static void svc_list_cancel(void *ctx, int place)
 {
-    client_text(c, "CONNECT <system>   connect to a SINTRAN system, e.g. CONNECT D102\r\n"
-                   "LIST               the routing table of the host we are linked to\r\n"
-                   "WHO                the clients on this bridge\r\n"
-                   "INFO               the link to the SINTRAN machine\r\n"
-                   "PASSWORD           change your password\r\n"
-                   "HELP               this text\r\n"
-                   "EXIT, LOGOUT, QUIT close the connection\r\n");
-    if (c->level == AUTH_LEVEL_ADMIN)
-    {
-        client_text(c, "USERS              the users (admin)\r\n"
-                       "ADDUSER name [admin]  add a user (admin)\r\n"
-                       "DELUSER name       delete a user (admin)\r\n"
-                       "RESETPW name       set a new password, changed at login (admin)\r\n");
-    }
-    client_text(c, "In a session: ESC alone breaks the running program; log out of SINTRAN to\r\n"
-                   "come back here.\r\n");
+    Place *p = &s_places[place];
+    (void)ctx;
+    p->listing = false; /* first: the cancel calls walk_done, which then tells nobody */
+    (void)xrout_walk_cancel(&p->walk);
 }
 
-static void cmd_users(Client *c)
+static void svc_link_info(void *ctx, TermLinkInfo *li)
 {
-    static AuthUser all[USERS_MAX];
-    int n = users_read(all, USERS_MAX);
-    for (int i = 0; i < n; i++)
-    {
-        client_say(c, "%-32s %-5s%s\r\n", all[i].name,
-                   (all[i].level == AUTH_LEVEL_ADMIN) ? "admin" : "user",
-                   all[i].must_change ? "  must change password" : "");
-    }
-    auth_wipe(all, sizeof all);
+    const XmsgTransportPort *t = &s_node.ports.transport;
+    (void)ctx;
+    li->own_node = s_own;
+    li->own_system = xmsg_node_system(&s_node);
+    li->peer_node_learned = lapb_peer_node(&s_node.lapb);
+    li->peer_node_cfg = s_peer;
+    li->peer_system = s_system;
+    li->link_up = xmsg_node_is_up(&s_node);
+    li->link_ready = xmsg_node_is_ready(&s_node);
+    li->transport = s_line_name;
+    li->line_bps = (t->line_speed != NULL) ? t->line_speed(t->ctx) : 0u;
+    li->line_is_tcp = true; /* this tool only dials HDLC over TCP */
+    li->frames_in = s_node.lapb.stats.frames_in;
+    li->frames_out = s_node.lapb.stats.frames_out;
+    li->retransmissions = s_node.lapb.stats.retransmissions;
+    li->unusual_address = s_node.lapb.stats.unusual_address;
+    li->peer_window = s_node.lapb.peer_window;
+    li->datagrams_in = s_node.stats.datagrams_in;
+    li->datagrams_out = s_node.stats.datagrams_out;
+    li->uptime_s = (now_ms() - s_started_at) / 1000u;
 }
 
-static void cmd_deluser(Client *c, const char *name)
+/* Per-place work of one loop turn: feed the recorded events, send the letter, type. */
+static void place_service(int i, uint32_t now)
 {
-    static AuthUser all[USERS_MAX];
-    int n = users_read(all, USERS_MAX);
-    int at = -1;
-    for (int i = 0; i < n; i++)
+    Place *p = &s_places[i];
+    ConsoleSession *s = console_host_session(&s_console, i);
+    if (p->pending && xmsg_node_is_ready(&s_node))
     {
-        if (strcmp(all[i].name, name) == 0)
+        int rc = tad_asker_connect(&p->asker, &s_node, now);
+        if (rc == XMSG_OK)
         {
-            at = i;
+            p->pending = false;
+        }
+        else if (rc != XMSG_ESTATE)
+        {
+            p->pending = false;
+            p->ended = true;
+            p->end_state = CONSOLE_ONWARD_FAILED;
+            p->end_error = rc; /* no free session on the node */
         }
     }
-    if (at < 0)
+    if (p->running_seen)
     {
-        client_say(c, "no user %s\r\n", name);
+        p->running_seen = false;
+        console_onward_state(s, CONSOLE_ONWARD_RUNNING, 0);
     }
-    else if (auth_users_is_last_admin(all, (size_t)n, name))
+    if (p->logout)
     {
-        client_say(c, "%s is the last admin and cannot be deleted\r\n", name);
+        p->logout = false;
+        console_onward_logout(s);
     }
-    else
+    if (p->ended)
     {
-        all[at] = all[n - 1];
-        n--;
-        if (users_write(all, n) == 0)
+        p->ended = false;
+        p->ready_len = 0;
+        console_onward_state(s, p->end_state, p->end_error);
+    }
+    /* Typed bytes go as soon as the host lets us type: up to TAD_MAX_DATA per grant. */
+    if (p->ready_len > 0 && tad_asker_may_type(&p->asker))
+    {
+        size_t n = (p->ready_len > TAD_MAX_DATA) ? TAD_MAX_DATA : p->ready_len;
+        int took = tad_asker_write(&p->asker, p->ready, n, now);
+        if (took > 0)
         {
-            printf("client %d (%s): deleted user %s\n", c->index, c->user, name);
-            client_say(c, "user %s deleted\r\n", name);
-        }
-        else
-        {
-            client_text(c, "cannot write the users file\r\n");
-        }
-    }
-    auth_wipe(all, sizeof all);
-}
-
-/* ADDUSER and RESETPW: check the name, then ask the password twice (PH_SETPW). */
-static void cmd_setpw_begin(Client *c, const char *name, bool add, AuthLevel level)
-{
-    AuthUser u;
-    bool exists;
-    if (!auth_name_is_valid(name))
-    {
-        client_say(c, "a user name is 1 to %u characters, no blank and no ':'\r\n",
-                   AUTH_NAME_MAX);
-        return;
-    }
-    exists = users_lookup(NULL, name, &u) == 0;
-    auth_wipe(&u, sizeof u);
-    if (add && exists)
-    {
-        client_say(c, "user %s exists; RESETPW sets a new password\r\n", name);
-        return;
-    }
-    if (!add && !exists)
-    {
-        client_say(c, "no user %s\r\n", name);
-        return;
-    }
-    memset(&c->setpw, 0, sizeof c->setpw);
-    snprintf(c->setpw.name, sizeof c->setpw.name, "%s", name);
-    c->setpw.level = level;
-    c->setpw.iterations = add ? 0u : 1u; /* 0: new user, made at the first entry */
-    c->setpw_again = false;
-    c->phase = PH_SETPW;
-}
-
-/* A line typed in PH_SETPW. The line is wiped by the caller. */
-static void setpw_line(Client *c, const char *text)
-{
-    AuthUser u;
-    if (!c->setpw_again)
-    {
-        int rc;
-        if (text[0] == '\0')
-        {
-            client_text(c, "an empty password is not allowed\r\n");
-            c->phase = PH_PROMPT;
-            return;
-        }
-        if (c->setpw.iterations == 0u)
-        {
-            AuthLevel level = c->setpw.level;
-            rc = auth_user_make(&u, c->setpw.name, text, AUTH_DEFAULT_ITERATIONS, &s_rng);
-            u.level = level;
-            if (rc == 0)
-            {
-                u.must_change = true; /* the admin knows it; the user picks their own */
-            }
-        }
-        else
-        {
-            rc = (users_lookup(NULL, c->setpw.name, &u) == 0)
-                     ? auth_user_reset_password(&u, text, &s_rng)
-                     : -1;
-        }
-        if (rc != 0)
-        {
-            client_text(c, "could not set the password\r\n");
-            auth_wipe(&u, sizeof u);
-            c->phase = PH_PROMPT;
-            return;
-        }
-        c->setpw = u;
-        auth_wipe(&u, sizeof u);
-        c->setpw_again = true;
-        return;
-    }
-    if (!auth_user_check(&c->setpw, text))
-    {
-        client_text(c, "the two passwords differ; nothing changed\r\n");
-    }
-    else if (users_put(&c->setpw) != 0)
-    {
-        client_text(c, "cannot write the users file\r\n");
-    }
-    else
-    {
-        printf("client %d (%s): set the password of %s\n", c->index, c->user, c->setpw.name);
-        client_say(c, "password of %s set; it must be changed at the next login\r\n",
-                   c->setpw.name);
-    }
-    auth_wipe(&c->setpw, sizeof c->setpw);
-    c->phase = PH_PROMPT;
-}
-
-/* A line typed in PH_PASSWD (the user's own change, through the login dialogue). */
-static void passwd_line(Client *c, const char *text, uint32_t now)
-{
-    AuthLoginState st = auth_login_line(&c->login, text, now);
-    AuthLoginNote note = auth_login_take_note(&c->login);
-    if (note != AUTH_NOTE_NONE)
-    {
-        client_say(c, "%s\r\n", auth_login_note_text(note));
-    }
-    if (note == AUTH_NOTE_CHANGED)
-    {
-        printf("client %d (%s): changed the password\n", c->index, c->user);
-    }
-    if (st == AUTH_LOGIN_DONE)
-    {
-        c->phase = PH_PROMPT;
-    }
-}
-
-/* Whether an admin command may run; tells the client when not. */
-static bool admin_only(Client *c)
-{
-    if (c->level == AUTH_LEVEL_ADMIN)
-    {
-        return true;
-    }
-    client_text(c, "not allowed\r\n");
-    return false;
-}
-
-/* One line typed at "TAD> ". */
-static void prompt_line(Client *c, const char *text, uint32_t now)
-{
-    char arg[AUTH_NAME_MAX + 1u];
-    TermCmd cmd = term_cmd_parse(text, arg, sizeof arg);
-    if (c->listing)
-    {
-        client_text(c, "LIST is still running\r\n");
-        return;
-    }
-    if (strlen(arg) > AUTH_NAME_MAX)
-    {
-        cmd = TERM_CMD_UNKNOWN;
-    }
-    switch (cmd)
-    {
-    case TERM_CMD_EMPTY:
-        break;
-    case TERM_CMD_CONNECT:
-        if (strlen(arg) >= sizeof c->system)
-        {
-            client_text(c, "unknown command; HELP lists them\r\n");
-            break;
-        }
-        printf("client %d (%s): connect %s\n", c->index, c->user, arg);
-        client_start(c, arg); /* no prompt after it: the host's banner comes */
-        return;
-    case TERM_CMD_LIST:
-        if (cmd_list(c, now))
-        {
-            return; /* the prompt comes back when the walk ends */
-        }
-        break;
-    case TERM_CMD_WHO:
-        cmd_who(c, now);
-        break;
-    case TERM_CMD_INFO:
-        cmd_info(c, now);
-        break;
-    case TERM_CMD_HELP:
-        cmd_help(c);
-        break;
-    case TERM_CMD_EXIT:
-        client_text(c, "bye\r\n");
-        c->closing = true;
-        return;
-    case TERM_CMD_PASSWORD:
-        if (auth_login_change_begin(&c->login) == 0)
-        {
-            c->phase = PH_PASSWD;
-        }
-        else
-        {
-            client_say(c, "%s\r\n", auth_login_note_text(auth_login_take_note(&c->login)));
-        }
-        break;
-    case TERM_CMD_USERS:
-        if (admin_only(c))
-        {
-            cmd_users(c);
-        }
-        break;
-    case TERM_CMD_ADDUSER:
-        /* fall through */
-    case TERM_CMD_ADDADMIN:
-        if (admin_only(c))
-        {
-            cmd_setpw_begin(c, arg, true,
-                            (cmd == TERM_CMD_ADDADMIN) ? AUTH_LEVEL_ADMIN : AUTH_LEVEL_USER);
-        }
-        break;
-    case TERM_CMD_DELUSER:
-        if (admin_only(c))
-        {
-            cmd_deluser(c, arg);
-        }
-        break;
-    case TERM_CMD_RESETPW:
-        if (admin_only(c))
-        {
-            cmd_setpw_begin(c, arg, false, AUTH_LEVEL_USER);
-        }
-        break;
-    default:
-        client_text(c, "unknown command; HELP lists them\r\n");
-        break;
-    }
-    show_prompt(c);
-}
-
-/* One line typed at the login. The line (maybe a password) is wiped by the caller. */
-static void login_line(Client *c, const char *text, uint32_t now)
-{
-    AuthLoginState before = c->login.state;
-    AuthLoginState st = auth_login_line(&c->login, text, now);
-    AuthLoginNote note = auth_login_take_note(&c->login);
-    if (note != AUTH_NOTE_NONE)
-    {
-        client_say(c, "%s\r\n", auth_login_note_text(note));
-    }
-    if (st == AUTH_LOGIN_NEW_PASSWORD && before == AUTH_LOGIN_PASSWORD)
-    {
-        client_text(c, "You must set a new password before going on.\r\n");
-    }
-    switch (st)
-    {
-    case AUTH_LOGIN_DONE:
-        snprintf(c->user, sizeof c->user, "%s", c->login.name);
-        c->level = auth_login_level(&c->login);
-        printf("client %d: logged in as %s (%s)%s\n", c->index, c->user,
-               (c->level == AUTH_LEVEL_ADMIN) ? "admin" : "user",
-               (note == AUTH_NOTE_CHANGED) ? ", new password stored" : "");
-        c->phase = PH_PROMPT;
-        client_say(c, "Logged in. HELP lists the commands.\r\n");
-        show_prompt(c);
-        break;
-    case AUTH_LOGIN_WAIT:
-        printf("client %d: login failed\n", c->index);
-        client_text(c, "Login incorrect\r\n");
-        break;
-    case AUTH_LOGIN_REFUSED:
-        if (note == AUTH_NOTE_NONE)
-        {
-            printf("client %d: login failed; too many tries, closing\n", c->index);
-            client_text(c, "Login incorrect\r\n");
-        }
-        else
-        {
-            printf("client %d: login refused: %s\n", c->index, auth_login_note_text(note));
-        }
-        c->closing = true;
-        break;
-    default:
-        show_prompt(c);
-        break;
-    }
-}
-
-/* A byte for the bridge's own command line or login. */
-static void client_line_byte(Client *c, uint8_t k, uint32_t now)
-{
-    uint8_t echo[3];
-    size_t el = 0;
-    if (c->closing || (c->phase == PH_LOGIN && c->login.state == AUTH_LOGIN_WAIT))
-    {
-        return; /* typed while a failed login waits: thrown away */
-    }
-    int done = term_line_byte(&c->line, k, echo, &el);
-    client_put(c, echo, el);
-    if (done != 1)
-    {
-        return;
-    }
-    char text[TERM_LINE_MAX + 1u];
-    memcpy(text, c->line.text, sizeof text);
-    term_line_clear(&c->line);
-    if (c->phase == PH_LOGIN)
-    {
-        login_line(c, text, now);
-    }
-    else if (c->phase == PH_PASSWD)
-    {
-        passwd_line(c, text, now);
-        show_prompt(c);
-    }
-    else if (c->phase == PH_SETPW)
-    {
-        setpw_line(c, text);
-        show_prompt(c);
-    }
-    else
-    {
-        prompt_line(c, text, now);
-    }
-    auth_wipe(text, sizeof text);
-}
-
-/* One typed byte for the TAD session: queued for the host, in order. The telnet rule applies
- * (outside binary mode a CR is sent as CR NUL, and that NUL is not a typed byte, RFC 854),
- * then the lone-ESC rule (see the file comment). Nothing else is edited or held for Return. */
-static void session_byte(Client *c, uint8_t k, uint32_t now)
-{
-    uint8_t out[2];
-    bool escape = false;
-    if (c->after_cr && k == 0x00 && !c->him_on[TN_BINARY])
-    {
-        c->after_cr = false;
-        return;
-    }
-    c->after_cr = (k == '\r');
-    int n = term_escape_byte(&c->esc, k, now, out, &escape);
-    if (escape)
-    {
-        (void)tad_asker_escape(&c->asker, now); /* refused only before the session is up */
-    }
-    for (int i = 0; i < n; i++)
-    {
-        if (c->ready_len >= sizeof c->ready)
-        {
-            return; /* the host is not taking input; the client typed 1 KB ahead of it */
-        }
-        c->ready[c->ready_len++] = out[i];
-        if (c->echo)
-        {
-            client_put(c, &out[i], 1);
+            memmove(p->ready, p->ready + took, p->ready_len - (size_t)took);
+            p->ready_len -= (size_t)took;
         }
     }
 }
 
-static void client_byte(Client *c, uint8_t k, uint32_t now)
+/* ------------------------------------------------------------------------------------------ */
+/* Telnet clients: a socket, the telnet codec and a console line                              */
+/* ------------------------------------------------------------------------------------------ */
+
+typedef struct Client
 {
-    if (c->phase == PH_SESSION)
+    bool used;
+    Sock sock;
+    TermTelnet tn;
+    ConsoleSession *s; /* NULL once the console closed the line */
+    uint8_t out[16384]; /* bytes for the client socket */
+    size_t out_len;
+    bool closing; /* flush and close */
+    char remote[64];
+} Client;
+
+static Client s_clients[HOST_CLIENTS];
+
+static void client_raw(Client *c, const uint8_t *b, size_t n)
+{
+    if (c->out_len + n <= sizeof c->out)
     {
-        session_byte(c, k, now);
-    }
-    else
-    {
-        client_line_byte(c, k, now);
+        memcpy(c->out + c->out_len, b, n);
+        c->out_len += n;
     }
 }
 
-static void tn_send(Client *c, uint8_t verb, uint8_t opt)
+static int client_write(void *ctx, const uint8_t *b, size_t n)
 {
-    if (c->out_len + 3 <= sizeof c->out)
+    Client *c = (Client *)ctx;
+    size_t taken = 0;
+    int o = term_telnet_escape(b, n, c->out + c->out_len, sizeof c->out - c->out_len, &taken);
+    if (o > 0)
     {
-        c->out[c->out_len++] = TN_IAC;
-        c->out[c->out_len++] = verb;
-        c->out[c->out_len++] = opt;
+        c->out_len += (size_t)o; /* the client is not reading: the rest is dropped */
     }
+    return (int)taken;
 }
 
-/* The options we do ourselves, and the ones we let the client do. */
-static bool tn_we_do(uint8_t opt)
+static void client_close(void *ctx, ConsoleClose why)
 {
-    return opt == TN_ECHO || opt == TN_SGA || opt == TN_BINARY;
+    Client *c = (Client *)ctx;
+    (void)why;
+    c->s = NULL;
+    c->closing = true;
 }
 
-static bool tn_client_may(uint8_t opt)
+static void client_describe(void *ctx, char *buf, size_t cap)
 {
-    return opt == TN_SGA || opt == TN_BINARY;
-}
-
-/* Option negotiation (RFC 854, with the loop rule of RFC 1143: answer only a CHANGE). */
-static void tn_option(Client *c, uint8_t verb, uint8_t opt)
-{
-    switch (verb)
-    {
-    case TN_DO:
-        if (!tn_we_do(opt))
-        {
-            tn_send(c, TN_WONT, opt);
-        }
-        else if (!c->us_on[opt])
-        {
-            c->us_on[opt] = true;
-            tn_send(c, TN_WILL, opt);
-        }
-        break;
-    case TN_DONT:
-        if (c->us_on[opt])
-        {
-            c->us_on[opt] = false;
-            tn_send(c, TN_WONT, opt);
-        }
-        break;
-    case TN_WILL:
-        if (!tn_client_may(opt))
-        {
-            tn_send(c, TN_DONT, opt);
-        }
-        else if (!c->him_on[opt])
-        {
-            c->him_on[opt] = true;
-            tn_send(c, TN_DO, opt);
-        }
-        break;
-    default: /* TN_WONT */
-        if (c->him_on[opt])
-        {
-            c->him_on[opt] = false;
-            tn_send(c, TN_DONT, opt);
-        }
-        break;
-    }
-}
-
-/* The server's opening: we will echo, suppress go-ahead and send binary; we ask the client to
- * suppress go-ahead and send binary. An answer that merely agrees changes nothing. */
-static void tn_open(Client *c)
-{
-    static const uint8_t mine[] = {TN_ECHO, TN_SGA, TN_BINARY};
-    static const uint8_t theirs[] = {TN_SGA, TN_BINARY};
-    for (size_t i = 0; i < sizeof mine; i++)
-    {
-        c->us_on[mine[i]] = true;
-        tn_send(c, TN_WILL, mine[i]);
-    }
-    for (size_t i = 0; i < sizeof theirs; i++)
-    {
-        c->him_on[theirs[i]] = true;
-        tn_send(c, TN_DO, theirs[i]);
-    }
-}
-
-/* Take telnet commands out; hand every data byte on as it is. */
-static void client_rx(Client *c, const uint8_t *b, size_t n, uint32_t now)
-{
-    for (size_t i = 0; i < n; i++)
-    {
-        uint8_t x = b[i];
-        switch (c->tn)
-        {
-        case TN_DATA:
-            if (x == TN_IAC)
-            {
-                c->tn = TN_GOT_IAC;
-            }
-            else
-            {
-                client_byte(c, x, now);
-            }
-            break;
-        case TN_GOT_IAC:
-            if (x == TN_IAC)
-            {
-                client_byte(c, x, now); /* IAC IAC is the data byte 0xFF */
-                c->tn = TN_DATA;
-            }
-            else if (x == TN_SB)
-            {
-                c->tn = TN_IN_SB;
-            }
-            else if (x >= TN_WILL)
-            {
-                c->verb = x; /* WILL, WONT, DO, DONT: one option byte follows */
-                c->tn = TN_GOT_VERB;
-            }
-            else
-            {
-                c->tn = TN_DATA;
-            }
-            break;
-        case TN_GOT_VERB:
-            tn_option(c, c->verb, x);
-            c->tn = TN_DATA;
-            break;
-        case TN_IN_SB:
-            c->tn = (x == TN_IAC) ? TN_IN_SB_IAC : TN_IN_SB;
-            break;
-        default: /* TN_IN_SB_IAC */
-            c->tn = (x == TN_SE) ? TN_DATA : TN_IN_SB;
-            break;
-        }
-    }
-}
-
-/* Send what has been typed, as it is, as soon as the host lets us type: up to TAD_MAX_DATA bytes
- * per input grant (the host's limit), the rest with the next grant. */
-static void client_feed_host(Client *c, uint32_t now)
-{
-    size_t n = c->ready_len;
-    if (n == 0 || !tad_asker_may_type(&c->asker))
-    {
-        return;
-    }
-    if (n > TAD_MAX_DATA)
-    {
-        n = TAD_MAX_DATA;
-    }
-    int took = tad_asker_write(&c->asker, c->ready, n, now);
-    if (took > 0)
-    {
-        memmove(c->ready, c->ready + took, c->ready_len - (size_t)took);
-        c->ready_len -= (size_t)took;
-    }
-}
-
-static void client_drop(Client *c, uint32_t now)
-{
-    printf("client %d: gone\n", c->index);
-    c->used = false; /* before the hang-up: its state callbacks then know the client is gone */
-    if (c->listing)
-    {
-        c->listing = false;
-        (void)xrout_walk_cancel(&c->walk); /* frees its session slot; list_done sees no client */
-    }
-    /* Hang up as a real asker does when its user is done: DCON to the session port. Before
-     * there is a session there is nothing to hang up, so drop it locally. */
-    if (c->phase == PH_SESSION && tad_asker_hangup(&c->asker, now) != XMSG_OK)
-    {
-        tad_asker_abort(&c->asker);
-    }
-    auth_wipe(&c->line, sizeof c->line);
-    auth_wipe(&c->login, sizeof c->login);
-    auth_wipe(&c->setpw, sizeof c->setpw);
-    sock_close(c->sock);
+    snprintf(buf, cap, "%s", ((const Client *)ctx)->remote);
 }
 
 /* The client's address as "IP:port", for WHO. */
@@ -1686,46 +1183,35 @@ static void peer_address(Sock s, char *out, size_t cap)
 {
     struct sockaddr_storage sa;
     socklen_t len = sizeof sa;
-    char ip[INET6_ADDRSTRLEN];
-    unsigned port = 0;
+    char ip[INET_ADDRSTRLEN]; /* IPv4 only: the listener is AF_INET */
     snprintf(out, cap, "?");
-    if (getpeername(s, (struct sockaddr *)&sa, &len) != 0)
+    if (getpeername(s, (struct sockaddr *)&sa, &len) != 0 || sa.ss_family != AF_INET)
     {
         return;
     }
-    if (sa.ss_family == AF_INET)
-    {
-        const struct sockaddr_in *v4 = (const struct sockaddr_in *)&sa;
-        if (inet_ntop(AF_INET, &v4->sin_addr, ip, sizeof ip) == NULL)
-        {
-            return;
-        }
-        port = ntohs(v4->sin_port);
-    }
-    else
+    const struct sockaddr_in *v4 = (const struct sockaddr_in *)&sa;
+    if (inet_ntop(AF_INET, &v4->sin_addr, ip, sizeof ip) == NULL)
     {
         return;
     }
-    snprintf(out, cap, "%s:%u", ip, port);
+    snprintf(out, cap, "%s:%u", ip, (unsigned)ntohs(v4->sin_port));
 }
 
 static void client_accept(Sock lsock, uint32_t now)
 {
+    static const char full[] = "all sessions in use\r\n";
     Sock cs = accept(lsock, NULL, NULL);
+    ConsoleLine line;
     int i;
     if (cs == SOCK_NONE)
     {
         return;
     }
-    /* A slot is free once its client is gone AND its session has let go of the node: after a
-     * hang-up the DCON is still in flight on that session. */
-    for (i = 0; i < XMSG_MAX_SESSIONS && (s_clients[i].used || s_clients[i].asker.base.attached);
-         i++)
+    for (i = 0; i < HOST_CLIENTS && s_clients[i].used; i++)
     {
     }
-    if (i == XMSG_MAX_SESSIONS)
+    if (i == HOST_CLIENTS)
     {
-        static const char full[] = "all sessions in use\r\n";
         (void)send(cs, full, (int)sizeof full - 1, 0);
         sock_close(cs);
         return;
@@ -1734,73 +1220,149 @@ static void client_accept(Sock lsock, uint32_t now)
     memset(c, 0, sizeof *c);
     c->used = true;
     c->sock = cs;
-    c->index = i;
-    c->echo = true;
-    c->connected_at = now;
     peer_address(cs, c->remote, sizeof c->remote);
     sock_nonblocking(cs);
-    tn_open(c);
-    printf("client %d: connected from %s\n", i, c->remote);
-    if (s_mode == MODE_DIRECT)
+    term_telnet_init(&c->tn, true);
+    c->out_len = (size_t)term_telnet_open(&c->tn, c->out, sizeof c->out);
+    memset(&line, 0, sizeof line);
+    line.ctx = c;
+    line.kind = "telnet";
+    line.write = client_write;
+    line.close = client_close;
+    line.describe = client_describe;
+    c->s = console_host_open(&s_console, &line, now);
+    if (c->s == NULL && !c->closing)
     {
-        client_start(c, s_system);
-        return;
+        client_raw(c, (const uint8_t *)full, sizeof full - 1);
+        c->closing = true;
     }
-    (void)auth_login_init(&c->login, &s_store, &s_rng, AUTH_LOGIN_TRIES, AUTH_LOGIN_DELAY_MS);
-    term_line_init(&c->line, true);
-    c->phase = PH_LOGIN;
-    client_say(c, "libxmsg TAD bridge, node %u, linked to %s\r\n", (unsigned)s_own, s_system);
-    show_prompt(c);
+    printf("telnet client %d: connected from %s\n", i, c->remote);
 }
 
-/* Per-client work of one loop turn, after its socket was read. */
-static void client_service(Client *c, uint32_t now)
+/* Take telnet commands out; hand the data bytes to the console. */
+static void client_rx(Client *c, const uint8_t *b, size_t n, uint32_t now)
 {
-    if (c->phase == PH_LOGIN && auth_login_tick(&c->login, now))
+    uint8_t data[2048];
+    size_t dn = 0;
+    for (size_t i = 0; i < n; i++)
     {
-        show_prompt(c);
+        uint8_t reply[TERM_TELNET_REPLY_MAX];
+        size_t rl = 0;
+        int d = term_telnet_rx(&c->tn, b[i], reply, &rl);
+        client_raw(c, reply, rl);
+        if (d >= 0 && dn < sizeof data)
+        {
+            data[dn++] = (uint8_t)d;
+        }
     }
-    if (c->phase != PH_SESSION)
+    if (c->s != NULL && dn > 0)
     {
+        console_input(c->s, data, dn, now);
+    }
+}
+
+static void client_drop(Client *c)
+{
+    printf("telnet client %d: gone\n", (int)(c - s_clients));
+    if (c->s != NULL)
+    {
+        console_line_lost(c->s); /* hangs up its session: that logs the user out of SINTRAN */
+        c->s = NULL;
+    }
+    c->used = false;
+    sock_close(c->sock);
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* SINTRAN callers (CONNECT-TO this node): the same console, on a TAD line                    */
+/* ------------------------------------------------------------------------------------------ */
+
+static ConsoleTadLine s_tad[HOST_RESPONDERS];
+
+static int tad_incoming(void *ctx, const TadResponderCaller *who)
+{
+    uint16_t used = 0;
+    uint16_t total = 0;
+    (void)ctx;
+    console_host_counts(&s_console, &used, &total);
+    if (used >= total)
+    {
+        printf("SINTRAN caller from system %u refused: every place in use\n",
+               (unsigned)who->system);
+        return 4; /* XRNSP: no free seat (tad_responder.h) */
+    }
+    return 0;
+}
+
+static void tad_status(void *ctx, uint16_t *in_use, uint16_t *total)
+{
+    (void)ctx;
+    console_host_counts(&s_console, in_use, total);
+}
+
+static void tad_setup(void)
+{
+    for (int k = 0; k < HOST_RESPONDERS; k++)
+    {
+        ConsoleTadConfig tc;
+        console_tad_config_default(&tc);
+        tc.incoming = tad_incoming;
+        tc.status = tad_status;
+        /* Each responder its own logical unit, 0x0300 + n as captured hosts do
+         * (tad_responder.h: meaning inferred, not decoded). */
+        tc.responder.logical_unit = (uint16_t)(0x0300u + (uint16_t)k);
+        (void)console_tad_init(&s_tad[k], &tc);
+    }
+}
+
+/* The node's on_letter: offer a port-0 letter to the lines. */
+static void on_letter(void *ctx, const XmsgDatagram *dg, uint32_t now)
+{
+    (void)ctx;
+    for (int k = 0; k < HOST_RESPONDERS; k++)
+    {
+        int rc = console_tad_offer(&s_tad[k], &s_node, dg, now);
+        if (rc != XMSG_EAGAIN)
+        {
+            return; /* handled, not a TAD letter, or an error the line has logged */
+        }
+    }
+    if (tad_responder_is_status_query(dg))
+    {
+        uint16_t used = 0;
+        uint16_t total = 0;
+        console_host_counts(&s_console, &used, &total);
+        (void)tad_responder_status_reply(&s_node, dg, used, (uint16_t)(total - used), now);
         return;
     }
-    if (term_escape_poll(&c->esc, now))
+    printf("SINTRAN caller refused: all %d responders busy\n", HOST_RESPONDERS);
+    (void)tad_responder_refuse(&s_node, dg, 4u, now);
+}
+
+/* Console side of each TAD line: open a session when a call runs, feed it, free the line. */
+static void tad_service(uint32_t now)
+{
+    for (int k = 0; k < HOST_RESPONDERS; k++)
     {
-        (void)tad_asker_escape(&c->asker, now); /* refused only before the session is up */
-    }
-    if (c->logout_seen)
-    {
-        /* The SINTRAN login ended: hang up (DCON). The state callback then closes the client
-         * (direct mode) or returns it to the prompt (prompt mode). */
-        c->logout_seen = false;
-        if (tad_asker_hangup(&c->asker, now) != XMSG_OK)
+        ConsoleTadLine *t = &s_tad[k];
+        if (console_tad_needs_session(t))
         {
-            tad_asker_abort(&c->asker);
-        }
-    }
-    if (c->connect_pending && xmsg_node_is_ready(&s_node))
-    {
-        int rc = tad_asker_connect(&c->asker, &s_node, now);
-        if (rc == XMSG_OK)
-        {
-            c->connect_pending = false;
-        }
-        else if (rc != XMSG_ESTATE)
-        {
-            client_say(c, "no free session on the node (%d)\r\n", rc);
-            c->connect_pending = false;
-            if (s_mode == MODE_DIRECT)
+            ConsoleLine line;
+            ConsoleSession *s;
+            console_tad_line(t, &line);
+            s = console_host_open(&s_console, &line, now);
+            console_tad_attach(t, s);
+            if (s == NULL && line.close != NULL && t->session == NULL && !t->close_wanted)
             {
-                c->closing = true;
-            }
-            else
-            {
-                c->phase = PH_PROMPT;
-                show_prompt(c);
+                static const char full[] = "\r\nall sessions in use\r\n";
+                (void)line.write(line.ctx, (const uint8_t *)full, sizeof full - 1);
+                line.close(line.ctx, CONSOLE_CLOSE_EXIT);
             }
         }
+        (void)console_tad_deliver(t, now);
+        (void)console_tad_release(t);
+        console_tad_pump(t, now);
     }
-    client_feed_host(c, now);
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -1840,6 +1402,8 @@ static void usage(void)
            "         [--listen PORT]      telnet port (2300)\n"
            "         [--mode direct|prompt] direct: straight into a session on --system\n"
            "                              prompt: login, then the TAD> command line\n"
+           "         [--route NAME=N]     a system CONNECT may name, and its node number;\n"
+           "                              repeat it. --system NAME=--peer is always there\n"
            "         [--users FILE]       users for prompt mode (host_tad_telnet.users)\n"
            "         [--esc-ms N]         a lone ESC within N ms is escape (50; 0 = never)\n"
            "         [--term-type N]      terminal type sent to the host, decimal (0)\n"
@@ -1870,6 +1434,18 @@ static bool parse_u16(const char *s, uint16_t *out)
     return true;
 }
 
+/* --route NAME=N */
+static bool parse_route(const char *v)
+{
+    const char *eq = strchr(v, '=');
+    uint16_t n = 0;
+    if (eq == NULL || !parse_u16(eq + 1, &n) || n == 0)
+    {
+        return false;
+    }
+    return route_add(v, (size_t)(eq - v), n);
+}
+
 typedef struct Args
 {
     const char *hdlc;
@@ -1881,6 +1457,7 @@ typedef struct Args
 } Args;
 
 /* Read one "--key value" pair. Returns false for an unknown key or a bad value. */
+/* size exemption: option table */
 static bool parse_pair(Args *a, const char *k, const char *v)
 {
     uint16_t n = 0;
@@ -1899,6 +1476,10 @@ static bool parse_pair(Args *a, const char *k, const char *v)
     else if (strcmp(k, "--system") == 0)
     {
         s_system = v;
+    }
+    else if (strcmp(k, "--route") == 0)
+    {
+        return parse_route(v);
     }
     else if (strcmp(k, "--listen") == 0)
     {
@@ -1991,7 +1572,7 @@ static bool parse_args(Args *a, int argc, char **argv)
     return true;
 }
 
-/* The line: read what came, and on a loss tell every client. */
+/* The line: read what came; on a loss every session over it is dropped here. */
 static void line_read(uint8_t *buf, size_t cap, uint32_t now)
 {
     int n = sock_recv(s_line, buf, cap);
@@ -2008,14 +1589,22 @@ static void line_read(uint8_t *buf, size_t cap, uint32_t now)
     sock_close(s_line);
     s_line = SOCK_NONE;
     xmsg_node_transport_lost(&s_node);
-    for (int i = 0; i < XMSG_MAX_SESSIONS; i++)
+    for (int i = 0; i < HOST_PLACES; i++)
     {
-        Client *c = &s_clients[i];
-        if (c->used && c->phase == PH_SESSION)
+        Place *p = &s_places[i];
+        if (p->listing)
         {
-            client_say(c, "\r\n[line lost]\r\n");
-            tad_asker_abort(&c->asker);
+            (void)xrout_walk_cancel(&p->walk); /* walk_done tells the user */
         }
+        if (p->pending)
+        {
+            svc_hangup(NULL, i);
+        }
+        tad_asker_abort(&p->asker); /* the end reaches the console from place_service */
+    }
+    for (int k = 0; k < HOST_RESPONDERS; k++)
+    {
+        tad_responder_abort(&s_tad[k].r);
     }
 }
 
@@ -2036,7 +1625,87 @@ static int node_setup(FileStore *store)
     ports.log.write = log_line;
     memset(&cb, 0, sizeof cb);
     cb.link_state = on_link;
+    cb.on_letter = on_letter;
     return xmsg_node_init(&s_node, &cfg, &ports, &cb);
+}
+
+static int console_setup(void)
+{
+    ConsoleConfig cfg;
+    console_config_default(&cfg);
+    cfg.mode = (s_mode == MODE_PROMPT) ? CONSOLE_MODE_PROMPT : CONSOLE_MODE_DIRECT;
+    cfg.prompt = "TAD> ";
+    snprintf(s_banner, sizeof s_banner, "libxmsg TAD bridge, node %u, linked to %s\r\n",
+             (unsigned)s_own, s_system);
+    cfg.banner = s_banner;
+    cfg.direct_system = s_system;
+    cfg.tad_user = s_iam_user; /* what TADA shows; the same name for every user, as before */
+    cfg.escape_ms = s_esc_ms;
+    cfg.store = s_store;
+    cfg.rng = s_rng;
+    cfg.users.get = users_get;
+    cfg.users.remove = users_remove;
+    cfg.services.resolve = svc_resolve;
+    cfg.services.onward_open = svc_open;
+    cfg.services.onward_write = svc_write;
+    cfg.services.onward_escape = svc_escape;
+    cfg.services.onward_hangup = svc_hangup;
+    cfg.services.list_start = svc_list;
+    cfg.services.list_cancel = svc_list_cancel;
+    cfg.services.link_info = svc_link_info;
+    tad_setup();
+    return console_host_init(&s_console, &cfg, s_sessions, HOST_PLACES);
+}
+
+/* Wait for any socket, at most 10 ms. */
+static void wait_sockets(Sock lsock, fd_set *rd)
+{
+    Sock maxs = lsock;
+    FD_ZERO(rd);
+    FD_SET(lsock, rd);
+    if (s_line != SOCK_NONE)
+    {
+        FD_SET(s_line, rd);
+        maxs = (s_line > maxs) ? s_line : maxs;
+    }
+    for (int i = 0; i < HOST_CLIENTS; i++)
+    {
+        if (s_clients[i].used)
+        {
+            FD_SET(s_clients[i].sock, rd);
+            maxs = (s_clients[i].sock > maxs) ? s_clients[i].sock : maxs;
+        }
+    }
+    struct timeval tv = {0, 10000};
+    (void)select((int)maxs + 1, rd, NULL, NULL, &tv);
+}
+
+/* Send what each client has waiting; close the ones that are done. */
+static void clients_flush(void)
+{
+    for (int i = 0; i < HOST_CLIENTS; i++)
+    {
+        Client *c = &s_clients[i];
+        if (!c->used)
+        {
+            continue;
+        }
+        if (c->out_len > 0)
+        {
+            int n = sock_send(c->sock, c->out, c->out_len);
+            if (n < 0)
+            {
+                client_drop(c);
+                continue;
+            }
+            memmove(c->out, c->out + n, c->out_len - (size_t)n);
+            c->out_len -= (size_t)n;
+        }
+        if (c->closing && c->out_len == 0)
+        {
+            client_drop(c);
+        }
+    }
 }
 
 static void serve(Sock lsock, const char *host, const char *port)
@@ -2046,6 +1715,7 @@ static void serve(Sock lsock, const char *host, const char *port)
     {
         uint32_t now = now_ms();
         uint8_t buf[2048];
+        fd_set rd;
 
         /* The line: dial, and dial again after a loss. */
         if (s_line == SOCK_NONE && (int32_t)(now - next_dial) >= 0)
@@ -2058,28 +1728,8 @@ static void serve(Sock lsock, const char *host, const char *port)
                 xmsg_node_link_start(&s_node, now);
             }
         }
-
-        fd_set rd;
-        FD_ZERO(&rd);
-        FD_SET(lsock, &rd);
-        Sock maxs = lsock;
-        if (s_line != SOCK_NONE)
-        {
-            FD_SET(s_line, &rd);
-            maxs = (s_line > maxs) ? s_line : maxs;
-        }
-        for (int i = 0; i < XMSG_MAX_SESSIONS; i++)
-        {
-            if (s_clients[i].used)
-            {
-                FD_SET(s_clients[i].sock, &rd);
-                maxs = (s_clients[i].sock > maxs) ? s_clients[i].sock : maxs;
-            }
-        }
-        struct timeval tv = {0, 10000};
-        (void)select((int)maxs + 1, &rd, NULL, NULL, &tv);
+        wait_sockets(lsock, &rd);
         now = now_ms();
-
         if (s_line != SOCK_NONE && FD_ISSET(s_line, &rd))
         {
             line_read(buf, sizeof buf, now);
@@ -2088,55 +1738,60 @@ static void serve(Sock lsock, const char *host, const char *port)
         {
             client_accept(lsock, now);
         }
-        for (int i = 0; i < XMSG_MAX_SESSIONS; i++)
+        for (int i = 0; i < HOST_CLIENTS; i++)
         {
             Client *c = &s_clients[i];
-            if (!c->used)
-            {
-                continue;
-            }
-            if (FD_ISSET(c->sock, &rd))
+            if (c->used && FD_ISSET(c->sock, &rd))
             {
                 int n = sock_recv(c->sock, buf, sizeof buf);
                 if (n < 0)
                 {
-                    client_drop(c, now);
-                    continue;
+                    client_drop(c);
                 }
-                if (!c->closing)
+                else if (!c->closing)
                 {
                     client_rx(c, buf, (size_t)n, now);
                 }
             }
-            client_service(c, now);
         }
-
-        xmsg_node_tick(&s_node, now);
-
-        for (int i = 0; i < XMSG_MAX_SESSIONS; i++)
+        for (int i = 0; i < HOST_PLACES; i++)
         {
-            Client *c = &s_clients[i];
-            if (!c->used)
-            {
-                continue;
-            }
-            if (c->out_len > 0)
-            {
-                int n = sock_send(c->sock, c->out, c->out_len);
-                if (n < 0)
-                {
-                    client_drop(c, now);
-                    continue;
-                }
-                memmove(c->out, c->out + n, c->out_len - (size_t)n);
-                c->out_len -= (size_t)n;
-            }
-            if (c->closing && c->out_len == 0)
-            {
-                client_drop(c, now);
-            }
+            place_service(i, now);
         }
+        tad_service(now);
+        console_host_poll(&s_console, now);
+        xmsg_node_tick(&s_node, now);
+        clients_flush();
     }
+}
+
+/* Prompt mode needs a users file; make one with the default admin when there is none. */
+static int users_prepare(void)
+{
+    static AuthUser check[USERS_MAX];
+    int n = users_read(check, USERS_MAX);
+    auth_wipe(check, sizeof check);
+    if (n <= 0)
+    {
+        AuthUser admin;
+        if (auth_user_make_default_admin(&admin, AUTH_DEFAULT_ITERATIONS, &s_rng) != 0 ||
+            users_write(&admin, 1) != 0)
+        {
+            auth_wipe(&admin, sizeof admin);
+            printf("%s %s, and a default admin could not be written to it\n", s_users_path,
+                   (n < 0) ? "does not exist" : "holds no user");
+            return -1;
+        }
+        auth_wipe(&admin, sizeof admin);
+        printf("WARNING: %s %s. Created it with the default admin:\n"
+               "WARNING:   name admin, password admin.\n"
+               "WARNING: Log in as admin at once; the password must be changed at the\n"
+               "WARNING: first login, before anything else works.\n",
+               s_users_path, (n < 0) ? "did not exist" : "held no user");
+        n = 1;
+    }
+    printf("prompt mode: %d user(s) in %s\n", n, s_users_path);
+    return 0;
 }
 
 int main(int argc, char **argv)
@@ -2158,7 +1813,8 @@ int main(int argc, char **argv)
     }
     const char *colon = (a.hdlc != NULL) ? strrchr(a.hdlc, ':') : NULL;
     if (colon == NULL || s_own == 0 || s_peer == 0 || s_system == NULL ||
-        (size_t)(colon - a.hdlc) >= sizeof host || strlen(colon + 1) >= sizeof port)
+        (size_t)(colon - a.hdlc) >= sizeof host || strlen(colon + 1) >= sizeof port ||
+        !route_add(s_system, strlen(s_system), s_peer))
     {
         usage();
         return 1;
@@ -2167,31 +1823,9 @@ int main(int argc, char **argv)
     host[colon - a.hdlc] = '\0';
     snprintf(port, sizeof port, "%s", colon + 1);
     snprintf(s_line_name, sizeof s_line_name, "HDLC over TCP %s:%s", host, port);
-    if (s_mode == MODE_PROMPT)
+    if (s_mode == MODE_PROMPT && users_prepare() != 0)
     {
-        static AuthUser check[USERS_MAX];
-        int n = users_read(check, USERS_MAX);
-        auth_wipe(check, sizeof check);
-        if (n <= 0)
-        {
-            AuthUser admin;
-            if (auth_user_make_default_admin(&admin, AUTH_DEFAULT_ITERATIONS, &s_rng) != 0 ||
-                users_write(&admin, 1) != 0)
-            {
-                auth_wipe(&admin, sizeof admin);
-                printf("%s %s, and a default admin could not be written to it\n", s_users_path,
-                       (n < 0) ? "does not exist" : "holds no user");
-                return 1;
-            }
-            auth_wipe(&admin, sizeof admin);
-            printf("WARNING: %s %s. Created it with the default admin:\n"
-                   "WARNING:   name admin, password admin.\n"
-                   "WARNING: Log in as admin at once; the password must be changed at the\n"
-                   "WARNING: first login, before anything else works.\n",
-                   s_users_path, (n < 0) ? "did not exist" : "held no user");
-            n = 1;
-        }
-        printf("prompt mode: %d user(s) in %s\n", n, s_users_path);
+        return 1;
     }
 
 #ifdef _WIN32
@@ -2206,9 +1840,9 @@ int main(int argc, char **argv)
     store.own = s_own;
     store_read(&store);
     xmsg_log_set_all_levels(a.level);
-    if (node_setup(&store) != XMSG_OK)
+    if (node_setup(&store) != XMSG_OK || console_setup() != 0)
     {
-        printf("node set-up failed\n");
+        printf("set-up failed\n");
         return 1;
     }
     Sock lsock = sock_listen(a.listen_port);
@@ -2221,6 +1855,10 @@ int main(int argc, char **argv)
     printf("telnet to port %u (%s mode); line %s:%s, we are node %u, host node %u (%s)\n",
            a.listen_port, (s_mode == MODE_PROMPT) ? "prompt" : "direct", host, port, s_own,
            s_peer, s_system);
+    for (int i = 0; i < s_route_count; i++)
+    {
+        printf("system %s is node %u\n", s_routes[i].name, (unsigned)s_routes[i].number);
+    }
     serve(lsock, host, port);
     return 0;
 }

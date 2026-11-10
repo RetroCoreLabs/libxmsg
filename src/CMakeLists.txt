@@ -21,7 +21,7 @@ option(XMSG_BUILD_TESTS "Build the CTest unit tests" ${XMSG_IS_TOP_LEVEL})
 option(XMSG_BUILD_EXAMPLES "Build the host examples" ${XMSG_IS_TOP_LEVEL})
 option(XMSG_WERROR "Treat every warning as an error (CI only)" OFF)
 
-set(XMSG_MAX_SESSIONS 4 CACHE STRING "Sessions (TAD, FA, ...) one node can hold")
+set(XMSG_MAX_SESSIONS 20 CACHE STRING "Sessions (TAD, FA, ...) one node can hold; host_tad_telnet needs 16, XMSGGW uses 20")
 set(XMSG_MAX_PEERS 4 CACHE STRING "Remote nodes with their own outgoing message counter")
 set(XMSG_REASSEMBLY_SLOTS 1 CACHE STRING "Fragmented messages held while their second half arrives")
 set(XMSG_LAPB_N1 622 CACHE STRING "Largest LAPB information field in bytes")
@@ -76,9 +76,12 @@ set(XMSG_SOURCES
     libxmsg/term/term_escape.c
     libxmsg/term/term_line.c
     libxmsg/term/term_report.c
+    libxmsg/term/term_telnet.c
     libxmsg/auth/auth_hash.c
     libxmsg/auth/auth_user.c
-    libxmsg/auth/auth_login.c)
+    libxmsg/auth/auth_login.c
+    libxmsg/console/console.c
+    libxmsg/console/console_tad.c)
 
 if(NOT XMSG_SOURCES)
     set(XMSG_PLACEHOLDER_C "${CMAKE_CURRENT_BINARY_DIR}/xmsg_placeholder.c")

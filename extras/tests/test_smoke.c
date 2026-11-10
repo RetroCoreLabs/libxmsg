@@ -61,7 +61,7 @@ static void config_defaults_are_visible(void)
 {
     CHECK(XMSG_MAX_SESSIONS >= 1);
     CHECK(XMSG_LAPB_N1 >= 4);
-    CHECK_EQ(XMSG_LOG_CATEGORY_COUNT, 10);
+    CHECK_EQ(XMSG_LOG_CATEGORY_COUNT, 11);
     CHECK(strcmp(XMSG_VERSION_STRING, "0.1.0") == 0);
 }
 
