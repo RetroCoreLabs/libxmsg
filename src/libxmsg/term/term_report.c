@@ -71,7 +71,7 @@ int term_report_who(const TermWhoEntry *e, size_t n, char *buf, size_t cap)
         return -1;
     }
     buf[0] = '\0';
-    put(&o, "  TERM USER             FROM                   CONNECTED    DOING\r\n");
+    put(&o, "  TERM USER             FROM                        CONNECTED    DOING\r\n");
     for (size_t i = 0; i < n; i++)
     {
         char dur[16];
@@ -79,7 +79,7 @@ int term_report_who(const TermWhoEntry *e, size_t n, char *buf, size_t cap)
         {
             return -1;
         }
-        put(&o, "%c %4d %-16s %-22s %-12s ", e[i].is_self ? '*' : ' ', e[i].terminal,
+        put(&o, "%c %4d %-16s %-27s %-12s ", e[i].is_self ? '*' : ' ', e[i].terminal,
             (e[i].user != NULL) ? e[i].user : "(login)",
             (e[i].remote != NULL) ? e[i].remote : "?", dur);
         if (e[i].system == NULL)

@@ -486,10 +486,10 @@ static void who_text(void)
     char buf[512];
     int n = term_report_who(e, 2, buf, sizeof buf);
     CHECK(n > 0);
-    CHECK(strcmp(buf, "  TERM USER             FROM                   CONNECTED    DOING\r\n"
-                      "*    1 ronny            127.0.0.1:50123        01:02:05     "
+    CHECK(strcmp(buf, "  TERM USER             FROM                        CONNECTED    DOING\r\n"
+                      "*    1 ronny            127.0.0.1:50123             01:02:05     "
                       "connected to D102 (running)\r\n"
-                      "     2 (login)          10.0.0.7:4000          1d 01:01:01  "
+                      "     2 (login)          10.0.0.7:4000               1d 01:01:01  "
                       "at the prompt\r\n") == 0);
     if (n > 0)
     {
