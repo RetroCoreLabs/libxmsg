@@ -1081,14 +1081,15 @@ static void names_done(void *ctx, int result, unsigned rows)
     console_names_done(console_host_session(&s_console, (int)(p - s_places)), result, rows);
 }
 
-static int svc_names(void *ctx, int place)
+static int svc_names(void *ctx, int place, uint16_t system)
 {
     Place *p = &s_places[place];
     XroutNamesWalkCallbacks cb = {p, names_row, names_done};
     int rc;
     (void)ctx;
     /* The host's XMSG system number is taken to be its node number, as for LIST. */
-    rc = xrout_names_walk_start(&p->names_walk, &s_node, s_peer, s_peer, 10000, &cb, now_ms());
+    rc = xrout_names_walk_start(&p->names_walk, &s_node, s_peer, (system != 0u) ? system : s_peer,
+                                10000, &cb, now_ms());
     p->naming = (rc == XMSG_OK);
     return rc;
 }

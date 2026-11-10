@@ -77,7 +77,8 @@ typedef enum TermCmd
     TERM_CMD_ADDADMIN, /**< ADDUSER <name> ADMIN: add a user of level admin (admin) */
     TERM_CMD_DELUSER,  /**< DELUSER <name> (admin) */
     TERM_CMD_RESETPW,  /**< RESETPW <name>: set a new password, to be changed at login (admin) */
-    TERM_CMD_NAMES     /**< NAMES: the name table (system names, named ports) of the host */
+    TERM_CMD_NAMES     /**< NAMES [system]: the name table (system names, named ports) of the
+                            host we are linked to, or of `system` (in `arg`) */
 } TermCmd;
 
 /**

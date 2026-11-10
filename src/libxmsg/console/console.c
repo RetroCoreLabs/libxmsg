@@ -290,6 +290,34 @@ const char *console_tad_user_name(const ConsoleConfig *cfg, const char *user, ch
 }
 
 /* Start the onward session. Returns false when it could not start (said to the user). */
+/* A system named by the user (CONNECT, NAMES): a plain decimal number is used as it is, any
+ * other text goes through services.resolve. Our own system is refused with `own_text`: there is
+ * no host behind it to ask (CONNECT to ourselves hung, seen live on XMSGGW 2026-11-10). Our
+ * number comes from services.link_info; without that callback the check cannot be made. */
+static bool system_number(ConsoleSession *s, const char *system, const char *own_text,
+                          uint16_t *number)
+{
+    const ConsoleServices *sv = &s->host->cfg.services;
+    TermLinkInfo li;
+    if (!plain_number(system, number) && sv->resolve(sv->ctx, system, number) != 0)
+    {
+        sayf(s, "unknown system %s\r\n", system);
+        return false;
+    }
+    if (sv->link_info != NULL)
+    {
+        memset(&li, 0, sizeof li);
+        li.peer_node_learned = -1;
+        sv->link_info(sv->ctx, &li);
+        if (li.own_system != 0u && *number == li.own_system)
+        {
+            sayf(s, "%s is this gateway; %s\r\n", system, own_text);
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool onward_start(ConsoleSession *s, const char *system, uint32_t now_ms)
 {
     const ConsoleServices *sv = &s->host->cfg.services;
@@ -298,9 +326,8 @@ static bool onward_start(ConsoleSession *s, const char *system, uint32_t now_ms)
                                                  name, sizeof name);
     uint16_t number = 0;
     int rc;
-    if (!plain_number(system, &number) && sv->resolve(sv->ctx, system, &number) != 0)
+    if (!system_number(s, system, "you cannot connect to the gateway you are on", &number))
     {
-        sayf(s, "unknown system %s\r\n", system);
         return false;
     }
     if (!copy_text(s->system, sizeof s->system, system))
@@ -1055,16 +1082,22 @@ static void cmd_admin(ConsoleSession *s, TermCmd cmd, const char *arg)
 }
 
 /* Returns true when the prompt comes back from console_names_done(). */
-static bool cmd_names(ConsoleSession *s)
+static bool cmd_names(ConsoleSession *s, const char *system)
 {
     const ConsoleServices *sv = &s->host->cfg.services;
     TermLinkInfo li;
+    uint16_t number = 0;
     if (sv->names_start == NULL)
     {
         say(s, "NAMES: not available here\r\n");
         return false;
     }
-    if (!walk_started(s, "NAMES", sv->names_start(sv->ctx, s->place)))
+    if (system[0] != '\0' &&
+        !system_number(s, system, "it has no host of its own to ask", &number))
+    {
+        return false;
+    }
+    if (!walk_started(s, "NAMES", sv->names_start(sv->ctx, s->place, number)))
     {
         return false;
     }
@@ -1078,7 +1111,7 @@ static bool cmd_names(ConsoleSession *s)
     /* The port column is the port word >> 7, as LIST-NAMES prints it (0x0401 -> 8). */
     sayf(s, "Names known to node %u:\r\n"
             "  name              system  port  free\r\n",
-         (unsigned)li.peer_node_cfg);
+         (number != 0u) ? (unsigned)number : (unsigned)li.peer_node_cfg);
     return true;
 }
 
@@ -1136,7 +1169,7 @@ static void prompt_line(ConsoleSession *s, const char *text, uint32_t now_ms)
         }
         break;
     case TERM_CMD_NAMES:
-        if (cmd_names(s))
+        if (cmd_names(s, arg))
         {
             return; /* the prompt comes back when the walk ends */
         }

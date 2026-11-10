@@ -114,6 +114,7 @@ typedef struct FakeNode
     int list_cancels;
     int names_rc;
     int names;
+    int names_system; /* the system the last NAMES asked (0: the linked host) */
     int names_cancels;
 } FakeNode;
 
@@ -185,9 +186,10 @@ static void fn_list_cancel(void *ctx, int place)
     ((FakeNode *)ctx)->list_cancels++;
 }
 
-static int fn_names(void *ctx, int place)
+static int fn_names(void *ctx, int place, uint16_t system)
 {
     (void)place;
+    ((FakeNode *)ctx)->names_system = system;
     ((FakeNode *)ctx)->names++;
     return ((FakeNode *)ctx)->names_rc;
 }
@@ -202,6 +204,7 @@ static void fn_info(void *ctx, TermLinkInfo *li)
 {
     (void)ctx;
     li->own_node = 19999;
+    li->own_system = 19999;
     li->peer_node_cfg = 100;
     li->peer_system = "D100";
     li->link_up = true;
@@ -891,6 +894,43 @@ static void application_commands(void)
     }
 }
 
+/* NAMES <system> asks that system; CONNECT and NAMES to our own system (19999 here) are refused
+ * (XMSGGW, 2026-11-10: CONNECT 101 on node 101 hung). */
+static void names_of_a_system_and_own_system_refused(void)
+{
+    FakeLine f;
+    ConsoleLine l = make_line(&f, 0);
+    ConsoleSession *s;
+    setup(CONSOLE_MODE_PROMPT);
+    s = login(&f, &l, "alice", "pw");
+    type(s, "names\r", 3);
+    CHECK_EQ(s_node.names, 1);
+    CHECK_EQ(s_node.names_system, 0);
+    console_names_done(s, XMSG_OK, 0);
+    clear(&f);
+    type(s, "names D102\r", 3);
+    CHECK_EQ(s_node.names, 2);
+    CHECK_EQ(s_node.names_system, 102);
+    CHECK(has(&f, "Names known to node 102:"));
+    console_names_done(s, XMSG_OK, 0);
+    clear(&f);
+    type(s, "names 103\r", 3);
+    CHECK_EQ(s_node.names_system, 103);
+    console_names_done(s, XMSG_OK, 0);
+    clear(&f);
+    type(s, "names D999\r", 3);
+    CHECK(has(&f, "unknown system D999"));
+    CHECK_EQ(s_node.names, 3);
+    clear(&f);
+    type(s, "names 19999\r", 3);
+    CHECK(has(&f, "19999 is this gateway; it has no host of its own to ask\r\nTAD> "));
+    CHECK_EQ(s_node.names, 3);
+    clear(&f);
+    type(s, "connect 19999\r", 3);
+    CHECK(has(&f, "19999 is this gateway; you cannot connect to the gateway you are on\r\nTAD> "));
+    CHECK_EQ(s_node.opens, 0);
+}
+
 int main(void)
 {
     printf("[console]\n");
@@ -902,5 +942,6 @@ int main(void)
     seven_bit_own_echo_and_esca();
     trusted_admin_and_names();
     application_commands();
+    names_of_a_system_and_own_system_refused();
     TEST_DONE();
 }

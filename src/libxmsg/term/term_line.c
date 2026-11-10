@@ -191,6 +191,10 @@ TermCmd term_cmd_parse(const char *line, char *arg, size_t cap)
     {
         return (al > 0) ? TERM_CMD_CONNECT : TERM_CMD_UNKNOWN;
     }
+    if (strcmp(word, "NAMES") == 0)
+    {
+        return TERM_CMD_NAMES; /* the system is optional: none is the host we are linked to */
+    }
     if (al > 0)
     {
         arg[0] = '\0';
