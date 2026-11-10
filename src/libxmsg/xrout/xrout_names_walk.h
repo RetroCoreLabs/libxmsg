@@ -100,7 +100,14 @@ typedef struct XroutNamesWalk
  * @brief Start reading a remote XROUT's name table.
  * @param w             The walk (not running).
  * @param n             The node; must be ready (xmsg_node_is_ready()).
- * @param link_node     The LAPB peer the questions go to (the link neighbour).
+ * @param link_node     The node the questions are ADDRESSED to (the SINTRAN header's destination
+ *                      node; replies come from it). For a system that is not the link neighbour
+ *                      this is that system's own node, not the neighbour's: the neighbour relays
+ *                      it. MEASURED 2026-11-10 22:06 (D102 LIST-NAMES of D101 through D100, hub +
+ *                      HDLC capture): D102 sent header dst 0x0065, sub-header dst system 0x0065,
+ *                      and D100 passed it on with hop 0x12. Addressed to the neighbour (0x0064)
+ *                      with system 0x0066 in the sub-header, D100 answered XEIMA itself.
+ *                      The frame always leaves over our one link.
  * @param remote_system The XMSG system whose XROUT is asked (the destination system field).
  * @param timeout_ms    How long one question may wait for its reply; 0 means 10000.
  * @param cb            Callbacks; copied.

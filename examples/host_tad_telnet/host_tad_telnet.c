@@ -1088,8 +1088,10 @@ static int svc_names(void *ctx, int place, uint16_t system)
     int rc;
     (void)ctx;
     /* The host's XMSG system number is taken to be its node number, as for LIST. */
-    rc = xrout_names_walk_start(&p->names_walk, &s_node, s_peer, (system != 0u) ? system : s_peer,
-                                10000, &cb, now_ms());
+    /* A further system is asked at its own node number, and the neighbour relays the question
+     * (xrout_names_walk.h); the system number is taken to be the node number, as for LIST. */
+    uint16_t target = (system != 0u) ? system : s_peer;
+    rc = xrout_names_walk_start(&p->names_walk, &s_node, target, target, 10000, &cb, now_ms());
     p->naming = (rc == XMSG_OK);
     return rc;
 }

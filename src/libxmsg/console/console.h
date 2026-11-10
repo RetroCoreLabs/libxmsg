@@ -172,9 +172,9 @@ typedef struct ConsoleServices
     /** Start reading the host's name table (XSGNI, xrout_names_walk.h). Returns 0
      *  (console_names_row() and console_names_done() follow) or the same errors as list_start.
      *  `system` is the system to ask: 0 for the host we are linked to (plain NAMES), else the
-     *  number NAMES <system> resolved exactly as CONNECT does. The question still goes over the
-     *  link to the neighbour; whether a SINTRAN XROUT answers it for a system further away is
-     *  NOT verified. NULL: no NAMES. */
+     *  number NAMES <system> resolved exactly as CONNECT does. Address the question to that
+     *  system's own node (xrout_names_walk_start link_node), not the neighbour: the neighbour
+     *  relays it (measured, D102 asking D101 through D100, 2026-11-10). NULL: no NAMES. */
     int (*names_start)(void *ctx, int place, uint16_t system);
     /** Stop the NAMES walk of a user who went away. No console_names_done() is needed after it. */
     void (*names_cancel)(void *ctx, int place);
