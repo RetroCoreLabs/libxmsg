@@ -1,6 +1,7 @@
 # libxmsg - SINTRAN III XMSG over LAPB over HDLC, portable C11.
 #
 # Consumers:   add_subdirectory(path/to/libxmsg/src)   then   target_link_libraries(app PRIVATE xmsg::xmsg)
+#              (hdlc::hdlc alone: add -DLIBXMSG_WITH_XMSG=OFF)
 # Developers:  cmake -S src -B build -DXMSG_BUILD_TESTS=ON && cmake --build build && ctest --test-dir build
 #
 # Only the libraries, the tests and the host examples are built from here. The Pico examples are
@@ -30,25 +31,47 @@ set(XMSG_LOG_MAX_LEVEL 4 CACHE STRING "Highest log level compiled in: 0 ERROR 1 
 include(cmake/house_standard.cmake)
 
 # ---------------------------------------------------------------------------------------------
-# libhdlc: ALL HDLC code (RFC 1662 byte framing, the FCS) lives there, not here (Ronny,
-# 2026-11-09). Found as a sibling checkout next to libxmsg; when that is missing, fetched from
-# GitHub at a fixed commit so CI builds the same code every time. A parent project that already
-# added libhdlc keeps its own copy.
+# libhdlc: ALL HDLC code (bit-level framing, CRC-16, RFC 1662 byte framing, ring buffers) lives
+# in src/libhdlc (Ronny, 2026-11-09; moved into this repository from RetroCoreLabs/libhdlc on
+# 2026-11-10). hdlc::hdlc is its own target and can be used without libxmsg: set
+# LIBXMSG_WITH_XMSG=OFF to build only it (RC422Dev on the Pico). A parent project that already
+# added an hdlc::hdlc keeps its own.
 # ---------------------------------------------------------------------------------------------
-set(LIBXMSG_LIBHDLC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../libhdlc" CACHE PATH
-    "libhdlc checkout (the folder holding its src/); fetched from GitHub when not found")
-set(LIBXMSG_LIBHDLC_COMMIT 02d5241 CACHE STRING "libhdlc commit fetched when no checkout is found")
+option(LIBXMSG_WITH_XMSG "Build libxmsg as well as libhdlc (OFF: libhdlc alone)" ON)
 if(NOT TARGET hdlc::hdlc)
-    if(EXISTS "${LIBXMSG_LIBHDLC_DIR}/src/CMakeLists.txt")
-        add_subdirectory("${LIBXMSG_LIBHDLC_DIR}/src" "${CMAKE_CURRENT_BINARY_DIR}/libhdlc")
-    else()
-        include(FetchContent)
-        FetchContent_Declare(libhdlc
-            GIT_REPOSITORY https://github.com/RetroCoreLabs/libhdlc.git
-            GIT_TAG ${LIBXMSG_LIBHDLC_COMMIT}
-            SOURCE_SUBDIR src)
-        FetchContent_MakeAvailable(libhdlc)
+    add_library(hdlc STATIC
+        libhdlc/hdlc.c
+        libhdlc/byte_frame.c
+        libhdlc/ring_buffer.c
+        libhdlc/control_frame.c
+        libhdlc/spsc_ring.c)
+    target_include_directories(hdlc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(hdlc PRIVATE house_warnings)
+    if(PICO_SDK_VERSION_STRING)
+        # Raspberry Pi Pico SDK build. pico_platform_headers carries PICO_BUILD / PICO_ON_DEVICE
+        # (so ring_buffer.c compiles to nothing and HOT_PATH_CODE becomes __not_in_flash) and the
+        # header that defines __not_in_flash. Without it both would silently take the host path.
+        # The header-only target, not pico_platform: that one adds the SDK's platform.c to this
+        # library, where the house warnings then flag the SDK's own code (-Wundef, SDK 1.5.1).
+        # No pthreads here: the Pico uses spsc_ring.
+        if(NOT TARGET pico_platform_headers)
+            message(FATAL_ERROR "libhdlc: Pico SDK ${PICO_SDK_VERSION_STRING} has no pico_platform_headers target; "
+                                "libhdlc needs it for PICO_ON_DEVICE and __not_in_flash.")
+        endif()
+        target_link_libraries(hdlc PUBLIC pico_platform_headers)
+    elseif(NOT WIN32)
+        # Linux and other POSIX hosts: ring_buffer.c locks with a pthread mutex.
+        find_package(Threads REQUIRED)
+        target_link_libraries(hdlc PUBLIC Threads::Threads)
     endif()
+    add_library(hdlc::hdlc ALIAS hdlc)
+    if(XMSG_BUILD_TESTS)
+        enable_testing()
+        add_subdirectory(../extras/tests/libhdlc ${CMAKE_CURRENT_BINARY_DIR}/tests/libhdlc)
+    endif()
+endif()
+if(NOT LIBXMSG_WITH_XMSG)
+    return()
 endif()
 
 # ---------------------------------------------------------------------------------------------

@@ -1,5 +1,9 @@
 # libhdlc
 
+> This was the README of the separate libhdlc repository. Since 2026-11-10 libhdlc lives in
+> libxmsg under `src/libhdlc`; build it with libxmsg's CMake (`-DLIBXMSG_WITH_XMSG=OFF` for libhdlc
+> alone) and its tests are in `extras/tests/libhdlc`. Paths and badges below are from the old repository.
+
 [![build](https://github.com/RetroCoreLabs/libhdlc/actions/workflows/build.yml/badge.svg)](https://github.com/RetroCoreLabs/libhdlc/actions/workflows/build.yml)
 [![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 [![C11](https://img.shields.io/badge/C-11-informational.svg)](#building-and-testing)
