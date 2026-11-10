@@ -613,6 +613,32 @@ static void replay_of_a_real_session(bool over_tcp)
     }
 }
 
+/* A call to a system beyond the link neighbour: the letter carries the TARGET's number in the
+ * SINTRAN header and in the sub-header, as D102's letter to D103 through D100 does (NDInsight
+ * captures ARCHIVE-2026-07, ethernet-hdlc-ROUTE-THROUGH-WORKING-102-via-100-to-103-2026-08-01
+ * frame #3: 21 13 000E 0067 0066 ... | 21 00 86 E4 0067 0000 ...). Our link neighbour is 102. */
+static void letter_to_a_system_beyond_the_neighbour_names_the_target(void)
+{
+    TadAskerConfig cfg;
+    TadAskerCallbacks cb = {&s_watch, w_text, w_state, w_gate, w_echo, NULL, NULL};
+    uint32_t now = bring_up(0x00F8);
+    tad_asker_config_default(&cfg, 103, "D103");
+    CHECK_EQ(tad_asker_init(&s_asker, &cfg, &cb), XMSG_OK);
+    CHECK_EQ(tad_asker_connect(&s_asker, &s_a, now), XMSG_OK);
+    for (int i = 0; i < 200 && s_host.count == 0; i++)
+    {
+        pump(++now);
+    }
+    CHECK_EQ(s_host.count, 1);
+    const uint8_t *f = s_host.frames[0];
+    CHECK_EQ(xmsg_be16_read(f + 4), 103);  /* SINTRAN header destination */
+    CHECK_EQ(xmsg_be16_read(f + 6), 100);  /* source: us */
+    CHECK_EQ(f[17], 0xE4);                 /* letter role */
+    CHECK_EQ(xmsg_be16_read(f + 18), 103); /* sub-header destination system */
+    CHECK_EQ(xmsg_be16_read(f + 20), 0);   /* port 0 */
+    tad_asker_abort(&s_asker);
+}
+
 static void refused_letter_fails_with_the_xrout_code(void)
 {
     uint32_t now = bring_up(0x00F8);
@@ -1121,6 +1147,7 @@ int main(void)
     CHECK_EQ(test_tcp_startup(), 0);
     replay_of_a_real_session(true);
     s_tcp_mode = false;
+    letter_to_a_system_beyond_the_neighbour_names_the_target();
     refused_letter_fails_with_the_xrout_code();
     silent_host_times_out();
     xense_resends_and_other_errors_fail();

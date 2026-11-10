@@ -151,9 +151,19 @@ typedef struct TadAskerCallbacks
 /** Settings; tad_asker_config_default() fills the measured values. */
 typedef struct TadAskerConfig
 {
-    uint16_t peer_node;          /**< LAPB node number of the host */
+    uint16_t peer_node;          /**< node number of the TARGET system - the machine whose
+                                  *   *TADADM takes the call - NOT the link neighbour. A real
+                                  *   asker puts the target's number in the SINTRAN header and
+                                  *   the sub-header and lets the machines in between pass it
+                                  *   on (NDInsight captures ARCHIVE-2026-07, D102 to D103
+                                  *   through D100, frame #3). Passing the link neighbour sends
+                                  *   every call to the neighbour's own *TADADM. The number for
+                                  *   a typed name comes from the application's own table of
+                                  *   names (SINTRAN fills its table with DEF-REMOTE); never
+                                  *   work it out from the name text */
     uint16_t peer_system;        /**< its XMSG system number (0 = same as peer_node) */
-    const char *system_name;     /**< the target system as XROUT knows it, e.g. "D102" */
+    const char *system_name;     /**< the target as the user typed it, e.g. "D102"; goes in
+                                  *   the letter as parameter 2 */
     uint8_t tmod;                /**< terminal mode in the setup: 0x08 */
     uint8_t ttyp[2];             /**< terminal type, high byte first: 00 00. The J source
                                       BDTTYP copies these two bytes straight into the host's
@@ -243,7 +253,8 @@ typedef struct TadAsker
 /**
  * @brief Fill a config with the measured defaults.
  * @param cfg         Config.
- * @param peer_node   The host's node number.
+ * @param peer_node   The target system's number (not the link neighbour's, see
+ *                    TadAskerConfig.peer_node).
  * @param system_name The host's system name as XROUT knows it (copied at connect).
  */
 void tad_asker_config_default(TadAskerConfig *cfg, uint16_t peer_node, const char *system_name);
