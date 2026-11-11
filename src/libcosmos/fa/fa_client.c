@@ -34,6 +34,10 @@ static void finish_with(FaClient *c, FaClientState st, int result, uint32_t now_
     {
         return;
     }
+    if (c->cancelled && st == FA_CLIENT_DONE)
+    {
+        result = XMSG_ECANCELED; /* the teardown ended normally after fa_client_cancel */
+    }
     XMSG_LOG(XMSG_LOG_COSMOS, (result == 0) ? XMSG_LOG_INFO : XMSG_LOG_WARN,
              "fa client %s -> %s (result %d, SINTRAN error %u)", fa_client_state_name(c->state),
              fa_client_state_name(st), result, (unsigned)c->sintran_error);
@@ -215,9 +219,35 @@ static int send_item(FaClient *c, const FaClientItem *it, uint32_t now_ms)
 /* The ladder                                                                                 */
 /* ------------------------------------------------------------------------------------------ */
 
+/* After fa_client_cancel the step that just completed leads to the teardown: close an open
+ * file, then release, then session finished. */
+static FaClientStep cancel_step(const FaClient *c)
+{
+    switch (c->step)
+    {
+    case FA_STEP_OPEN:
+        /* fall through */
+    case FA_STEP_SET_BLOCK_SIZE:
+        /* fall through */
+    case FA_STEP_FILE_INFO:
+        /* fall through */
+    case FA_STEP_READ:
+        return FA_STEP_CLOSE; /* the open succeeded: the file is open */
+    default:
+        return FA_STEP_RELEASE;
+    }
+}
+
 /* The current step is complete: go on to the next one. */
 static void next_step(FaClient *c, uint32_t now_ms)
 {
+    if (c->cancelled && c->step != FA_STEP_RELEASE)
+    {
+        c->step = cancel_step(c);
+        c->wait_since_ms = now_ms;
+        enqueue_request(c, now_ms);
+        return;
+    }
     switch (c->step)
     {
     case FA_STEP_RESERVE:
@@ -294,6 +324,10 @@ static bool take_walk_entry(FaClient *c, const FaReply *r)
     c->user_index = user_index;
     c->cursor = (uint16_t)(object_index + 1u);
     c->entries++;
+    if (c->cancelled)
+    {
+        return true; /* answered after fa_client_cancel: not reported */
+    }
     fa_entry_parse(raw, &e);
     XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_DEBUG, "fa client: entry %u %s:%s, %u bytes",
              (unsigned)object_index, e.name, e.type, (unsigned)e.bytes);
@@ -370,7 +404,7 @@ static void on_reply(FaClient *c, const uint8_t *body, size_t len, uint32_t now_
         }
         XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_INFO, "fa client: %s is %u bytes, %u blocks", c->spec,
                  (unsigned)c->length, (unsigned)c->blocks);
-        if (c->cb.opened != NULL)
+        if (c->cb.opened != NULL && !c->cancelled)
         {
             c->cb.opened(c->cb.ctx, c->length);
         }
@@ -391,7 +425,7 @@ static void on_reply(FaClient *c, const uint8_t *body, size_t len, uint32_t now_
     else if (c->step == FA_STEP_USER)
     {
         (void)fa_reply_entry_name(&r, 0u, c->user_name, sizeof c->user_name);
-        if (c->cb.directory != NULL)
+        if (c->cb.directory != NULL && !c->cancelled)
         {
             c->cb.directory(c->cb.ctx, c->directory_name, c->user_name);
         }
@@ -426,7 +460,7 @@ static void on_data(FaClient *c, const uint8_t *body, size_t len, uint32_t now_m
     enqueue_ack(c, now_ms);
     c->data_in++;
     offset = c->block * FA_BLOCK_SIZE + (second ? FA_DATA_BYTES : 0u);
-    if (offset < c->length && c->cb.data != NULL)
+    if (offset < c->length && c->cb.data != NULL && !c->cancelled)
     {
         uint32_t n = c->length - offset;
         if (n > FA_DATA_BYTES)
@@ -476,6 +510,13 @@ static void client_on_datagram(XmsgSession *s, const XmsgDatagram *dg, uint32_t 
         c->state = FA_CLIENT_RUNNING;
         c->step = FA_STEP_RESERVE;
         c->wait_since_ms = now_ms;
+        if (c->cancelled)
+        {
+            /* Nothing reserved yet: only the session to end (unverified, see the header). */
+            c->step = FA_STEP_RELEASE;
+            next_step(c, now_ms);
+            break;
+        }
         enqueue_request(c, now_ms);
         break;
     case FA_TYPE_SHORT_ACK:
@@ -787,6 +828,24 @@ int fa_client_list(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t pee
 FaClientState fa_client_state(const FaClient *c)
 {
     return (c != NULL) ? c->state : FA_CLIENT_FAILED;
+}
+
+int fa_client_cancel(FaClient *c, uint32_t now_ms)
+{
+    (void)now_ms; /* the teardown starts when the request in flight has been answered */
+    if (c == NULL)
+    {
+        return XMSG_EINVAL;
+    }
+    if ((c->state != FA_CLIENT_CONNECTING && c->state != FA_CLIENT_RUNNING) || c->cancelled)
+    {
+        return XMSG_OK; /* nothing running, or FINISHING: all was delivered, only the close
+                           is awaited, and it ends as it would have */
+    }
+    XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_INFO, "fa client: cancelled in %s, step %d",
+             fa_client_state_name(c->state), (int)c->step);
+    c->cancelled = true;
+    return XMSG_OK;
 }
 
 const char *fa_client_state_name(FaClientState st)

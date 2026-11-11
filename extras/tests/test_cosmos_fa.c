@@ -240,6 +240,10 @@ typedef struct Sink
     char directory[17];
     char user[17];
     int directory_calls;
+    size_t cancel_at_entry; /* nonzero: fa_client_cancel from inside that entry callback */
+    bool cancel_at_data;    /* fa_client_cancel from inside the first data callback */
+    bool cancelled;         /* fa_client_cancel has been called */
+    int data_calls;
 } Sink;
 
 static XmsgNode s_a; /* our client's machine, node 100 */
@@ -291,6 +295,12 @@ static void sink_data(void *ctx, uint32_t offset, const uint8_t *bytes, size_t n
     }
     memcpy(k->file + offset, bytes, n);
     k->got += (uint32_t)n;
+    k->data_calls++;
+    if (k->cancel_at_data && !k->cancelled)
+    {
+        k->cancelled = true;
+        CHECK_EQ(fa_client_cancel(&s_client, 0), XMSG_OK);
+    }
 }
 
 static void sink_done(void *ctx, int result, uint16_t sintran_error)
@@ -317,6 +327,11 @@ static void sink_entry(void *ctx, const FaFileEntry *e)
         k->entries[k->entry_count] = *e;
     }
     k->entry_count++;
+    if (k->cancel_at_entry != 0u && k->entry_count == k->cancel_at_entry && !k->cancelled)
+    {
+        k->cancelled = true;
+        CHECK_EQ(fa_client_cancel(&s_client, 0), XMSG_OK);
+    }
 }
 
 static void pump(uint32_t now)
@@ -733,6 +748,219 @@ static void silent_server_times_out(void)
              XMSG_ESTATE);
 }
 
+/* ------------------------------------------------------------------ cancel */
+
+/* What the client sent after fa_client_cancel, as the test server saw it. */
+typedef struct Teardown
+{
+    uint16_t ops[8]; /* the op of each request, in order */
+    size_t op_count;
+    int finished; /* session finished (0782) messages */
+} Teardown;
+
+/* When the test cancels. */
+typedef struct CancelAt
+{
+    bool at_start;      /* right after the client started, before the confirm */
+    size_t at_entry;    /* nonzero: inside the entry callback of that file */
+    bool at_first_data; /* inside the first data callback */
+    size_t keep_server; /* captured server messages that still go out after the cancel */
+} CancelAt;
+
+static Teardown s_down;
+
+/* The test server after the cancel: it answers each request as the captured server answered
+ * a close and a release (capture-read.txt 02:29:16.269 to 02:29:16.778): a short ack, then a
+ * reply with the request's op and sequence and no selector 1; and session finished with the
+ * server's close. */
+static void answer_teardown(const uint8_t *msg, size_t len, uint32_t now)
+{
+    static const uint8_t k_ack[] = {0x07, 0xA2, 0x00, 0x02, 0x0E, 0x00, 0x92, 0x2A};
+    static const uint8_t k_close[] = {0x07, 0xC0, 0x00, 0x02, 0x00, 0x42, 0x00, 0x00};
+    uint8_t reply[18] = {0x07, 0xF0, 0x00, 0x02, 0x9F, 0x00, 0x90, 0xBB, 0x92,
+                         0x00, 0x00, 0x92, 0x00, 0x00, 0xF2, 0x00, 0xFF, 0x8C};
+    uint16_t type;
+
+    if (len < 8u)
+    {
+        return;
+    }
+    type = (uint16_t)((msg[0] << 8u) | msg[1]);
+    if (type == FA_TYPE_SESSION_FINISHED)
+    {
+        s_down.finished++;
+        CHECK_EQ(server_send(k_close, sizeof k_close, now), XMSG_OK);
+        return;
+    }
+    if (type != FA_TYPE_REQUEST || len < 14u || msg[8] != 0x92u)
+    {
+        return; /* a short ack, or the letter when cancelled before the confirm */
+    }
+    if (s_down.op_count < sizeof s_down.ops / sizeof s_down.ops[0])
+    {
+        s_down.ops[s_down.op_count] = (uint16_t)((msg[9] << 8u) | msg[10]);
+    }
+    s_down.op_count++;
+    memcpy(reply + 9, msg + 9, 2);   /* op */
+    memcpy(reply + 12, msg + 12, 2); /* sequence */
+    CHECK_EQ(server_send(k_ack, sizeof k_ack, now), XMSG_OK);
+    CHECK_EQ(server_send(reply, sizeof reply, now), XMSG_OK);
+}
+
+/* Play a capture until the client is cancelled, then let the test server answer the teardown.
+ * Before the cancel every client message must equal the captured one. After it the captured
+ * server finishes the answer it was sending (as a real server does: the second half of a block
+ * is already on its way) and then stops; with `keep_server` it also sends that many messages
+ * in all before stopping (the confirm, when cancelled at the start). */
+static void cancel_run(const FaVectorEvent *ev, size_t n, const char *spec, CancelAt at)
+{
+    FaClientConfig cfg;
+    uint32_t now = bring_up();
+    uint32_t until = now + 60000u;
+    size_t c_idx = next_client_event(ev, n, 0);
+    size_t s_idx = 0;
+    size_t s_sent = 0;
+    uint8_t body[FA_DATA_MESSAGE_SIZE];
+
+    memset(&s_down, 0, sizeof s_down);
+    s_sink.cancel_at_entry = at.at_entry;
+    s_sink.cancel_at_data = at.at_first_data;
+    fa_client_config_default(&cfg);
+    if (s_run.asker != NULL)
+    {
+        snprintf(cfg.asker, sizeof cfg.asker, "%s", s_run.asker);
+    }
+    client_start(&cfg, spec, now);
+    if (at.at_start)
+    {
+        s_sink.cancelled = true;
+        CHECK_EQ(fa_client_cancel(&s_client, now), XMSG_OK);
+    }
+    while (now < until && s_sink.done_calls == 0)
+    {
+        now++;
+        pump(now);
+        while (s_server.count > 0)
+        {
+            size_t slot = s_server.head;
+            if (s_sink.cancelled)
+            {
+                answer_teardown(s_server.bodies[slot], s_server.lens[slot], now);
+            }
+            else if (c_idx < n)
+            {
+                check_client_message(s_server.bodies[slot], s_server.lens[slot],
+                                     &s_server.subs[slot], ev[c_idx].hex);
+                c_idx = next_client_event(ev, n, c_idx + 1u);
+            }
+            s_server.head = (s_server.head + 1u) % MAX_SEEN;
+            s_server.count--;
+        }
+        while (s_idx < n)
+        {
+            int len;
+            if (ev[s_idx].who == 'C' && s_sink.cancelled)
+            {
+                if (s_sent < at.keep_server)
+                {
+                    s_idx++; /* the letter: the confirm still goes out */
+                    continue;
+                }
+                s_idx = n; /* the answer in flight is complete: the captured server stops */
+                break;
+            }
+            if (ev[s_idx].who == 'C')
+            {
+                if (s_idx >= c_idx)
+                {
+                    break; /* that client message has not come yet */
+                }
+                s_idx++;
+                continue;
+            }
+            len = test_hex_to_bytes(ev[s_idx].hex, body, sizeof body);
+            if (server_send(body, (size_t)len, now) != XMSG_OK)
+            {
+                break; /* window full: next millisecond */
+            }
+            s_idx++;
+            s_sent++;
+        }
+    }
+    /* Let the last acknowledgements settle. */
+    for (uint32_t i = 0; i < 200u; i++)
+    {
+        now++;
+        pump(now);
+    }
+}
+
+static void cancelled_listing_gives_the_seat_back(void)
+{
+    s_run = (Run){true, "SYS", "BAK04", 0, true};
+    cancel_run(k_fa_list_events, N_LIST, "", (CancelAt){false, 3, false, 0});
+    s_run = (Run){false, NULL, NULL, 0, false};
+
+    CHECK(s_sink.cancelled);
+    CHECK_EQ(s_sink.done_calls, 1);
+    CHECK_EQ(s_sink.result, XMSG_ECANCELED);
+    CHECK_EQ(s_sink.entry_count, 3); /* no entry after the cancel */
+    CHECK_EQ(s_down.op_count, 1);
+    CHECK_EQ(s_down.ops[0], FA_OP_RELEASE);
+    CHECK_EQ(s_down.finished, 1);
+    CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_DONE);
+    CHECK(!s_client.base.attached);
+}
+
+static void cancelled_read_closes_the_file(void)
+{
+    cancel_run(k_fa_read_events, N_READ, "PATCH-FILE:OUT", (CancelAt){false, 0, true, 0});
+
+    CHECK(s_sink.cancelled);
+    CHECK_EQ(s_sink.done_calls, 1);
+    CHECK_EQ(s_sink.result, XMSG_ECANCELED);
+    CHECK_EQ(s_sink.opened_calls, 1);
+    CHECK_EQ(s_sink.data_calls, 1); /* the block's second half came after the cancel */
+    CHECK_EQ(s_sink.got, FA_DATA_BYTES);
+    CHECK_EQ(s_down.op_count, 2);
+    CHECK_EQ(s_down.ops[0], FA_OP_CLOSE);
+    CHECK_EQ(s_down.ops[1], FA_OP_RELEASE);
+    CHECK_EQ(s_down.finished, 1);
+    CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_DONE);
+    CHECK(!s_client.base.attached);
+}
+
+static void cancelled_before_the_confirm(void)
+{
+    /* The captured confirm still comes; then only session finished goes out. */
+    cancel_run(k_fa_read_events, N_READ, "PATCH-FILE:OUT", (CancelAt){true, 0, false, 1});
+
+    CHECK_EQ(s_sink.done_calls, 1);
+    CHECK_EQ(s_sink.result, XMSG_ECANCELED);
+    CHECK_EQ(s_sink.opened_calls, 0);
+    CHECK_EQ(s_down.op_count, 0);
+    CHECK_EQ(s_down.finished, 1);
+    CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_DONE);
+}
+
+static void cancel_when_nothing_runs(void)
+{
+    FaClient c;
+    int done_before;
+    (void)fa_client_init(&c, NULL, NULL);
+    CHECK_EQ(fa_client_cancel(NULL, 0), XMSG_EINVAL);
+    CHECK_EQ(fa_client_cancel(&c, 0), XMSG_OK);
+    CHECK_EQ(fa_client_state(&c), FA_CLIENT_IDLE);
+    /* After a finished read: nothing changes and no second `done`. */
+    CHECK(replay(k_fa_read_events, N_READ, "PATCH-FILE:OUT", false));
+    done_before = s_sink.done_calls;
+    CHECK_EQ(fa_client_cancel(&s_client, 0), XMSG_OK);
+    pump(100000u);
+    CHECK_EQ(s_sink.done_calls, done_before);
+    CHECK_EQ(s_sink.result, 0);
+    CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_DONE);
+}
+
 static void bad_arguments_are_refused(void)
 {
     FaClient c;
@@ -758,6 +986,10 @@ int main(void)
     file_statistics_replays_the_capture();
     walk_requests_and_dates();
     silent_server_times_out();
+    cancelled_listing_gives_the_seat_back();
+    cancelled_read_closes_the_file();
+    cancelled_before_the_confirm();
+    cancel_when_nothing_runs();
     bad_arguments_are_refused();
     TEST_DONE();
 }

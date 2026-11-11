@@ -170,6 +170,8 @@ typedef struct FaClient
     bool has_object_entry;
 
     bool listing;                          /**< a walk rather than a read */
+    bool cancelled;                        /**< fa_client_cancel: tearing down, no more
+                                                callbacks but `done` */
     uint8_t walk_block[FA_WALK_BLOCK_SIZE]; /**< the name block every walk request carries */
     uint16_t user_index;                   /**< from the last entry; 0 before the first */
     uint16_t cursor;                       /**< FFFF first, then last object index + 1 */
@@ -230,6 +232,28 @@ int fa_client_read(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t pee
 int fa_client_list(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_system,
                    const char *local_user, const char *remote_user, const char *password,
                    const char *filter, uint32_t now_ms);
+
+/**
+ * @brief Stop a read or a listing early (the user pressed the escape key).
+ *
+ * From this call on no `opened`, `data`, `directory` or `entry` callback comes. The request
+ * already sent is answered by the server and acknowledged; then the client gives the server's
+ * seat back with the same teardown it uses after a refusal: close the file if one is open,
+ * release, session finished, and the server's close. `done` then comes with XMSG_ECANCELED.
+ *
+ * No capture shows what SINTRAN's own client sends when its user breaks a LIST-FILES or a
+ * COPY-FILE (the captures we have were stopped while the walk ran, with nothing sent after),
+ * so this is our normal teardown, not a copy of a measured break. Cancelled before the server
+ * confirmed the connection, the client sends session finished at once when the confirm comes,
+ * with no reserve and no release (unverified against a real server).
+ *
+ * @param c      Client.
+ * @param now_ms Time.
+ * @return XMSG_OK, also when nothing is running (then no `done` follows) and when the client
+ *         is already ending (session finished sent: `done` comes with the normal result);
+ *         XMSG_EINVAL for a NULL client.
+ */
+int fa_client_cancel(FaClient *c, uint32_t now_ms);
 
 /** @brief The state. */
 FaClientState fa_client_state(const FaClient *c);
