@@ -478,6 +478,16 @@ void console_names_done(ConsoleSession *s, int result, unsigned rows);
 int console_command_text(ConsoleSession *s, const char *text);
 
 /**
+ * @brief As console_command_text(), but the bytes go to the line untouched: no 7-bit rule. For
+ *        text that is not the gateway's own, such as the contents of a file (COPY-TERM), whose
+ *        [ ] { | } \ are the file's letters on a Norwegian 7-bit terminal.
+ * @param s    Session.
+ * @param text The text, zero-terminated (a zero byte cannot be passed).
+ * @return As console_command_text().
+ */
+int console_command_raw(ConsoleSession *s, const char *text);
+
+/**
  * @brief The application command that answered 2 has finished: the prompt comes back.
  *        Ignored when none is running.
  * @param s Session.

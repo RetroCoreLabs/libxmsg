@@ -959,6 +959,21 @@ static void application_command_answered_later(void)
     console_line_lost(s);
     CHECK_EQ(s_cancels, 3);
     CHECK_EQ(s_cancel_place, 0);
+
+    /* On a 7-bit line: our own text gets the 7-bit rule, a file's bytes (COPY-TERM) do not. */
+    {
+        FakeLine g;
+        ConsoleLine m = make_line(&g, CONSOLE_LINE_7BIT);
+        ConsoleSession *t = login(&g, &m, "carol", "cpw");
+        type(t, "list-files d100(system)\r", 3);
+        clear(&g);
+        CHECK_EQ(console_command_text(t, "[a]\r\n"), 5);
+        CHECK(has(&g, "<a>\r\n"));
+        CHECK_EQ(console_command_raw(t, "{b|c}\r\n"), 7);
+        CHECK(has(&g, "{b|c}\r\n"));
+        console_command_done(t);
+        CHECK_EQ(console_command_raw(t, "x"), -1);
+    }
 }
 
 /* NAMES <system> asks that system; CONNECT and NAMES to our own system (19999 here) are refused

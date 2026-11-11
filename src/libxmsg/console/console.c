@@ -1588,7 +1588,8 @@ void console_onward_logout(ConsoleSession *s)
     s->host->cfg.services.onward_hangup(s->host->cfg.services.ctx, s->place);
 }
 
-int console_command_text(ConsoleSession *s, const char *text)
+/* Text of a pending application command; `seven_bit` applies the 7-bit rule on a 7-bit line. */
+static int command_out(ConsoleSession *s, const char *text, bool seven_bit)
 {
     size_t n;
     size_t done = 0;
@@ -1605,7 +1606,7 @@ int console_command_text(ConsoleSession *s, const char *text)
         for (size_t i = 0; i < k; i++)
         {
             uint8_t b = (uint8_t)text[done + i];
-            chunk[i] = line_is(s, CONSOLE_LINE_7BIT) ? console_7bit(b) : b;
+            chunk[i] = (seven_bit && line_is(s, CONSOLE_LINE_7BIT)) ? console_7bit(b) : b;
         }
         took = s->line.write(s->line.ctx, chunk, k);
         if (took > 0)
@@ -1620,6 +1621,16 @@ int console_command_text(ConsoleSession *s, const char *text)
     }
     flush(s);
     return (int)done;
+}
+
+int console_command_text(ConsoleSession *s, const char *text)
+{
+    return command_out(s, text, true);
+}
+
+int console_command_raw(ConsoleSession *s, const char *text)
+{
+    return command_out(s, text, false);
 }
 
 void console_command_done(ConsoleSession *s)
