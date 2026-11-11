@@ -223,6 +223,100 @@ size_t fa_build_read_block(uint8_t *out, size_t cap, const FaEnvelope *env, uint
     return finish(&w);
 }
 
+bool fa_build_walk_block(uint8_t *block, const char *user, const char *spec)
+{
+    size_t ulen;
+    size_t slen;
+    size_t pos = 0;
+
+    if (block == NULL || user == NULL || spec == NULL)
+    {
+        return false;
+    }
+    ulen = strlen(user);
+    slen = strlen(spec);
+    if (ulen == 0u || 2u + ulen + 2u * (slen + 1u) > FA_WALK_BLOCK_SIZE)
+    {
+        return false;
+    }
+    memset(block, 0, FA_WALK_BLOCK_SIZE);
+    block[pos++] = (uint8_t)'(';
+    memcpy(block + pos, user, ulen);
+    pos += ulen;
+    block[pos++] = (uint8_t)')';
+    for (int copy = 0; copy < 2; copy++)
+    {
+        memcpy(block + pos, spec, slen);
+        pos += slen;
+        block[pos++] = (uint8_t)0x27; /* the SINTRAN terminator ' */
+    }
+    return true;
+}
+
+/* 8C 80 <len>: a constructed value with its length in the marker form, as the real client
+ * writes it on its walk requests. The length is filled in by end_marked(). */
+static size_t begin_marked(QformWriter *w)
+{
+    size_t at = w->len;
+    qform_put_u8(w, QFORM_TAG_CONSTRUCTED);
+    qform_put_u8(w, 0x80u);
+    qform_put_u8(w, 0);
+    return at;
+}
+
+static void end_marked(QformWriter *w, size_t at)
+{
+    if (w->failed)
+    {
+        return;
+    }
+    w->buf[at + 2u] = (uint8_t)(w->len - at - 3u);
+}
+
+size_t fa_build_walk_next(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
+                          const uint8_t *block, uint16_t user_index, uint16_t cursor)
+{
+    QformWriter w;
+    size_t at;
+
+    if (out == NULL || env == NULL || block == NULL)
+    {
+        return 0;
+    }
+    qform_writer_init(&w, out, cap);
+    put_head(&w, env, FA_OP_SPECIAL, seq);
+    qform_put_selector(&w, 1);
+    qform_put_tag16(&w, QFORM_TAG_INT16, FA_SPECIAL_NEXT_ENTRY);
+    qform_put_selector(&w, 2);
+    at = begin_marked(&w);
+    qform_put_string(&w, block, FA_WALK_BLOCK_SIZE);
+    qform_put_tag16(&w, QFORM_TAG_TYPED16, user_index);
+    qform_put_tag16(&w, QFORM_TAG_TYPED16, cursor);
+    end_marked(&w, at);
+    return finish(&w);
+}
+
+size_t fa_build_special_index(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
+                              uint16_t sub, uint16_t index)
+{
+    QformWriter w;
+    size_t at;
+
+    if (out == NULL || env == NULL)
+    {
+        return 0;
+    }
+    qform_writer_init(&w, out, cap);
+    put_head(&w, env, FA_OP_SPECIAL, seq);
+    qform_put_selector(&w, 1);
+    qform_put_tag16(&w, QFORM_TAG_INT16, sub);
+    qform_put_selector(&w, 2);
+    at = begin_marked(&w);
+    qform_put_tag16(&w, QFORM_TAG_TYPED16, index);
+    end_marked(&w, at);
+    return finish(&w);
+}
+
 size_t fa_build_bare(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t op, uint16_t seq)
 {
     QformWriter w;

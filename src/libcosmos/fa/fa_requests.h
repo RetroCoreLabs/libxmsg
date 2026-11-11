@@ -17,6 +17,7 @@
 #ifndef FA_REQUESTS_H
 #define FA_REQUESTS_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -39,6 +40,15 @@ extern "C"
 
 /** Sub-function of FA_OP_SPECIAL that asks for the file's 64-byte object entry. */
 #define FA_SPECIAL_FILE_INFO 0x0021u
+
+/** Sub-functions of FA_OP_SPECIAL used by a directory walk (LIST-FILES, FILE-STATISTICS). */
+#define FA_SPECIAL_NEXT_ENTRY 0x0078u /**< the next object entry matching the name block */
+#define FA_SPECIAL_DIRECTORY  0x00A4u /**< the directory entry (its name, "PACK-ONE") */
+#define FA_SPECIAL_USER       0x008Cu /**< the user entry (its name, "SYSTEM") */
+
+/** The name block a walk carries, and the cursor of the first walk request. */
+#define FA_WALK_BLOCK_SIZE   62u
+#define FA_WALK_FIRST_CURSOR 0xFFFFu
 
 /** Bytes in one FA block (one SINTRAN page): two data messages of 1024. */
 #define FA_BLOCK_SIZE 2048u
@@ -112,6 +122,43 @@ size_t fa_build_file_info(uint8_t *out, size_t cap, const FaEnvelope *env, uint1
 /** @brief Read a block (op 08): F2 0001 A4 <block> F2 00FF. */
 size_t fa_build_read_block(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
                            uint32_t block);
+
+/**
+ * @brief Build the 62-byte name block of a walk: "(<user>)<spec>'<spec>'", zero filled.
+ *
+ * MEASURED: FILE-STATISTICS of SINTRAN:DATA sent "(SYSTEM)SINTRAN:DATA'SINTRAN:DATA'" and zeros
+ * (file-statistics capture, 2026-07-29 20:15). A LIST-FILES with no name sent "(SYSTEM)'" and
+ * then bytes left over in the client's buffer; here the empty name is written "(<user>)''"
+ * and zeros, the same rule with a name of length 0 (unverified that a server reads past the
+ * first apostrophe).
+ * @param block Receives FA_WALK_BLOCK_SIZE bytes.
+ * @param user  The directory owner, "SYSTEM".
+ * @param spec  The name, "SINTRAN:DATA", or "" for every file.
+ * @return true when it fits.
+ */
+bool fa_build_walk_block(uint8_t *block, const char *user, const char *spec);
+
+/**
+ * @brief Next entry (op 0C/78): F2 0001 92 0078 F2 0002 8C 80 46 B0 3E <block> A2 <user index>
+ *        A2 <cursor> F2 00FF.
+ *
+ * The first request sends user index 0 and cursor FFFF; each later one sends the user index
+ * and the object index of the last entry received, plus one. MEASURED in capture-list-files.txt
+ * (user SYSTEM, index 0) and the SECRET listing capture (2026-07-29 14:26: index 7). The
+ * constructed length is written in the 0x80 marker form, as the real client does.
+ */
+size_t fa_build_walk_next(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
+                          const uint8_t *block, uint16_t user_index, uint16_t cursor);
+
+/**
+ * @brief Directory or user entry (op 0C/A4 or 0C/8C): F2 0001 92 <sub> F2 0002 8C 80 03
+ *        A2 <index> F2 00FF.
+ *
+ * MEASURED: the directory question sent index 0 in both captured listings; the user question
+ * sent the user index from the first entry (0 for SYSTEM, 7 for SECRET).
+ */
+size_t fa_build_special_index(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
+                              uint16_t sub, uint16_t index);
 
 /** @brief A request with no fields (close 06, release 03): 92 op 92 seq F2 00FF. */
 size_t fa_build_bare(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t op, uint16_t seq);

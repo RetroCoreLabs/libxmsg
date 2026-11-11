@@ -8,8 +8,6 @@
 
 #include <string.h>
 
-#include "libcosmos/fa/fa_replies.h"
-#include "libcosmos/fa/fa_requests.h"
 #include "libcosmos/sintran/sintran_password.h"
 #include "libxmsg/log/xmsg_log.h"
 #include "libxmsg/sintran/sintran_hdr.h"
@@ -135,6 +133,14 @@ static size_t build_request(FaClient *c, const FaClientItem *it, uint8_t *body, 
         return fa_build_bare(body, cap, &env, FA_OP_CLOSE, it->seq);
     case FA_STEP_RELEASE:
         return fa_build_bare(body, cap, &env, FA_OP_RELEASE, it->seq);
+    case FA_STEP_WALK:
+        return fa_build_walk_next(body, cap, &env, it->seq, c->walk_block, c->user_index,
+                                  c->cursor);
+    case FA_STEP_DIRECTORY:
+        /* MEASURED: index 0 in both captured listings (users SYSTEM and SECRET). */
+        return fa_build_special_index(body, cap, &env, it->seq, FA_SPECIAL_DIRECTORY, 0);
+    case FA_STEP_USER:
+        return fa_build_special_index(body, cap, &env, it->seq, FA_SPECIAL_USER, c->user_index);
     default:
         return 0;
     }
@@ -215,7 +221,18 @@ static void next_step(FaClient *c, uint32_t now_ms)
     switch (c->step)
     {
     case FA_STEP_RESERVE:
-        c->step = FA_STEP_OPEN;
+        c->step = c->listing ? FA_STEP_WALK : FA_STEP_OPEN;
+        break;
+    case FA_STEP_WALK:
+        /* As the real client: after the first file, ask once for the directory and user names. */
+        c->step = c->names_asked ? FA_STEP_WALK : FA_STEP_DIRECTORY;
+        c->names_asked = true;
+        break;
+    case FA_STEP_DIRECTORY:
+        c->step = FA_STEP_USER;
+        break;
+    case FA_STEP_USER:
+        c->step = FA_STEP_WALK;
         break;
     case FA_STEP_OPEN:
         c->step = FA_STEP_SET_BLOCK_SIZE;
@@ -262,10 +279,37 @@ static bool step_is_complete(const FaClient *c)
     return c->reply_in && (c->step != FA_STEP_READ || c->data_in >= 2u);
 }
 
+/* One file of a walk: report it and move the cursor past it. */
+static bool take_walk_entry(FaClient *c, const FaReply *r)
+{
+    const uint8_t *raw;
+    uint16_t user_index;
+    uint16_t object_index;
+    FaFileEntry e;
+
+    if (!fa_reply_walk_entry(r, &user_index, &object_index, &raw))
+    {
+        return false;
+    }
+    c->user_index = user_index;
+    c->cursor = (uint16_t)(object_index + 1u);
+    c->entries++;
+    fa_entry_parse(raw, &e);
+    XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_DEBUG, "fa client: entry %u %s:%s, %u bytes",
+             (unsigned)object_index, e.name, e.type, (unsigned)e.bytes);
+    if (c->cb.entry != NULL)
+    {
+        c->cb.entry(c->cb.ctx, &e);
+    }
+    return true;
+}
+
 static void on_reply(FaClient *c, const uint8_t *body, size_t len, uint32_t now_ms)
 {
-    static const uint16_t step_ops[] = {FA_OP_RESERVE, FA_OP_OPEN, FA_OP_SET_BLOCK_SIZE,
-                                        FA_OP_SPECIAL, FA_OP_READ, FA_OP_CLOSE, FA_OP_RELEASE};
+    static const uint16_t step_ops[] = {FA_OP_RESERVE, FA_OP_OPEN,    FA_OP_SET_BLOCK_SIZE,
+                                        FA_OP_SPECIAL, FA_OP_READ,    FA_OP_CLOSE,
+                                        FA_OP_RELEASE, FA_OP_SPECIAL, FA_OP_SPECIAL,
+                                        FA_OP_SPECIAL};
     FaReply r;
 
     memset(&r, 0, sizeof r);
@@ -279,6 +323,14 @@ static void on_reply(FaClient *c, const uint8_t *body, size_t len, uint32_t now_
     }
     enqueue_ack(c, now_ms);
     c->reply_in = true;
+    if (r.refused && c->step == FA_STEP_WALK && r.error == FA_ERR_END_OF_DIRECTORY)
+    {
+        /* The normal end of a walk (capture-list-files.txt 02:20:17.043). */
+        XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_INFO, "fa client: end of directory after %u files",
+                 (unsigned)c->entries);
+        go_to_step(c, FA_STEP_RELEASE, now_ms);
+        return;
+    }
     if (r.refused && c->sintran_error == 0u)
     {
         XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_WARN, "fa client: op 0x%04X refused: error %u %s",
@@ -288,7 +340,7 @@ static void on_reply(FaClient *c, const uint8_t *body, size_t len, uint32_t now_
          * MEASURED for a refused open: release follows at once (capture-open-error.txt).
          * A refused reserve also goes to release: no capture shows it; release is what frees
          * the seat, so it is sent (unverified). */
-        if (c->step == FA_STEP_RESERVE || c->step == FA_STEP_OPEN)
+        if (c->step == FA_STEP_RESERVE || c->step == FA_STEP_OPEN || c->listing)
         {
             go_to_step(c, FA_STEP_RELEASE, now_ms);
         }
@@ -321,6 +373,27 @@ static void on_reply(FaClient *c, const uint8_t *body, size_t len, uint32_t now_
         if (c->cb.opened != NULL)
         {
             c->cb.opened(c->cb.ctx, c->length);
+        }
+    }
+    else if (c->step == FA_STEP_WALK)
+    {
+        if (!take_walk_entry(c, &r))
+        {
+            XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_ERROR, "fa client: walk reply without an entry");
+            fail(c, XMSG_EPROTO, now_ms);
+            return;
+        }
+    }
+    else if (c->step == FA_STEP_DIRECTORY)
+    {
+        (void)fa_reply_entry_name(&r, 10u, c->directory_name, sizeof c->directory_name);
+    }
+    else if (c->step == FA_STEP_USER)
+    {
+        (void)fa_reply_entry_name(&r, 0u, c->user_name, sizeof c->user_name);
+        if (c->cb.directory != NULL)
+        {
+            c->cb.directory(c->cb.ctx, c->directory_name, c->user_name);
         }
     }
     else if (c->step == FA_STEP_FILE_INFO)
@@ -625,9 +698,9 @@ static bool copy_name(char *dst, size_t size, const char *src)
     return true;
 }
 
-int fa_client_read(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_system,
-                   const char *local_user, const char *remote_user, const char *password,
-                   const char *spec, uint32_t now_ms)
+static int start(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_system,
+                 const char *local_user, const char *remote_user, const char *password,
+                 const char *spec, bool listing, uint32_t now_ms)
 {
     FaClientConfig cfg;
     FaClientCallbacks cb;
@@ -650,9 +723,18 @@ int fa_client_read(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t pee
     (void)fa_client_init(c, &cfg, &cb);
     if (!copy_name(c->local_user, sizeof c->local_user, local_user) ||
         !copy_name(c->remote_user, sizeof c->remote_user, remote_user) ||
-        !copy_name(c->spec, sizeof c->spec, spec) || c->spec[0] == '\0')
+        !copy_name(c->spec, sizeof c->spec, spec) || (!listing && c->spec[0] == '\0'))
     {
         return XMSG_EINVAL;
+    }
+    c->listing = listing;
+    if (listing)
+    {
+        if (!fa_build_walk_block(c->walk_block, c->remote_user, c->spec))
+        {
+            return XMSG_EINVAL;
+        }
+        c->cursor = FA_WALK_FIRST_CURSOR;
     }
     c->password = sintran_password_fold(password);
     /* "D" and the system number in decimal, as SINTRAN names a system in a letter. */
@@ -679,10 +761,27 @@ int fa_client_read(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t pee
     }
     c->state = FA_CLIENT_CONNECTING;
     c->wait_since_ms = now_ms;
-    XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_INFO, "fa client: read %s from %s (node %u) as %s",
-             c->spec, c->system_name, (unsigned)peer_node, c->remote_user);
+    XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_INFO, "fa client: %s \"%s\" on %s (node %u) as %s",
+             listing ? "list" : "read", c->spec, c->system_name, (unsigned)peer_node,
+             c->remote_user);
     enqueue(c, FA_SEND_LETTER, 0, 0, now_ms);
     return XMSG_OK;
+}
+
+int fa_client_read(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_system,
+                   const char *local_user, const char *remote_user, const char *password,
+                   const char *spec, uint32_t now_ms)
+{
+    return start(c, node, peer_node, peer_system, local_user, remote_user, password, spec, false,
+                 now_ms);
+}
+
+int fa_client_list(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_system,
+                   const char *local_user, const char *remote_user, const char *password,
+                   const char *filter, uint32_t now_ms)
+{
+    return start(c, node, peer_node, peer_system, local_user, remote_user, password, filter,
+                 true, now_ms);
 }
 
 FaClientState fa_client_state(const FaClient *c)

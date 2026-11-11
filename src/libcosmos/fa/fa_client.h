@@ -19,6 +19,19 @@
  * last block arrives padded and the padding is not handed on. A refusal (F2 0001 A2 <error>)
  * ends the work: we still send release and session finished, so the server's seat comes back.
  *
+ * A LISTING (LIST-FILES) and a FILE-STATISTICS are one and the same walk; the second just names
+ * a file. MEASURED in capture-list-files.txt and the file-statistics capture (2026-07-29 20:15):
+ *
+ *   reserve (02)
+ *   next entry (0C/78, name block, user index 0, cursor FFFF)   reply: user index, object index,
+ *                                                               the 64-byte object entry
+ *   directory entry (0C/A4, index 0)                            reply: "PACK-ONE"
+ *   user entry (0C/8C, the user index)                          reply: "SYSTEM"
+ *   next entry (0C/78, user index, last object index + 1) ...   until refused with 197
+ *   release (03), session finished, the server's close
+ *
+ * Which files match the name is decided by the server.
+ *
  * The client is an XmsgSession (the first member) and sends one frame at a time, waiting for the
  * XMSG acknowledgement before the next, as the TAD asker does.
  */
@@ -30,6 +43,8 @@
 #include <stdint.h>
 
 #include "libcosmos/fa/fa_envelope.h"
+#include "libcosmos/fa/fa_replies.h"
+#include "libcosmos/fa/fa_requests.h"
 #include "libxmsg/xmsg/xmsg_node.h"
 #include "libxmsg/xmsg/xmsg_session.h"
 
@@ -68,6 +83,11 @@ typedef struct FaClientCallbacks
     void (*data)(void *ctx, uint32_t offset, const uint8_t *bytes, size_t n);
     /** The transfer is over: result 0, FA_CLIENT_EREFUSED with the SINTRAN error, or an XMSG_E*. */
     void (*done)(void *ctx, int result, uint16_t sintran_error);
+    /** Listing: the directory and user being listed ("PACK-ONE", "SYSTEM"), once, after the
+     *  first file. */
+    void (*directory)(void *ctx, const char *directory, const char *user);
+    /** Listing: one file. */
+    void (*entry)(void *ctx, const FaFileEntry *e);
 } FaClientCallbacks;
 
 typedef struct FaClientConfig
@@ -104,7 +124,10 @@ typedef enum FaClientStep
     FA_STEP_FILE_INFO,
     FA_STEP_READ,
     FA_STEP_CLOSE,
-    FA_STEP_RELEASE
+    FA_STEP_RELEASE,
+    FA_STEP_WALK,      /**< listing: next entry */
+    FA_STEP_DIRECTORY, /**< listing: the directory entry, once */
+    FA_STEP_USER       /**< listing: the user entry, once */
 } FaClientStep;
 
 /** One frame waiting: its kind and the numbers given to it when queued. */
@@ -146,6 +169,15 @@ typedef struct FaClient
     uint8_t object_entry[64];
     bool has_object_entry;
 
+    bool listing;                          /**< a walk rather than a read */
+    uint8_t walk_block[FA_WALK_BLOCK_SIZE]; /**< the name block every walk request carries */
+    uint16_t user_index;                   /**< from the last entry; 0 before the first */
+    uint16_t cursor;                       /**< FFFF first, then last object index + 1 */
+    bool names_asked;                      /**< directory and user entries asked */
+    uint32_t entries;                      /**< files reported */
+    char directory_name[17];
+    char user_name[17];
+
     FaClientItem queue[FA_CLIENT_QUEUE];
     uint8_t q_head;
     uint8_t q_count;
@@ -185,6 +217,19 @@ int fa_client_init(FaClient *c, const FaClientConfig *cfg, const FaClientCallbac
 int fa_client_read(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_system,
                    const char *local_user, const char *remote_user, const char *password,
                    const char *spec, uint32_t now_ms);
+
+/**
+ * @brief Start a listing (LIST-FILES) or file statistics (FILE-STATISTICS): one `entry` callback
+ *        per matching file, then `done` with result 0. The end of the directory (SINTRAN error
+ *        197) is the normal end, not an error.
+ * @param filter What to match, as SINTRAN takes it: "" for every file, "NAME:TYPE" for one.
+ *        The server does the matching. The name block holds "(<remote_user>)" and the filter
+ *        twice, 62 bytes in all.
+ * The other arguments and the return value are as fa_client_read().
+ */
+int fa_client_list(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_system,
+                   const char *local_user, const char *remote_user, const char *password,
+                   const char *filter, uint32_t now_ms);
 
 /** @brief The state. */
 FaClientState fa_client_state(const FaClient *c);

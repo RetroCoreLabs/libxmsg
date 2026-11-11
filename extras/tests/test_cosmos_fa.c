@@ -13,6 +13,10 @@
  *   - the pad byte after F2 00FF: the real client sends whatever was in its buffer, we send 0;
  *   - the character after the apostrophe in an open (BUGS.md C1): the real client sent "T" and
  *     "U" in these captures; we send ".", as RetroIO's live-proven reader does.
+ * The captured LIST-FILES client also left bytes from an earlier use of its buffers behind the
+ * first apostrophe of two fields: the remote user slot of the reserve ("SYS'EM'") and the name
+ * block of each walk request. That replay compares those two fields up to the apostrophe only;
+ * the FILE-STATISTICS capture has clean zeros there and is compared in full.
  */
 #include "libcosmos/fa/fa_client.h"
 #include "libcosmos/fa/fa_replies.h"
@@ -23,11 +27,15 @@
 
 #include "pair/test_pair.h"
 #include "test_util.h"
+#include "vectors/fa_list_d100_d102.h"
 #include "vectors/fa_open_error_d100_d102.h"
 #include "vectors/fa_read_d100_d102.h"
+#include "vectors/fa_stat_d102_d100.h"
 
 #define N_READ  (sizeof k_fa_read_events / sizeof k_fa_read_events[0])
 #define N_ERROR (sizeof k_fa_open_error_events / sizeof k_fa_open_error_events[0])
+#define N_LIST  (sizeof k_fa_list_events / sizeof k_fa_list_events[0])
+#define N_STAT  (sizeof k_fa_stat_events / sizeof k_fa_stat_events[0])
 
 /* The server's session port in the captures (the confirm and everything after come from it). */
 #define SERVER_PORT 0x06B6u
@@ -205,6 +213,18 @@ typedef struct Server
     size_t count;
 } Server;
 
+/* What one replay asks the client to do, as the captured client did it. */
+typedef struct Run
+{
+    bool listing;
+    const char *remote_user;
+    const char *asker;
+    uint16_t peer_system;
+    bool mask_residue; /* see the file comment */
+} Run;
+
+static Run s_run;
+
 typedef struct Sink
 {
     uint8_t file[32768];
@@ -215,6 +235,11 @@ typedef struct Sink
     int done_calls;
     int result;
     uint16_t sintran_error;
+    FaFileEntry entries[64];
+    size_t entry_count;
+    char directory[17];
+    char user[17];
+    int directory_calls;
 } Sink;
 
 static XmsgNode s_a; /* our client's machine, node 100 */
@@ -276,6 +301,24 @@ static void sink_done(void *ctx, int result, uint16_t sintran_error)
     k->sintran_error = sintran_error;
 }
 
+static void sink_directory(void *ctx, const char *directory, const char *user)
+{
+    Sink *k = (Sink *)ctx;
+    k->directory_calls++;
+    snprintf(k->directory, sizeof k->directory, "%s", directory);
+    snprintf(k->user, sizeof k->user, "%s", user);
+}
+
+static void sink_entry(void *ctx, const FaFileEntry *e)
+{
+    Sink *k = (Sink *)ctx;
+    if (k->entry_count < sizeof k->entries / sizeof k->entries[0])
+    {
+        k->entries[k->entry_count] = *e;
+    }
+    k->entry_count++;
+}
+
 static void pump(uint32_t now)
 {
     uint8_t chunk[256];
@@ -316,6 +359,7 @@ static uint32_t bring_up(void)
     CHECK_EQ(xmsg_node_init(&s_a, &cfg, &ports, &cb), XMSG_OK);
 
     xmsg_node_config_default(&cfg, 102);
+    cfg.own_system = s_run.peer_system; /* 0: system 102; the FILE-STATISTICS capture has D100 */
     cfg.lapb.t1_ms = 50;
     cfg.settle_ms = 20;
     cfg.reject_closed_ports = false; /* a tap: every datagram comes up unhandled */
@@ -340,10 +384,21 @@ static uint32_t bring_up(void)
 
 static void client_start(const FaClientConfig *cfg, const char *spec, uint32_t now)
 {
-    FaClientCallbacks cb = {&s_sink, sink_opened, sink_data, sink_done};
+    FaClientCallbacks cb = {&s_sink,        sink_opened, sink_data, sink_done,
+                            sink_directory, sink_entry};
+    const char *remote = (s_run.remote_user != NULL) ? s_run.remote_user : "SYSTEM";
+    uint16_t system = (s_run.peer_system != 0u) ? s_run.peer_system : 102u;
     CHECK_EQ(fa_client_init(&s_client, cfg, &cb), XMSG_OK);
-    CHECK_EQ(fa_client_read(&s_client, &s_a, 102, 102, "SYSTEM", "SYSTEM", "", spec, now),
-             XMSG_OK);
+    if (s_run.listing)
+    {
+        CHECK_EQ(fa_client_list(&s_client, &s_a, 102, system, "SYSTEM", remote, "", spec, now),
+                 XMSG_OK);
+    }
+    else
+    {
+        CHECK_EQ(fa_client_read(&s_client, &s_a, 102, system, "SYSTEM", remote, "", spec, now),
+                 XMSG_OK);
+    }
 }
 
 /* Send one server message from node 102 to our client's port. XMSG_EAGAIN when the window is
@@ -417,6 +472,21 @@ static void check_client_message(const uint8_t *ours, size_t ours_len, const Xms
             got[end - 1] = want[end - 1];
         }
     }
+    if (s_run.mask_residue && want[0] == 0x07 && want[1] == 0xF0 && ours_len > 90u)
+    {
+        /* The reserve's remote user slot is bytes 55..70; a walk's name block is 28..89. */
+        size_t from = (want[9] == 0x00 && want[10] == FA_OP_RESERVE) ? 55u : 28u;
+        size_t to = (from == 55u) ? 71u : 90u;
+        bool past = false;
+        for (size_t i = from; i < to; i++)
+        {
+            if (past)
+            {
+                got[i] = want[i];
+            }
+            past = past || (want[i] == 0x27);
+        }
+    }
     CHECK_BYTES(got, ours_len, captured_hex);
     /* The sub-header as captured: the letter 86/E4 to port 0, the rest 82/84; XMCSM = length. */
     if (want[0] == 0x1B)
@@ -431,7 +501,7 @@ static void check_client_message(const uint8_t *ours, size_t ours_len, const Xms
         CHECK_EQ(sub->role, FA_ROLE_DATA);
         CHECK_EQ(sub->dst_port, SERVER_PORT);
     }
-    CHECK_EQ(sub->dst_system, 102);
+    CHECK_EQ(sub->dst_system, (s_run.peer_system != 0u) ? s_run.peer_system : 102u);
     CHECK_EQ(sub->xmcsm, ours_len);
 }
 
@@ -461,6 +531,10 @@ static bool replay(const FaVectorEvent *ev, size_t n, const char *spec, bool dup
     uint8_t body[FA_DATA_MESSAGE_SIZE];
 
     fa_client_config_default(&cfg);
+    if (s_run.asker != NULL)
+    {
+        snprintf(cfg.asker, sizeof cfg.asker, "%s", s_run.asker);
+    }
     client_start(&cfg, spec, now);
     while (now < until && s_sink.done_calls == 0)
     {
@@ -568,6 +642,70 @@ static void repeated_confirm_changes_nothing(void)
     CHECK_EQ(s_client.stats.ignored, 1);
 }
 
+static void listing_replays_the_capture(void)
+{
+    FaNdDate d;
+    s_run = (Run){true, "SYS", "BAK04", 0, true};
+    CHECK(replay(k_fa_list_events, N_LIST, "", false));
+    s_run = (Run){false, NULL, NULL, 0, false};
+
+    CHECK_EQ(s_sink.done_calls, 1);
+    CHECK_EQ(s_sink.result, 0); /* 197, the end of the directory, is the normal end */
+    CHECK_EQ(s_sink.sintran_error, 0);
+    CHECK_EQ(s_sink.entry_count, 49);
+    CHECK_EQ(s_sink.directory_calls, 1);
+    CHECK(strcmp(s_sink.directory, "PACK-ONE") == 0);
+    CHECK(strcmp(s_sink.user, "SYSTEM") == 0);
+    /* The first and the last file, as the captured records give them. */
+    CHECK(strcmp(s_sink.entries[0].name, "SINTRAN") == 0);
+    CHECK(strcmp(s_sink.entries[0].type, "DATA") == 0);
+    CHECK_EQ(s_sink.entries[0].pages, 0x3F);
+    CHECK_EQ(s_sink.entries[0].bytes, 0x1E000);
+    CHECK_EQ(s_sink.entries[0].open_total, 10);
+    CHECK(fa_nd_date_split(s_sink.entries[0].created, &d));
+    CHECK(strcmp(s_sink.entries[48].name, "ENCOS-LOAD-0-B01") == 0);
+    CHECK(strcmp(s_sink.entries[48].type, "LIST") == 0);
+    /* A peripheral file: no byte count (FFFFFFFF on the wire). */
+    CHECK(strcmp(s_sink.entries[3].name, "MAILBOX") == 0);
+    CHECK(!s_sink.entries[3].has_bytes);
+    CHECK_EQ(s_client.stats.ignored, 0);
+}
+
+static void file_statistics_replays_the_capture(void)
+{
+    s_run = (Run){true, "SYSTEM", "BAK05", 100, false};
+    CHECK(replay(k_fa_stat_events, N_STAT, "SINTRAN:DATA", false));
+    s_run = (Run){false, NULL, NULL, 0, false};
+
+    CHECK_EQ(s_sink.result, 0);
+    CHECK_EQ(s_sink.entry_count, 1);
+    CHECK(strcmp(s_sink.entries[0].name, "SINTRAN") == 0);
+    CHECK_EQ(s_sink.entries[0].bytes, 0x1E000);
+    CHECK(strcmp(s_sink.directory, "PACK-ONE") == 0);
+}
+
+static void walk_requests_and_dates(void)
+{
+    uint8_t block[FA_WALK_BLOCK_SIZE];
+    uint8_t want[FA_WALK_BLOCK_SIZE];
+    FaNdDate d;
+
+    CHECK(fa_build_walk_block(block, "SYSTEM", "SINTRAN:DATA"));
+    memset(want, 0, sizeof want);
+    memcpy(want, "(SYSTEM)SINTRAN:DATA'SINTRAN:DATA'", 34);
+    CHECK(memcmp(block, want, sizeof want) == 0);
+    CHECK(fa_build_walk_block(block, "SYSTEM", ""));
+    CHECK(memcmp(block, "(SYSTEM)''", 10) == 0);
+    CHECK_EQ(block[10], 0);
+    /* "(" user ")" and two copies of the name must fit in 62. */
+    CHECK(!fa_build_walk_block(block, "SYSTEM", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0"));
+    /* An ND date word: 0xC1FAAA75 is year 48 + 1950. */
+    CHECK(fa_nd_date_split(0xC1FAAA75u, &d));
+    CHECK_EQ(d.year, 1998);
+    CHECK_EQ(d.month, 7);
+    CHECK(!fa_nd_date_split(0, &d));
+}
+
 static void silent_server_times_out(void)
 {
     FaClientConfig cfg;
@@ -616,6 +754,9 @@ int main(void)
     read_replays_the_capture();
     refused_open_still_gives_the_seat_back();
     repeated_confirm_changes_nothing();
+    listing_replays_the_capture();
+    file_statistics_replays_the_capture();
+    walk_requests_and_dates();
     silent_server_times_out();
     bad_arguments_are_refused();
     TEST_DONE();

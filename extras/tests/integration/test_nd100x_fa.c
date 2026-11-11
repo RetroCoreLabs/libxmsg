@@ -13,10 +13,15 @@
  *   ND100X_PEER_SYSTEM its system number (default: the node number)
  *   ND100X_USER        the user whose directory is read (default SYSTEM)
  *   ND100X_PASSWORD    its password (default empty)
- *   ND100X_FA_FILE     the file to read, "NAME:TYPE" or "(USER)NAME:TYPE" (unset: SKIPPED)
+ *   ND100X_FA_FILE     the file to read, "NAME:TYPE" or "(USER)NAME:TYPE"
+ *   ND100X_FA_LIST     instead of reading: list the files matching this name ("" = all; a
+ *                      name = FILE-STATISTICS of that file). One of the two must be set, or the
+ *                      test is SKIPPED.
  *   ND100X_FA_OUT      write what was read to this file (optional), to compare with ndtool
  *   ND100X_FLAGS1_FILE the shared count file (default nd100x_tad.flags1)
  *
+ * A listing prints one line per file and checks it ends with result 0 (the end of the
+ * directory is the normal end).
  * What is checked: the read reaches DONE with result 0 within two minutes, the open reply gave a
  * length, exactly that many bytes arrived in order, and the server answered our session
  * finished with its close (that is what frees its seat).
@@ -68,6 +73,29 @@ static void on_data(void *ctx, uint32_t offset, const uint8_t *bytes, size_t n)
     g->bytes += (uint32_t)n;
 }
 
+static unsigned s_entries;
+
+static void on_directory(void *ctx, const char *directory, const char *user)
+{
+    (void)ctx;
+    printf("  directory %s, user %s\n", directory, user);
+}
+
+static void on_entry(void *ctx, const FaFileEntry *e)
+{
+    FaNdDate d;
+    (void)ctx;
+    s_entries++;
+    printf("  %-16s %-4s %6u pages %8u bytes  opened %u times", e->name, e->type,
+           (unsigned)e->pages, (unsigned)e->bytes, (unsigned)e->open_total);
+    if (fa_nd_date_split(e->created, &d))
+    {
+        printf("  created %04u-%02u-%02u %02u:%02u", (unsigned)d.year, (unsigned)d.month,
+               (unsigned)d.day, (unsigned)d.hour, (unsigned)d.minute);
+    }
+    printf("\n");
+}
+
 static void on_done(void *ctx, int result, uint16_t sintran_error)
 {
     Got *g = (Got *)ctx;
@@ -83,11 +111,13 @@ int main(void)
     const char *spec = getenv("ND100X_HDLC_HOST");
     const char *file = getenv("ND100X_FA_FILE");
     const char *out_path = getenv("ND100X_FA_OUT");
+    const char *list = getenv("ND100X_FA_LIST");
     char host[128];
     uint16_t port;
-    if (spec == NULL || !parse_host(spec, host, sizeof host, &port) || file == NULL)
+    if (spec == NULL || !parse_host(spec, host, sizeof host, &port) ||
+        (file == NULL && list == NULL))
     {
-        printf("SKIPPED: set ND100X_HDLC_HOST=host:port and ND100X_FA_FILE=NAME:TYPE\n");
+        printf("SKIPPED: set ND100X_HDLC_HOST=host:port and ND100X_FA_FILE or ND100X_FA_LIST\n");
         return 2;
     }
     uint16_t own = env_u16("ND100X_OUR_NODE", 19999);
@@ -99,8 +129,9 @@ int main(void)
     XmsgLogPort sink = {NULL, log_sink};
     xmsg_log_set_sink(&sink);
     xmsg_log_set_all_levels(XMSG_LOG_INFO);
-    printf("[nd100x_fa] %s:%u as node %u: read %s from node %u (system %u) as %s\n", host,
-           (unsigned)port, (unsigned)own, file, (unsigned)peer, (unsigned)peer_system, user);
+    printf("[nd100x_fa] %s:%u as node %u: %s \"%s\" on node %u (system %u) as %s\n", host,
+           (unsigned)port, (unsigned)own, (list != NULL) ? "list" : "read",
+           (list != NULL) ? list : file, (unsigned)peer, (unsigned)peer_system, user);
 
     CHECK_EQ(test_tcp_startup(), 0);
     s_sock = test_tcp_connect_host(host, port);
@@ -138,7 +169,7 @@ int main(void)
         CHECK(got.out != NULL);
     }
     static FaClient client;
-    FaClientCallbacks fcb = {&got, on_opened, on_data, on_done};
+    FaClientCallbacks fcb = {&got, on_opened, on_data, on_done, on_directory, on_entry};
     CHECK_EQ(fa_client_init(&client, NULL, &fcb), XMSG_OK);
 
     uint32_t start = test_now_ms();
@@ -163,9 +194,18 @@ int main(void)
         xmsg_node_tick(&node, now);
         if (!started && xmsg_node_is_ready(&node))
         {
-            CHECK_EQ(fa_client_read(&client, &node, peer, peer_system, user, user, password, file,
-                                    now),
-                     XMSG_OK);
+            if (list != NULL)
+            {
+                CHECK_EQ(fa_client_list(&client, &node, peer, peer_system, user, user, password,
+                                        list, now),
+                         XMSG_OK);
+            }
+            else
+            {
+                CHECK_EQ(fa_client_read(&client, &node, peer, peer_system, user, user, password,
+                                        file, now),
+                         XMSG_OK);
+            }
             started = true;
         }
         test_tcp_wait_readable(s_sock, 10);
@@ -192,6 +232,10 @@ int main(void)
     CHECK_EQ(fa_client_state(&client), FA_CLIENT_DONE);
     CHECK(!got.out_of_order);
     CHECK_EQ(got.bytes, got.length);
+    if (list != NULL)
+    {
+        printf("  %u files\n", s_entries);
+    }
     CHECK_EQ(node.stats.bad_headers, 0);
     printf("  %u bytes in %u blocks, %u frames out, %u messages in, %u XENSE resends, %u ms\n",
            (unsigned)got.bytes, (unsigned)client.blocks, (unsigned)client.stats.frames_out,
