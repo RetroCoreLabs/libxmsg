@@ -328,7 +328,10 @@ sequenceDiagram
 ### Where XMSG came from
 
 XMSG was built for direct links between machines: an HDLC line, or Norsk Data's Megalink
-interface (the manuals list it beside HDLC but never say what it is). The link layer on those
+interface. Megalink is the same HDLC interface made faster: close to 1 Mbit/s, where the
+traditional HDLC interface topped out at about 300 kbit/s. Those speeds are for a direct
+point-to-point cable; a leased telephone line between sites was much slower, at most around
+64 kbit/s and often less. The link layer on those
 lines is XLAP, the "Mini LAPB" this library speaks. For years that was all there was. Norsk Data's
 Ethernet hardware and software came later, in the early-to-mid 1980s. The exact year is not dated
 in any manual we hold: 1983 or 1984 is a guess. Until then, a SINTRAN machine talked to another
