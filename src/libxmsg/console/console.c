@@ -170,7 +170,8 @@ static void wipe(ConsoleSession *s)
     s->phase = CONSOLE_PH_FREE;
 }
 
-/* Stop a running LIST or NAMES walk of a user who went away. */
+/* Stop a running LIST or NAMES walk, or a pending application command, of a user who went
+ * away. */
 static void walk_cancel(ConsoleSession *s)
 {
     const ConsoleServices *sv = &s->host->cfg.services;
@@ -184,6 +185,11 @@ static void walk_cancel(ConsoleSession *s)
     }
     s->listing = false;
     s->listing_names = false;
+    if (s->app_pending && sv->command_cancel != NULL)
+    {
+        sv->command_cancel(sv->ctx, s->place);
+    }
+    s->app_pending = false;
 }
 
 /* The core ends the line. The session is free at once: a close never comes with an onward
@@ -1125,14 +1131,33 @@ static bool app_command(ConsoleSession *s, const char *text)
     {
         return false;
     }
+    int rc;
     out[0] = '\0';
-    if (sv->command(sv->ctx, s->place, text, s->level, out, sizeof out) != 1)
+    rc = sv->command(sv->ctx, s->place, text, s->level, out, sizeof out);
+    if (rc != 1 && rc != 2)
     {
         return false;
     }
     out[sizeof out - 1u] = '\0'; /* whatever the application wrote, it ends here */
     say(s, out);
+    s->app_pending = (rc == 2);
     return true;
+}
+
+/* The escape key while an application command runs: stop it. */
+static void app_cancel(ConsoleSession *s)
+{
+    const ConsoleServices *sv = &s->host->cfg.services;
+    XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d: application command cancelled",
+             s->place);
+    s->app_pending = false;
+    if (sv->command_cancel != NULL)
+    {
+        sv->command_cancel(sv->ctx, s->place);
+    }
+    say(s, "\r\n<cancelled>\r\n");
+    term_line_clear(&s->edit);
+    show_prompt(s);
 }
 
 /* One line typed at the prompt. */
@@ -1144,6 +1169,11 @@ static void prompt_line(ConsoleSession *s, const char *text, uint32_t now_ms)
     if (s->listing)
     {
         say(s, s->listing_names ? "NAMES is still running\r\n" : "LIST is still running\r\n");
+        return;
+    }
+    if (s->app_pending)
+    {
+        say(s, "the command is still running; the escape key stops it\r\n");
         return;
     }
     switch (cmd)
@@ -1205,6 +1235,10 @@ static void prompt_line(ConsoleSession *s, const char *text, uint32_t now_ms)
         if (!app_command(s, text))
         {
             say(s, "unknown command; HELP lists them\r\n");
+        }
+        else if (s->app_pending)
+        {
+            return; /* the prompt comes back with console_command_done() */
         }
         break;
     }
@@ -1410,6 +1444,10 @@ void console_input(ConsoleSession *s, const uint8_t *bytes, size_t len, uint32_t
         {
             return; /* closed by the line just typed (EXIT): the rest is not ours */
         }
+        else if (s->app_pending && bytes[i] == 0x1Bu && !line_is(s, CONSOLE_LINE_ESCAPE_MSG))
+        {
+            app_cancel(s); /* the escape key, as a byte */
+        }
         else
         {
             line_byte(s, bytes[i], now_ms);
@@ -1427,6 +1465,11 @@ void console_escape(ConsoleSession *s)
     if (s != NULL && s->phase == CONSOLE_PH_SESSION)
     {
         onward_escape(s);
+    }
+    else if (s != NULL && s->app_pending)
+    {
+        app_cancel(s);
+        flush(s);
     }
 }
 
@@ -1543,6 +1586,51 @@ void console_onward_logout(ConsoleSession *s)
     XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d: the SINTRAN login ended", s->place);
     s->hangup_sent = true;
     s->host->cfg.services.onward_hangup(s->host->cfg.services.ctx, s->place);
+}
+
+int console_command_text(ConsoleSession *s, const char *text)
+{
+    size_t n;
+    size_t done = 0;
+    if (s == NULL || text == NULL || !s->app_pending || s->line.write == NULL)
+    {
+        return -1;
+    }
+    n = strlen(text);
+    while (done < n)
+    {
+        uint8_t chunk[64];
+        size_t k = ((n - done) < sizeof chunk) ? (n - done) : sizeof chunk;
+        int took;
+        for (size_t i = 0; i < k; i++)
+        {
+            uint8_t b = (uint8_t)text[done + i];
+            chunk[i] = line_is(s, CONSOLE_LINE_7BIT) ? console_7bit(b) : b;
+        }
+        took = s->line.write(s->line.ctx, chunk, k);
+        if (took > 0)
+        {
+            s->dirty = true;
+            done += (size_t)took;
+        }
+        if (took < (int)k)
+        {
+            break; /* the line is full: the application offers the rest later */
+        }
+    }
+    flush(s);
+    return (int)done;
+}
+
+void console_command_done(ConsoleSession *s)
+{
+    if (s == NULL || !s->app_pending)
+    {
+        return;
+    }
+    s->app_pending = false;
+    show_prompt(s);
+    flush(s);
 }
 
 void console_list_entry(ConsoleSession *s, const XroutRouteEntry *e)

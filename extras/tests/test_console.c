@@ -894,6 +894,73 @@ static void application_commands(void)
     }
 }
 
+/* An application command whose answer comes later (XMSGGW LIST-FILES over XMSG). */
+static int s_cancels;
+static int s_cancel_place;
+
+static int fn_command_later(void *ctx, int place, const char *line, AuthLevel level, char *out,
+                            size_t cap)
+{
+    (void)ctx;
+    (void)level;
+    (void)place;
+    if (strcmp(line, "list-files d100(system)") != 0)
+    {
+        return 0;
+    }
+    (void)snprintf(out, cap, "asking [D100]\r\n");
+    return 2;
+}
+
+static void fn_command_cancel(void *ctx, int place)
+{
+    (void)ctx;
+    s_cancels++;
+    s_cancel_place = place;
+}
+
+static void application_command_answered_later(void)
+{
+    FakeLine f;
+    ConsoleLine l = make_line(&f, 0);
+    ConsoleSession *s;
+    uint8_t esc = 0x1Bu;
+    setup(CONSOLE_MODE_PROMPT);
+    s_cancels = 0;
+    s_host.cfg.services.command = fn_command_later;
+    s_host.cfg.services.command_cancel = fn_command_cancel;
+    s = login(&f, &l, "alice", "pw");
+    clear(&f);
+    type(s, "list-files d100(system)\r", 3);
+    CHECK(has(&f, "asking [D100]\r\n"));
+    CHECK(!has(&f, "TAD> "));
+    CHECK_EQ(console_command_text(s, "  CHATLG2:SYMB  255\r\n"), 21);
+    type(s, "who\r", 3);
+    CHECK(has(&f, "still running"));
+    clear(&f);
+    console_command_done(s);
+    CHECK(has(&f, "TAD> "));
+    CHECK_EQ(console_command_text(s, "late\r\n"), -1); /* nothing running */
+    CHECK_EQ(s_cancels, 0);
+
+    /* The escape key as a byte stops it. */
+    type(s, "list-files d100(system)\r", 3);
+    clear(&f);
+    console_input(s, &esc, 1, 4);
+    CHECK_EQ(s_cancels, 1);
+    CHECK(has(&f, "<cancelled>\r\nTAD> "));
+    CHECK_EQ(console_command_text(s, "x\r\n"), -1);
+
+    /* As a message (TAD ESCA), and the user going away. */
+    type(s, "list-files d100(system)\r", 3);
+    console_escape(s);
+    CHECK_EQ(s_cancels, 2);
+    type(s, "list-files d100(system)\r", 3);
+    console_line_lost(s);
+    CHECK_EQ(s_cancels, 3);
+    CHECK_EQ(s_cancel_place, 0);
+}
+
 /* NAMES <system> asks that system; CONNECT and NAMES to our own system (19999 here) are refused
  * (XMSGGW, 2026-11-10: CONNECT 101 on node 101 hung). */
 static void names_of_a_system_and_own_system_refused(void)
@@ -942,6 +1009,7 @@ int main(void)
     seven_bit_own_echo_and_esca();
     trusted_admin_and_names();
     application_commands();
+    application_command_answered_later();
     names_of_a_system_and_own_system_refused();
     TEST_DONE();
 }

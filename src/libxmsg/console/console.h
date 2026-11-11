@@ -184,13 +184,24 @@ typedef struct ConsoleServices
      *  NULL. Returns the length written. */
     int (*info_more)(void *ctx, char *buf, size_t cap);
     /** The application's own commands. Called for a prompt line the core does not know, before
-     *  "unknown command", with the line as typed and the user's level. Returns 1 when the line
-     *  was the application's (`out` holds the text to print, zero-terminated, each line ended
-     *  by CR LF; the core applies the 7-bit rule and shows the prompt after it), or 0 when it
-     *  is not (the core says "unknown command"). The application checks the level itself.
-     *  NULL: no application commands. */
+     *  "unknown command", with the line as typed and the user's level. Returns:
+     *   1  the line was the application's and is finished: `out` holds the text to print,
+     *      zero-terminated, each line ended by CR LF; the core applies the 7-bit rule and
+     *      shows the prompt after it;
+     *   2  the line was the application's and its answer comes LATER (a file listing over
+     *      XMSG): `out` is printed now (may be empty), then the prompt waits. The application
+     *      gives the rest with console_command_text() and ends it with console_command_done().
+     *      While it runs, a typed line is answered "the command is still running", and the
+     *      escape key (TAD ESCA, or an ESC byte on a line without CONSOLE_LINE_ESCAPE_MSG)
+     *      stops it: the core calls command_cancel, prints "<cancelled>" and the prompt;
+     *   0  the line is not the application's (the core says "unknown command").
+     *  The application checks the level itself. NULL: no application commands. */
     int (*command)(void *ctx, int place, const char *line, AuthLevel level, char *out,
                    size_t cap);
+    /** Stop a command that answered 2: the user pressed the escape key or went away. No
+     *  console_command_done() is needed after it, and text fed after it is refused. May be
+     *  NULL only when command never answers 2. */
+    void (*command_cancel)(void *ctx, int place);
     /** HELP lines for the application's commands, shown to every user (CR LF ended). NULL:
      *  none. */
     const char *help_user;
@@ -276,6 +287,7 @@ typedef struct ConsoleSession
     bool hangup_sent;
     bool listing;        /**< a LIST or NAMES walk is running; the prompt waits for its end */
     bool listing_names;  /**< ... and it is NAMES */
+    bool app_pending;    /**< an application command answered 2; the prompt waits */
     bool far_echo_known; /**< OWN_ECHO line: the echo state last sent */
     bool far_echo;
     bool dirty; /**< output written since the last flush */
@@ -452,6 +464,25 @@ void console_names_row(ConsoleSession *s, const XroutNameRow *row);
  * @param rows   Rows reported.
  */
 void console_names_done(ConsoleSession *s, int result, unsigned rows);
+
+/**
+ * @brief More text of an application command that answered 2 (ConsoleServices.command).
+ *        CR LF ended lines; the 7-bit rule is applied as to the core's own text.
+ * @param s    Session.
+ * @param text The text, zero-terminated.
+ * @return How many bytes of `text` the line took. Fewer than strlen(text) means the line is
+ *         full now: keep the rest and offer it again later (from text + the count). -1 when
+ *         no command of this session is running (it was cancelled, or the user is gone): drop
+ *         the text.
+ */
+int console_command_text(ConsoleSession *s, const char *text);
+
+/**
+ * @brief The application command that answered 2 has finished: the prompt comes back.
+ *        Ignored when none is running.
+ * @param s Session.
+ */
+void console_command_done(ConsoleSession *s);
 
 /**
  * @brief The 7-bit text rule for one byte of the core's own text.
