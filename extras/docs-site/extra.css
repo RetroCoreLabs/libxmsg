@@ -37,3 +37,10 @@
   --md-code-hl-comment-color: rgba(0, 0, 0, 0.7);
   --md-footer-fg-color--lighter: rgba(255, 255, 255, 0.7);
 }
+
+/* A drawn diagram: centred, never wider than the column. */
+.md-typeset .mermaid-gh-drawn {
+  margin: 1em 0;
+  text-align: center;
+  overflow-x: auto;
+}

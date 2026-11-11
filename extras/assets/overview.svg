@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" role="img"
+     aria-labelledby="title desc">
+  <title id="title">libxmsg in one picture</title>
+  <desc id="desc">A telnet or FTP user connects over TCP to a small board or PC running libxmsg.
+    Inside it, sessions sit on the XMSG node, which sits on LAPB and HDLC framing. An HDLC line
+    joins the board to a SINTRAN III machine, real or emulated.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1e33"/>
+      <stop offset="1" stop-color="#00142a"/>
+    </linearGradient>
+    <linearGradient id="cab" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e91e63"/>
+      <stop offset="1" stop-color="#ad1457"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+            orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#e8edf2"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: #e8edf2; }
+    .h { font-size: 22px; font-weight: 600; }
+    .s { font-size: 15px; fill: #b8c4d0; }
+    .l { font-size: 16px; font-weight: 600; }
+    .dark { fill: #000; }
+    .mono { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 15px; }
+  </style>
+
+  <rect width="1200" height="420" rx="18" fill="url(#bg)"/>
+
+  <!-- The user: a laptop -->
+  <g transform="translate(60 120)">
+    <rect x="10" y="0" width="170" height="110" rx="8" fill="#2196f3" stroke="#1565c0" stroke-width="3"/>
+    <rect x="22" y="12" width="146" height="86" rx="3" fill="#0d2a4a"/>
+    <text x="32" y="40" class="mono" style="fill:#7fd4ff">telnet&gt; _</text>
+    <text x="32" y="64" class="mono" style="fill:#7fd4ff">TAD&gt; connect D100</text>
+    <path d="M0 118 H190 L176 132 H14 Z" fill="#1565c0"/>
+    <text x="95" y="170" text-anchor="middle" class="h">You</text>
+    <text x="95" y="194" text-anchor="middle" class="s">telnet, a console</text>
+  </g>
+
+  <!-- TCP -->
+  <line x1="262" y1="185" x2="400" y2="185" stroke="#3f51b5" stroke-width="6"/>
+  <line x1="262" y1="185" x2="398" y2="185" stroke="#e8edf2" stroke-width="2"
+        stroke-dasharray="8 6" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="331" y="168" text-anchor="middle" class="l">TCP</text>
+  <text x="331" y="212" text-anchor="middle" class="s">Wi-Fi or LAN</text>
+
+  <!-- The board running libxmsg -->
+  <g transform="translate(410 40)">
+    <rect x="0" y="0" width="360" height="300" rx="16" fill="#00695c" stroke="#009688" stroke-width="3"/>
+    <g fill="#c9d3dc">
+      <rect x="-10" y="40" width="10" height="8"/><rect x="-10" y="80" width="10" height="8"/>
+      <rect x="-10" y="120" width="10" height="8"/><rect x="-10" y="160" width="10" height="8"/>
+      <rect x="360" y="40" width="10" height="8"/><rect x="360" y="80" width="10" height="8"/>
+      <rect x="360" y="120" width="10" height="8"/><rect x="360" y="160" width="10" height="8"/>
+    </g>
+    <text x="180" y="34" text-anchor="middle" class="h">libxmsg</text>
+    <text x="180" y="56" text-anchor="middle" class="s" style="fill:#d6efe9">on an ESP32, a Pico or a PC</text>
+
+    <rect x="30" y="72" width="300" height="46" rx="8" fill="#009688" stroke="#4db6ac" stroke-width="2"/>
+    <text x="180" y="101" text-anchor="middle" class="l">Sessions: terminal, files, console</text>
+    <rect x="30" y="126" width="300" height="46" rx="8" fill="#009688" stroke="#4db6ac" stroke-width="2"/>
+    <text x="180" y="155" text-anchor="middle" class="l">XMSG node: datagrams, ACKs</text>
+    <rect x="30" y="180" width="300" height="46" rx="8" fill="#009688" stroke="#4db6ac" stroke-width="2"/>
+    <text x="180" y="209" text-anchor="middle" class="l">LAPB link, ND dialect</text>
+    <rect x="30" y="234" width="300" height="46" rx="8" fill="#ffa726" stroke="#f57c00" stroke-width="2"/>
+    <text x="180" y="263" text-anchor="middle" class="l dark">HDLC framing, FCS-16</text>
+  </g>
+
+  <!-- The HDLC line, with a frame on it -->
+  <line x1="780" y1="297" x2="920" y2="297" stroke="#9c27b0" stroke-width="6"/>
+  <line x1="780" y1="297" x2="918" y2="297" stroke="#e8edf2" stroke-width="2"
+        marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="850" y="270" text-anchor="middle" class="l">HDLC line</text>
+  <text x="850" y="326" text-anchor="middle" class="mono" style="fill:#e1bee7">7E ... 7E</text>
+
+  <!-- The SINTRAN machine: a cabinet -->
+  <g transform="translate(930 60)">
+    <rect x="0" y="0" width="200" height="280" rx="10" fill="url(#cab)" stroke="#880e4f" stroke-width="3"/>
+    <rect x="18" y="20" width="164" height="54" rx="4" fill="#1a1a1a"/>
+    <g fill="#ffd54f">
+      <circle cx="36" cy="40" r="4"/><circle cx="52" cy="40" r="4"/><circle cx="68" cy="40" r="4"/>
+      <circle cx="84" cy="40" r="4"/><circle cx="100" cy="40" r="4"/>
+    </g>
+    <g fill="#66bb6a">
+      <circle cx="36" cy="58" r="4"/><circle cx="52" cy="58" r="4"/><circle cx="100" cy="58" r="4"/>
+      <circle cx="116" cy="58" r="4"/><circle cx="148" cy="58" r="4"/>
+    </g>
+    <rect x="18" y="92" width="164" height="16" rx="3" fill="#880e4f"/>
+    <rect x="18" y="116" width="164" height="16" rx="3" fill="#880e4f"/>
+    <rect x="18" y="140" width="164" height="16" rx="3" fill="#880e4f"/>
+    <text x="100" y="200" text-anchor="middle" class="h">SINTRAN III</text>
+    <text x="100" y="224" text-anchor="middle" class="s" style="fill:#fce4ec">ND-100, real</text>
+    <text x="100" y="244" text-anchor="middle" class="s" style="fill:#fce4ec">or emulated</text>
+  </g>
+
+  <text x="600" y="390" text-anchor="middle" class="s">
+    One portable C library: log in to a Norsk Data machine as a terminal, list and fetch its files.
+  </text>
+</svg>

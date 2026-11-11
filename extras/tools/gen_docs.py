@@ -432,8 +432,13 @@ def main():
     os.makedirs(os.path.join(docs, 'assets'))
     shutil.copyfile(os.path.join(ROOT, 'extras/assets/libxmsg.svg'),
                     os.path.join(docs, 'assets/libxmsg.svg'))
-    shutil.copyfile(os.path.join(ROOT, 'extras/docs-site/extra.css'),
-                    os.path.join(docs, 'assets/extra.css'))
+    # The pictures the pages show, at the path the README uses.
+    for p in tracked('extras/assets/*'):
+        dest = os.path.join(docs, p)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copyfile(os.path.join(ROOT, p), dest)
+    for f in ('extra.css', 'mermaid-init.js'):
+        shutil.copyfile(os.path.join(ROOT, 'extras/docs-site', f), os.path.join(docs, 'assets', f))
 
     # Reference pages.
     headers = [p for p in tracked('src/*.h')]

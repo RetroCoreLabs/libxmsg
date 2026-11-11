@@ -57,6 +57,10 @@ plugins:
 extra_css:
   - assets/extra.css
 
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/mermaid@11.12.0/dist/mermaid.min.js
+  - assets/mermaid-init.js
+
 extra:
   social:
     - icon: fontawesome/brands/github
@@ -76,7 +80,13 @@ markdown_extensions:
   - footnotes
   - def_list
   - pymdownx.details
-  - pymdownx.superfences
+  # Mermaid blocks get the class mermaid-gh, which Material leaves alone, and
+  # assets/mermaid-init.js draws them as github.com does (see the reason in that file).
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid-gh
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight
   - pymdownx.tabbed:
       alternate_style: true

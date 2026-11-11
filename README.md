@@ -8,6 +8,8 @@
 **libxmsg is a small C library that lets a microcontroller or a PC talk to a Norsk Data SINTRAN III
 machine over XMSG: log in to it as a terminal, and (optionally) move files to and from it.**
 
+![A user on telnet reaches a board running libxmsg over TCP; the board reaches a SINTRAN III machine over an HDLC line](extras/assets/overview.svg)
+
 [What you can use it for](#what-you-can-use-it-for) · [Status](#status) · [Quick start](#quick-start) · [Building](#building-from-source) · [About XMSG](#about-xmsg) · [Documentation](#documentation)
 
 The reference for every call is on the [documentation site](https://retrocorelabs.github.io/libxmsg/);
@@ -44,6 +46,52 @@ supplies those through small tables of function pointers, which is what lets one
 serve an Arduino sketch, a Raspberry Pi Pico program and a PC test tool, and lets a unit test be the
 transport.
 
+```mermaid
+flowchart TB
+    APP["Your program: feeds bytes, calls tick, supplies the ports"]
+    subgraph LIB["libxmsg"]
+        SES["Sessions: TAD terminal, console, COSMOS file client"]
+        NODE["XMSG node: datagrams, ACKs, the Flags1 count"]
+        LAPB["LAPB link: ND dialect, window, retries"]
+        HD["HDLC framing: flags, escapes, FCS-16"]
+    end
+    TR["The line: TCP to nd100x, or an HDLC line"]
+    ND["SINTRAN III machine, real or nd100x"]
+
+    APP <--> SES <--> NODE <--> LAPB <--> HD <--> TR <--> ND
+
+    classDef ext   fill:#E91E63,stroke:#AD1457,stroke-width:2px,color:#fff
+    classDef wire  fill:#3F51B5,stroke:#283593,stroke-width:2px,color:#fff
+    classDef frame fill:#FFA726,stroke:#F57C00,stroke-width:2px,color:#000
+    classDef core  fill:#009688,stroke:#00695C,stroke-width:2px,color:#fff
+    classDef app   fill:#2196F3,stroke:#1565C0,stroke-width:2px,color:#fff
+
+    class ND ext
+    class TR wire
+    class HD frame
+    class SES,NODE,LAPB core
+    class APP app
+```
+
+The program owns the loop. The library never blocks and never waits; it only reacts:
+
+```mermaid
+flowchart TB
+    A["Bytes arrived on the line?"] -->|yes| B["xmsg_node_feed(bytes, now_ms)"]
+    A -->|no| C
+    B --> C["xmsg_node_tick(now_ms)<br/>timers, retries, due frames"]
+    C --> D["Callbacks into your program:<br/>bytes to write, host text, state changes"]
+    D --> A
+
+    classDef frame fill:#FFA726,stroke:#F57C00,stroke-width:2px,color:#000
+    classDef core  fill:#009688,stroke:#00695C,stroke-width:2px,color:#fff
+    classDef app   fill:#2196F3,stroke:#1565C0,stroke-width:2px,color:#fff
+
+    class A frame
+    class B,C core
+    class D app
+```
+
 ## What you can use it for
 
 - **A terminal server for a SINTRAN machine** - an ESP32 listens on TCP; each telnet client gets its
@@ -72,8 +120,31 @@ reachable.
   Replayed against a complete session captured between two real SINTRAN
   machines, every frame the library sends is byte-identical to the one the real asker sent.
 - **Telnet tool:** `examples/host_tad_telnet` gives each telnet client its own session.
-- **Still to come:** several sessions on microcontrollers, then COSMOS file access and the FTP
-  bridge.
+- **COSMOS file client** (`libcosmos`): read a file, list files and get file statistics. Checked
+  live on D100: files read byte for byte, a full listing of 253 files, and listings filtered by
+  name or type (`:SYMB`, `:MODE`).
+- **Still to come:** the ESP32 and Pico examples in this repository, the COSMOS file server,
+  writing a file, and the FTP bridge.
+
+A listing (LIST-FILES) and file statistics (FILE-STATISTICS) are the same walk through the
+directory; statistics just names one file. The server picks the matching files:
+
+```mermaid
+sequenceDiagram
+    participant C as libcosmos file client
+    participant F as *FA-SERVER on the SINTRAN machine
+    C->>F: letter to port 0: "*FA-SERVER" on system Dnnn
+    F->>C: connection confirm
+    C->>F: reserve (user and password)
+    loop until the server says "end of directory"
+        C->>F: next entry (the name to match, cursor)
+        F->>C: one file: name, type, size, dates
+    end
+    F->>C: refused with 197, end of directory (the normal end)
+    C->>F: release, then session finished
+    F->>C: close (this frees the server's seat)
+    Note over C,F: Every request and reply is also confirmed by a short acknowledgement.<br/>After the first file the client asks once for the directory and user names.
+```
 
 ## Prerequisites
 
@@ -97,6 +168,20 @@ ctest --test-dir build --output-on-failure
 To telnet to a SINTRAN machine, start nd100x with `--hdlc=1:1362`, define a link there for node
 19999, and run the tool. Then `telnet localhost 2300`:
 
+```mermaid
+flowchart LR
+    T["Telnet client"] -->|"TCP port 2300"| H["host_tad_telnet<br/>node 19999"]
+    H -->|"HDLC frames over TCP port 1362"| E["nd100x running SINTRAN III<br/>node 100, system D100"]
+
+    classDef app  fill:#2196F3,stroke:#1565C0,stroke-width:2px,color:#fff
+    classDef core fill:#009688,stroke:#00695C,stroke-width:2px,color:#fff
+    classDef ext  fill:#E91E63,stroke:#AD1457,stroke-width:2px,color:#fff
+
+    class T app
+    class H core
+    class E ext
+```
+
 ```bash
 build/examples/host_tad_telnet/host_tad_telnet --hdlc 127.0.0.1:1362 --node 19999 \
     --peer 100 --system D100 --listen 2300
@@ -117,6 +202,25 @@ At `TAD>`: `CONNECT <system>` (for example `CONNECT D102`), `LIST` (the routing 
 user must change it at the first login), `DELUSER name` (never the last admin) and `RESETPW name`
 (a new password, asked twice, that the user must change at the next login); other users get
 "not allowed". In both modes a dropped telnet connection hangs the TAD session up at once.
+
+In prompt mode a telnet user moves between these states:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Login: telnet connects
+    Login --> Login: wrong password (a short wait)
+    Login --> [*]: the tries are used up
+    Login --> NewPassword: logged in, must change
+    NewPassword --> Prompt: new password typed twice
+    Login --> Prompt: logged in
+    Prompt --> Session: CONNECT system
+    Session --> Prompt: SINTRAN LOGOUT, or the session ends
+    Prompt --> [*]: EXIT, LOGOUT or QUIT
+    Session --> [*]: telnet dropped (the session is hung up)
+    Prompt: TAD> command line
+    Session: TAD session on the SINTRAN machine
+    NewPassword: forced new password
+```
 
 Each user has a level: **admin** (may add and delete users, reset any password, change settings)
 or **user** (may use ND sessions and change their own password). A user marked "must change" is
@@ -182,6 +286,44 @@ COSMOS file servers and the routing service are all just tasks holding ports. Be
 the messages travel as datagrams over LAPB, a thin point-to-point link layer on a synchronous HDLC
 line. The machines are gone from service but not from existence: emulators run their disks, and a
 few real ones still power up, and this library is how a modern device joins their network.
+
+```mermaid
+flowchart TB
+    SVC["Services: TAD terminal access, COSMOS file servers, routing<br/>(tasks holding named ports)"]
+    XM["XMSG datagrams<br/>14-byte SINTRAN header, checksum, a count per peer, an ACK for each"]
+    LP["LAPB<br/>numbered frames, window, retries; the node number in every control frame"]
+    HL["HDLC line<br/>flags, escapes or bit stuffing, FCS-16"]
+    SVC --> XM --> LP --> HL
+
+    classDef core  fill:#009688,stroke:#00695C,stroke-width:2px,color:#fff
+    classDef media fill:#9C27B0,stroke:#7B1FA2,stroke-width:2px,color:#fff
+
+    class SVC,XM,LP core
+    class HL media
+```
+
+A terminal session (what SINTRAN's CONNECT-TO does, and what the library's TAD asker does) runs
+this ladder. Each data frame is also answered with an XMSG acknowledgement, not drawn:
+
+```mermaid
+sequenceDiagram
+    participant A as libxmsg TAD asker
+    participant T as *TADADM on the SINTRAN machine
+    participant S as The session port
+    A->>T: letter to port 0: "*TADADM" on system Dnnn
+    T->>A: accept (from the *TADADM port)
+    A->>T: session setup
+    T->>A: port assignment: the session port
+    S->>A: DUMM
+    A->>S: terminal setup, then ESCA
+    S->>A: ESRS, and RESE (each answered with RECO)
+    S->>A: banner, prompt, RFI: the user may type
+    loop while the user works
+        A->>S: typed text (BDAT)
+        S->>A: the host's text
+    end
+    A->>S: DCON: hang up
+```
 
 ## Documentation
 
