@@ -131,8 +131,18 @@ add_library(xmsg::xmsg ALIAS xmsg)
 # ---------------------------------------------------------------------------------------------
 # libcosmos (P6 onward)
 # ---------------------------------------------------------------------------------------------
+# COSMOS file access over XMSG: QFORM, the FA messages and the read client. Needs xmsg::xmsg.
 if(XMSG_WITH_COSMOS)
-    message(FATAL_ERROR "XMSG_WITH_COSMOS: libcosmos is not written yet (plan phase P6). Build without it.")
+    add_library(cosmos STATIC
+        libcosmos/qform/qform.c
+        libcosmos/sintran/sintran_password.c
+        libcosmos/fa/fa_envelope.c
+        libcosmos/fa/fa_requests.c
+        libcosmos/fa/fa_replies.c
+        libcosmos/fa/fa_client.c)
+    target_include_directories(cosmos PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(cosmos PUBLIC xmsg::xmsg PRIVATE house_warnings)
+    add_library(cosmos::cosmos ALIAS cosmos)
 endif()
 if(XMSG_WITH_FTP AND NOT XMSG_WITH_COSMOS)
     message(FATAL_ERROR "XMSG_WITH_FTP needs XMSG_WITH_COSMOS.")

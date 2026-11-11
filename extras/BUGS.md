@@ -25,6 +25,35 @@ capture a host program that sets a mixed table.
 uses 1; S3-CONFIG's screen sets 7 with BRKMAX 1 and a table of all ones, and after the first
 typed byte D100 sets 0.
 
+# libcosmos
+
+## C1 - the character after the apostrophe in a read open is not understood
+
+**Where:** `src/libcosmos/fa/fa_requests.c`, `fa_build_open_read()`.
+
+**What:** a read open names the file as `<spec>'` and one more character. RetroIO's reader sends
+`.` (from a capture of `BIGPSH3:TXT'.`) and has read files live with it. The D100 client in
+`capture-read.txt` sent `PATCH-FILE:OUT'T`, and in `capture-open-error.txt` `NO-SUCH-FILE:OUT'U`.
+libcosmos sends `.`. The unit test allows exactly this byte to differ from the capture and
+checks that ours is `.`.
+
+**Why it is open:** what the character means, and whether a server ever looks at it, is not
+known. What to do: find where the SINTRAN FA client (COSMOS) builds the open request, or capture
+the same file opened twice from two programs.
+
+## C2 - short-ack counter past 127 is not verified
+
+**Where:** `src/libcosmos/fa/fa_client.c`, `enqueue_ack()`.
+
+**What:** the client's short acks count 1, 2, 3, ... in the low byte of the counter field, bit 7
+clear. A read of N blocks sends about 3N + 6 of them, so a file over about 80 KB (40 blocks)
+reaches 0x80. The captures stop at 0x21. libcosmos counts on as an 8-bit number (as RetroIO's
+`FaClientConversation.NextAckCounter` does), so 0x80 and up go out with bit 7 set and the count
+wraps from 0xFF to 0x00.
+
+**Why it is open:** no capture of a transfer that long. What to do: capture a real client
+reading a file of 100 KB or more and read the counter of its 128th short ack.
+
 # libhdlc (moved in from RetroCoreLabs/libhdlc, 2026-11-10)
 
 

@@ -1,0 +1,622 @@
+/*
+ * test_cosmos_fa.c - libcosmos: QFORM, the password fold, and the FA read client replayed
+ * against a real SINTRAN file server's captured messages.
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Ronny Hansen
+ *
+ * The replays run two real nodes back to back on the in-memory pair. Node 100 carries our FA
+ * client. Node 102 plays the D102 file server: it sends the CAPTURED server messages, each one
+ * when our client has sent the message that came before it on the real machines, and it checks
+ * that every message our client sends equals the one the real D100 client sent, byte for byte.
+ * Two kinds of byte may differ, both named where they are allowed:
+ *   - the pad byte after F2 00FF: the real client sends whatever was in its buffer, we send 0;
+ *   - the character after the apostrophe in an open (BUGS.md C1): the real client sent "T" and
+ *     "U" in these captures; we send ".", as RetroIO's live-proven reader does.
+ */
+#include "libcosmos/fa/fa_client.h"
+#include "libcosmos/fa/fa_replies.h"
+#include "libcosmos/fa/fa_requests.h"
+#include "libcosmos/qform/qform.h"
+#include "libcosmos/sintran/sintran_password.h"
+#include "libxmsg/xmsg/xmsg_node.h"
+
+#include "pair/test_pair.h"
+#include "test_util.h"
+#include "vectors/fa_open_error_d100_d102.h"
+#include "vectors/fa_read_d100_d102.h"
+
+#define N_READ  (sizeof k_fa_read_events / sizeof k_fa_read_events[0])
+#define N_ERROR (sizeof k_fa_open_error_events / sizeof k_fa_open_error_events[0])
+
+/* The server's session port in the captures (the confirm and everything after come from it). */
+#define SERVER_PORT 0x06B6u
+
+/* ------------------------------------------------------------------ the password fold */
+
+static void password_fold_vectors(void)
+{
+    /* "secret" -> 6D 2A: the captured reserve of a read as user SECRET (RetroIO
+     * DOC/XMSG-FA-ACCESS-PASSWORD-ON-THE-WIRE-2026-07-29.md). Case does not matter. */
+    CHECK_EQ(sintran_password_fold("secret"), 0x6D2A);
+    CHECK_EQ(sintran_password_fold("SECRET"), 0x6D2A);
+    /* RetroIO SintranPassword tests: ORANGE = 14378, and digits go in raw ("12"). */
+    CHECK_EQ(sintran_password_fold("ORANGE"), 0x382A);
+    CHECK_EQ(sintran_password_fold("12"), 0x01BA);
+    CHECK_EQ(sintran_password_fold(""), 0);
+    CHECK_EQ(sintran_password_fold(NULL), 0);
+}
+
+/* ------------------------------------------------------------------ QFORM */
+
+static void qform_walks_into_constructed_values(void)
+{
+    uint8_t buf[128];
+    QformReader r;
+    QformItem it;
+    uint32_t v;
+    /* The fields of the captured reserve (02:29:11.129) after op and seq. */
+    int len = test_hex_to_bytes("F20001A207D0F200028C06920001920001F20003BD42414B3034202053595354"
+                                "454DF200FF",
+                                buf, sizeof buf);
+    static const uint8_t tags[] = {0xF2, 0xA2, 0xF2, 0x8C, 0x92, 0x92, 0xF2, 0xBD, 0xF2};
+    static const uint8_t depth[] = {0, 0, 0, 0, 1, 1, 0, 0, 0};
+    size_t got = 0;
+
+    qform_reader_init(&r, buf, (size_t)len);
+    while (qform_reader_next(&r, &it))
+    {
+        CHECK(got < sizeof tags);
+        if (got < sizeof tags)
+        {
+            CHECK_EQ(it.tag, tags[got]);
+            CHECK_EQ(it.depth, depth[got]);
+        }
+        got++;
+    }
+    CHECK_EQ(got, sizeof tags);
+    CHECK(!r.failed);
+    CHECK(qform_find_field(buf, (size_t)len, 3, &it));
+    CHECK_EQ(it.len, 13);
+    CHECK(memcmp(it.value, "BAK04  SYSTEM", 13) == 0);
+    CHECK(qform_find_field(buf, (size_t)len, 1, &it));
+    CHECK(qform_item_uint(&it, &v));
+    CHECK_EQ(v, 0x07D0);
+    CHECK(!qform_find_field(buf, (size_t)len, 9, &it));
+
+    /* The escape marker: 8C 80 05 is a five-byte constructed value (SetEndOfFile shape). */
+    len = test_hex_to_bytes("F200028C8005A400000123F200FF", buf, sizeof buf);
+    CHECK(qform_find_field(buf, (size_t)len, 2, &it));
+    CHECK_EQ(it.cls, QFORM_CLASS_CONSTRUCTED);
+    CHECK_EQ(it.len, 5);
+
+    /* A lone last byte is padding even with bit 7 set (SINTRAN pads with F0). */
+    len = test_hex_to_bytes("920008920005F200FFF0", buf, sizeof buf);
+    qform_reader_init(&r, buf, (size_t)len);
+    got = 0;
+    while (qform_reader_next(&r, &it))
+    {
+        got++;
+    }
+    CHECK_EQ(got, 3); /* 92, 92, F2 00FF; the F0 is not a tag */
+    CHECK(!r.failed);
+
+    /* A value that runs past the end is malformed. */
+    len = test_hex_to_bytes("B0100102", buf, sizeof buf);
+    qform_reader_init(&r, buf, (size_t)len);
+    CHECK(!qform_reader_next(&r, &it));
+    CHECK(r.failed);
+}
+
+static void qform_writer_forms(void)
+{
+    uint8_t buf[64];
+    uint8_t big[20];
+    QformWriter w;
+    size_t at;
+
+    qform_writer_init(&w, buf, sizeof buf);
+    qform_put_selector(&w, 2);
+    at = qform_begin_constructed(&w);
+    qform_put_tag16(&w, QFORM_TAG_INT16, 1);
+    qform_put_tag16(&w, QFORM_TAG_INT16, 1);
+    qform_end_constructed(&w, at);
+    qform_put_typed32(&w, 5);
+    CHECK(!w.failed);
+    CHECK_BYTES(buf, w.len, "F20002 8C06 920001 920001 A400000005");
+
+    memset(big, 'A', sizeof big);
+    qform_writer_init(&w, buf, sizeof buf);
+    qform_put_string(&w, big, 15);
+    CHECK_EQ(buf[0], 0xBF);
+    qform_writer_init(&w, buf, sizeof buf);
+    qform_put_string(&w, big, 16);
+    CHECK_EQ(buf[0], 0xB0);
+    CHECK_EQ(buf[1], 0x10);
+    qform_writer_init(&w, buf, sizeof buf);
+    qform_put_string(&w, big, 0);
+    CHECK(w.failed);
+    qform_writer_init(&w, buf, 3);
+    qform_put_typed32(&w, 1);
+    CHECK(w.failed);
+}
+
+/* ------------------------------------------------------------------ builders */
+
+static void replies_are_read(void)
+{
+    uint8_t buf[96];
+    FaReply r;
+    uint16_t fno;
+    uint32_t flen;
+    /* Captured open reply (02:29:12.489): file 0x40, 0x45F1 = 17905 bytes. */
+    int len = test_hex_to_bytes("07F00002810090BB920005920002F20002A20040F20003A4000045F1F200FF00",
+                                buf, sizeof buf);
+    CHECK(fa_reply_parse(buf, (size_t)len, &r));
+    CHECK_EQ(r.op, FA_OP_OPEN);
+    CHECK_EQ(r.seq, 2);
+    CHECK(!r.refused);
+    CHECK(fa_reply_open_info(&r, &fno, &flen));
+    CHECK_EQ(fno, 0x40);
+    CHECK_EQ(flen, 17905);
+    /* Captured refusal (capture-open-error.txt 02:37:42.349): error 46 = 0x2E. */
+    len = test_hex_to_bytes("07F00002810090BB920005920002F20001A2002EF200FFA4", buf, sizeof buf);
+    CHECK(fa_reply_parse(buf, (size_t)len, &r));
+    CHECK(r.refused);
+    CHECK_EQ(r.error, FA_ERR_NO_SUCH_FILE);
+    CHECK(strcmp(fa_error_name(r.error), "no such file") == 0);
+    CHECK(!fa_reply_parse(buf, 10, &r));
+}
+
+static void builders_refuse_what_does_not_fit(void)
+{
+    uint8_t buf[FA_REQUEST_MAX];
+    FaEnvelope e = {FA_TYPE_REQUEST, 0x42, 0x80, FA_TOKEN_CLIENT_FIRST};
+
+    CHECK_EQ(fa_build_reserve(buf, sizeof buf, &e, 1, "BAK04", "SYSTEM", "SYSTEM", 0), 112);
+    /* The asker field holds 15 bytes: "BAK04  " + 9 is too long. */
+    CHECK_EQ(fa_build_reserve(buf, sizeof buf, &e, 1, "BAK04", "LONGUSERS", "SYSTEM", 0), 0);
+    /* The remote user needs its apostrophe inside 16: 15 letters fit. "BAK04  A" is 5 bytes
+     * shorter than "BAK04  SYSTEM", so 107, padded to 108. */
+    CHECK_EQ(fa_build_reserve(buf, sizeof buf, &e, 1, "BAK04", "A", "SIXTEEN-LETTERS", 0), 108);
+    CHECK_EQ(fa_build_reserve(buf, sizeof buf, &e, 1, "BAK04", "A", "SIXTEEN-LETTERSX", 0), 0);
+    CHECK_EQ(fa_build_reserve(buf, 100, &e, 1, "BAK04", "SYSTEM", "SYSTEM", 0), 0);
+    /* An odd system name in the letter would need a fill byte no capture shows. */
+    CHECK_EQ(fa_build_connect_letter(buf, sizeof buf, "D99", 2), 0);
+    CHECK_EQ(fa_build_connect_letter(buf, sizeof buf, "D102", 2), 34);
+    /* The password word lands big-endian in its slot. */
+    CHECK_EQ(fa_build_reserve(buf, sizeof buf, &e, 1, "BAK03", "SYSTEM", "SECRET",
+                              sintran_password_fold("secret")),
+             112);
+    CHECK_EQ(buf[75], 0x6D);
+    CHECK_EQ(buf[76], 0x2A);
+}
+
+/* ------------------------------------------------------------------ two nodes */
+
+#define MAX_SEEN 16
+
+typedef struct Server
+{
+    uint8_t bodies[MAX_SEEN][FA_DATA_MESSAGE_SIZE];
+    size_t lens[MAX_SEEN];
+    XmsgSubhdr subs[MAX_SEEN];
+    size_t head;
+    size_t count;
+} Server;
+
+typedef struct Sink
+{
+    uint8_t file[32768];
+    uint32_t got;      /* bytes in order */
+    bool out_of_order;
+    uint32_t opened_length;
+    int opened_calls;
+    int done_calls;
+    int result;
+    uint16_t sintran_error;
+} Sink;
+
+static XmsgNode s_a; /* our client's machine, node 100 */
+static XmsgNode s_b; /* the file server, node 102 */
+static TestPair s_pair;
+static TestPairPort s_port_a;
+static TestPairPort s_port_b;
+static Server s_server;
+static Sink s_sink;
+static FaClient s_client;
+
+static void server_keep(void *ctx, const XmsgDatagram *dg)
+{
+    Server *sv = (Server *)ctx;
+    size_t slot;
+
+    if (sv->count >= MAX_SEEN || dg->body_len > sizeof sv->bodies[0])
+    {
+        CHECK(false);
+        return;
+    }
+    slot = (sv->head + sv->count) % MAX_SEEN;
+    memcpy(sv->bodies[slot], dg->body, dg->body_len);
+    sv->lens[slot] = dg->body_len;
+    sv->subs[slot] = dg->sub;
+    sv->count++;
+}
+
+static void server_on_letter(void *ctx, const XmsgDatagram *dg, uint32_t now_ms)
+{
+    (void)now_ms;
+    server_keep(ctx, dg);
+}
+
+static void sink_opened(void *ctx, uint32_t length)
+{
+    Sink *k = (Sink *)ctx;
+    k->opened_length = length;
+    k->opened_calls++;
+}
+
+static void sink_data(void *ctx, uint32_t offset, const uint8_t *bytes, size_t n)
+{
+    Sink *k = (Sink *)ctx;
+    if (offset != k->got || offset + n > sizeof k->file)
+    {
+        k->out_of_order = true;
+        return;
+    }
+    memcpy(k->file + offset, bytes, n);
+    k->got += (uint32_t)n;
+}
+
+static void sink_done(void *ctx, int result, uint16_t sintran_error)
+{
+    Sink *k = (Sink *)ctx;
+    k->done_calls++;
+    k->result = result;
+    k->sintran_error = sintran_error;
+}
+
+static void pump(uint32_t now)
+{
+    uint8_t chunk[256];
+    size_t n;
+    xmsg_node_tick(&s_a, now);
+    xmsg_node_tick(&s_b, now);
+    while ((n = test_pair_read(&s_pair, 0, chunk, sizeof chunk)) > 0)
+    {
+        xmsg_node_feed(&s_a, chunk, n, now);
+    }
+    while ((n = test_pair_read(&s_pair, 1, chunk, sizeof chunk)) > 0)
+    {
+        xmsg_node_feed(&s_b, chunk, n, now);
+    }
+}
+
+static uint32_t bring_up(void)
+{
+    XmsgTransportPort ta;
+    XmsgTransportPort tb;
+    XmsgNodeConfig cfg;
+    XmsgPorts ports;
+    XmsgNodeCallbacks cb;
+    uint32_t now = 0;
+
+    memset(&s_server, 0, sizeof s_server);
+    memset(&s_sink, 0, sizeof s_sink);
+    test_pair_init(&s_pair);
+    test_pair_transport(&s_pair, 0, &s_port_a, &ta);
+    test_pair_transport(&s_pair, 1, &s_port_b, &tb);
+
+    xmsg_node_config_default(&cfg, 100);
+    cfg.lapb.t1_ms = 50;
+    cfg.settle_ms = 20;
+    memset(&ports, 0, sizeof ports);
+    ports.transport = ta;
+    memset(&cb, 0, sizeof cb);
+    CHECK_EQ(xmsg_node_init(&s_a, &cfg, &ports, &cb), XMSG_OK);
+
+    xmsg_node_config_default(&cfg, 102);
+    cfg.lapb.t1_ms = 50;
+    cfg.settle_ms = 20;
+    cfg.reject_closed_ports = false; /* a tap: every datagram comes up unhandled */
+    memset(&ports, 0, sizeof ports);
+    ports.transport = tb;
+    memset(&cb, 0, sizeof cb);
+    cb.ctx = &s_server;
+    cb.on_letter = server_on_letter;
+    cb.unhandled = server_keep;
+    CHECK_EQ(xmsg_node_init(&s_b, &cfg, &ports, &cb), XMSG_OK);
+
+    xmsg_node_link_start(&s_a, now);
+    xmsg_node_link_start(&s_b, now);
+    while (!(xmsg_node_is_ready(&s_a) && xmsg_node_is_ready(&s_b)) && now < 5000)
+    {
+        now++;
+        pump(now);
+    }
+    CHECK(xmsg_node_is_ready(&s_a) && xmsg_node_is_ready(&s_b));
+    return now;
+}
+
+static void client_start(const FaClientConfig *cfg, const char *spec, uint32_t now)
+{
+    FaClientCallbacks cb = {&s_sink, sink_opened, sink_data, sink_done};
+    CHECK_EQ(fa_client_init(&s_client, cfg, &cb), XMSG_OK);
+    CHECK_EQ(fa_client_read(&s_client, &s_a, 102, 102, "SYSTEM", "SYSTEM", "", spec, now),
+             XMSG_OK);
+}
+
+/* Send one server message from node 102 to our client's port. XMSG_EAGAIN when the window is
+ * full (a data message takes two frames). */
+static int server_send(const uint8_t *body, size_t len, uint32_t now)
+{
+    XmsgSubhdr sub;
+    uint8_t *buf;
+    size_t cap;
+    int rc = xmsg_node_send_begin(&s_b, &buf, &cap);
+    if (rc != XMSG_OK)
+    {
+        return rc;
+    }
+    memcpy(buf, body, len);
+    memset(&sub, 0, sizeof sub);
+    sub.frame_flags = XMSG_FF_CONTROL_BARE; /* as captured: 82/84 */
+    sub.role = FA_ROLE_DATA;
+    sub.dst_system = 100;
+    sub.dst_port = s_client.base.local_port;
+    sub.src_port = SERVER_PORT;
+    sub.xmcsm = (uint16_t)len;
+    rc = xmsg_node_send_commit(&s_b, 100, &sub, len, now, NULL);
+    if (rc != XMSG_OK)
+    {
+        xmsg_node_send_cancel(&s_b);
+    }
+    return rc;
+}
+
+/* Index of the F2 00 FF that ends a request's field list, or 0. */
+static size_t end_of_fields(const uint8_t *b, size_t n)
+{
+    for (size_t i = n; i >= 3; i--)
+    {
+        if (b[i - 3] == 0xF2 && b[i - 2] == 0x00 && b[i - 1] == 0xFF)
+        {
+            return i - 3;
+        }
+    }
+    return 0;
+}
+
+/* Compare what our client sent with what the real client sent (see the file comment). */
+static void check_client_message(const uint8_t *ours, size_t ours_len, const XmsgSubhdr *sub,
+                                 const char *captured_hex)
+{
+    uint8_t want[FA_DATA_MESSAGE_SIZE];
+    uint8_t got[FA_DATA_MESSAGE_SIZE];
+    int len = test_hex_to_bytes(captured_hex, want, sizeof want);
+    size_t end;
+
+    CHECK_EQ(ours_len, len);
+    if (ours_len != (size_t)len)
+    {
+        CHECK_BYTES(ours, ours_len, captured_hex);
+        return;
+    }
+    memcpy(got, ours, ours_len);
+    end = end_of_fields(want, (size_t)len);
+    if (want[0] == 0x07 && want[1] == 0xF0 && end > 0)
+    {
+        if (end + 3u == (size_t)len - 1u)
+        {
+            CHECK_EQ(got[len - 1], 0x00); /* our pad */
+            got[len - 1] = want[len - 1];
+        }
+        if (want[9] == 0x00 && want[10] == FA_OP_OPEN)
+        {
+            CHECK_EQ(got[end - 1], '.'); /* BUGS.md C1 */
+            got[end - 1] = want[end - 1];
+        }
+    }
+    CHECK_BYTES(got, ours_len, captured_hex);
+    /* The sub-header as captured: the letter 86/E4 to port 0, the rest 82/84; XMCSM = length. */
+    if (want[0] == 0x1B)
+    {
+        CHECK_EQ(sub->frame_flags, XMSG_FF_SETUP);
+        CHECK_EQ(sub->role, FA_ROLE_LETTER);
+        CHECK_EQ(sub->dst_port, 0);
+    }
+    else
+    {
+        CHECK_EQ(sub->frame_flags, XMSG_FF_CONTROL_BARE);
+        CHECK_EQ(sub->role, FA_ROLE_DATA);
+        CHECK_EQ(sub->dst_port, SERVER_PORT);
+    }
+    CHECK_EQ(sub->dst_system, 102);
+    CHECK_EQ(sub->xmcsm, ours_len);
+}
+
+/* The first client event at or after i, or n. */
+static size_t next_client_event(const FaVectorEvent *ev, size_t n, size_t i)
+{
+    while (i < n && ev[i].who != 'C')
+    {
+        i++;
+    }
+    return i;
+}
+
+/* Play a captured conversation: our client against the captured server. A server message is
+ * sent once every client message before it in the capture has arrived; the client's messages
+ * must come in the captured order. How the two streams interleave in time is not part of the
+ * protocol (a short ack can overtake a data message on the real wire too), so it is not
+ * checked. Returns true when every event was used. `dup_confirm` sends the confirm twice. */
+static bool replay(const FaVectorEvent *ev, size_t n, const char *spec, bool dup_confirm)
+{
+    FaClientConfig cfg;
+    uint32_t now = bring_up();
+    uint32_t until = now + 60000u;
+    size_t c_idx = next_client_event(ev, n, 0);
+    size_t s_idx = 0;
+    bool dup_sent = false;
+    uint8_t body[FA_DATA_MESSAGE_SIZE];
+
+    fa_client_config_default(&cfg);
+    client_start(&cfg, spec, now);
+    while (now < until && s_sink.done_calls == 0)
+    {
+        now++;
+        pump(now);
+        while (s_server.count > 0)
+        {
+            size_t slot = s_server.head;
+            CHECK(c_idx < n);
+            if (c_idx < n)
+            {
+                check_client_message(s_server.bodies[slot], s_server.lens[slot],
+                                     &s_server.subs[slot], ev[c_idx].hex);
+                c_idx = next_client_event(ev, n, c_idx + 1u);
+            }
+            s_server.head = (s_server.head + 1u) % MAX_SEEN;
+            s_server.count--;
+        }
+        while (s_idx < n)
+        {
+            int len;
+            if (ev[s_idx].who == 'C')
+            {
+                if (s_idx >= c_idx)
+                {
+                    break; /* that client message has not come yet */
+                }
+                s_idx++;
+                continue;
+            }
+            len = test_hex_to_bytes(ev[s_idx].hex, body, sizeof body);
+            if (server_send(body, (size_t)len, now) != XMSG_OK)
+            {
+                break; /* window full: next millisecond */
+            }
+            if (dup_confirm && !dup_sent && body[0] == 0x07 && body[1] == 0xD2)
+            {
+                dup_sent = true;
+                continue; /* the same confirm again on the next pass */
+            }
+            s_idx++;
+        }
+    }
+    /* Let the last acknowledgements settle. */
+    for (uint32_t i = 0; i < 200u; i++)
+    {
+        now++;
+        pump(now);
+    }
+    CHECK_EQ(c_idx, n);
+    CHECK_EQ(s_idx, n);
+    return c_idx == n && s_idx == n;
+}
+
+static void read_replays_the_capture(void)
+{
+    uint8_t body[FA_DATA_MESSAGE_SIZE];
+    uint8_t want[32768];
+    uint32_t want_len = 0;
+    CHECK(replay(k_fa_read_events, N_READ, "PATCH-FILE:OUT", false));
+    CHECK_EQ(s_sink.done_calls, 1);
+    CHECK_EQ(s_sink.result, 0);
+    CHECK_EQ(s_sink.sintran_error, 0);
+    CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_DONE);
+    CHECK_EQ(s_sink.opened_calls, 1);
+    CHECK_EQ(s_sink.opened_length, 17905);
+    CHECK_EQ(s_client.blocks, 9);
+    CHECK(s_client.has_object_entry);
+    CHECK(!s_sink.out_of_order);
+    /* The file is the 1024-byte payloads of the captured data messages, in order, cut at the
+     * length the open reply gave. */
+    for (size_t i = 0; i < N_READ; i++)
+    {
+        int len = test_hex_to_bytes(k_fa_read_events[i].hex, body, sizeof body);
+        if (k_fa_read_events[i].who == 'S' && len == (int)FA_DATA_MESSAGE_SIZE)
+        {
+            memcpy(want + want_len, body + FA_ENVELOPE_SIZE, FA_DATA_BYTES);
+            want_len += FA_DATA_BYTES;
+        }
+    }
+    CHECK_EQ(want_len, 18 * FA_DATA_BYTES);
+    CHECK_EQ(s_sink.got, 17905);
+    CHECK(memcmp(s_sink.file, want, 17905) == 0);
+    /* The session is gone from the node once the server closed. */
+    CHECK(!s_client.base.attached);
+    CHECK_EQ(s_client.stats.ignored, 0);
+}
+
+static void refused_open_still_gives_the_seat_back(void)
+{
+    CHECK(replay(k_fa_open_error_events, N_ERROR, "NO-SUCH-FILE:OUT", false));
+    CHECK_EQ(s_sink.done_calls, 1);
+    CHECK_EQ(s_sink.result, FA_CLIENT_EREFUSED);
+    CHECK_EQ(s_sink.sintran_error, FA_ERR_NO_SUCH_FILE);
+    CHECK_EQ(s_sink.opened_calls, 0);
+    CHECK_EQ(s_sink.got, 0);
+    CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_DONE);
+}
+
+static void repeated_confirm_changes_nothing(void)
+{
+    CHECK(replay(k_fa_read_events, N_READ, "PATCH-FILE:OUT", true));
+    CHECK_EQ(s_sink.result, 0);
+    CHECK_EQ(s_sink.got, 17905);
+    CHECK_EQ(s_client.stats.ignored, 1);
+}
+
+static void silent_server_times_out(void)
+{
+    FaClientConfig cfg;
+    uint32_t now = bring_up();
+    uint32_t until;
+
+    fa_client_config_default(&cfg);
+    cfg.reply_timeout_ms = 2000;
+    client_start(&cfg, "PATCH-FILE:OUT", now);
+    until = now + 5000u;
+    while (now < until && s_sink.done_calls == 0)
+    {
+        now++;
+        pump(now);
+        s_server.count = 0; /* the server hears the letter and says nothing */
+    }
+    CHECK_EQ(s_sink.done_calls, 1);
+    CHECK_EQ(s_sink.result, XMSG_ETIMEDOUT);
+    CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_FAILED);
+    CHECK(!s_client.base.attached);
+    /* A finished client can start again. */
+    CHECK_EQ(fa_client_read(&s_client, &s_a, 102, 102, "SYSTEM", "SYSTEM", "", "X:Y", now),
+             XMSG_OK);
+    CHECK_EQ(fa_client_read(&s_client, &s_a, 102, 102, "SYSTEM", "SYSTEM", "", "X:Y", now),
+             XMSG_ESTATE);
+}
+
+static void bad_arguments_are_refused(void)
+{
+    FaClient c;
+    (void)fa_client_init(&c, NULL, NULL);
+    CHECK_EQ(fa_client_read(&c, NULL, 102, 102, "A", "A", "", "X:Y", 0), XMSG_EINVAL);
+    CHECK_EQ(fa_client_read(&c, &s_a, 0, 102, "A", "A", "", "X:Y", 0), XMSG_EINVAL);
+    CHECK_EQ(fa_client_read(&c, &s_a, 102, 102, "A", "A", "", "", 0), XMSG_EINVAL);
+    CHECK_EQ(fa_client_read(&c, &s_a, 102, 102, NULL, "A", "", "X:Y", 0), XMSG_EINVAL);
+    CHECK_EQ(fa_client_state(&c), FA_CLIENT_IDLE);
+}
+
+int main(void)
+{
+    password_fold_vectors();
+    qform_walks_into_constructed_values();
+    qform_writer_forms();
+    replies_are_read();
+    builders_refuse_what_does_not_fit();
+    read_replays_the_capture();
+    refused_open_still_gives_the_seat_back();
+    repeated_confirm_changes_nothing();
+    silent_server_times_out();
+    bad_arguments_are_refused();
+    TEST_DONE();
+}
