@@ -328,14 +328,16 @@ sequenceDiagram
 ### Where XMSG came from
 
 XMSG was built for direct links between machines: an HDLC line, or Norsk Data's Megalink
-interface. Megalink is the same HDLC interface made faster: close to 1 Mbit/s, where the
-traditional HDLC interface topped out at about 300 kbit/s. Those speeds are for a direct
-point-to-point cable; a leased telephone line between sites was much slower, at most around
-64 kbit/s and often less. The link layer on those
-lines is XLAP, the "Mini LAPB" this library speaks. For years that was all there was. Norsk Data's
-Ethernet hardware and software came later, in the early-to-mid 1980s. The exact year is not dated
-in any manual we hold: 1983 or 1984 is a guess. Until then, a SINTRAN machine talked to another
-SINTRAN machine over an HDLC line, or not at all.
+interface. The link layer on those lines is XLAP, the "Mini LAPB" this library speaks. For years
+that was all there was. Norsk Data's Ethernet hardware and software came later, in the
+early-to-mid 1980s. The exact year is not dated in any manual we hold: 1983 or 1984 is a guess.
+Until then, a SINTRAN machine talked to another SINTRAN machine over an HDLC line, or not at all.
+
+Megalink (ND 734) uses the same HDLC frame format as the ordinary HDLC DMA card (ND 730), but adds
+a busy line for flow control. That lets it reach about 983 kbit/s full duplex between two Megalink
+cards, against 307 kbit/s for the plain HDLC DMA card. The older HDLC card, driven by the CPU
+instead of DMA, topped out at 19.2 kbit/s. All of these are point-to-point links. Leased and public
+lines between sites were far slower, from 9.6 up to about 64 kbit/s.
 
 When other networks did come, XMSG did not change. The COSMOS Programmer Guide says XMSG "allows
 one to replace an HDLC/Megalink with any other network that offers the same facilities". It does
