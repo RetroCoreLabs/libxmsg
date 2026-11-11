@@ -325,6 +325,30 @@ sequenceDiagram
     A->>S: DCON: hang up
 ```
 
+### Where XMSG came from
+
+XMSG was built for direct links between machines: an HDLC line, or Norsk Data's Megalink
+interface (the manuals list it beside HDLC but never say what it is). The link layer on those
+lines is XLAP, the "Mini LAPB" this library speaks. For years that was all there was. Norsk Data's
+Ethernet hardware and software came later, in the early-to-mid 1980s. The exact year is not dated
+in any manual we hold: 1983 or 1984 is a guess. Until then, a SINTRAN machine talked to another
+SINTRAN machine over an HDLC line, or not at all.
+
+When other networks did come, XMSG did not change. The COSMOS Programmer Guide says XMSG "allows
+one to replace an HDLC/Megalink with any other network that offers the same facilities". It does
+that with a network server: a program that takes the frames XMSG would have sent over the line and
+carries them over another network. There were three of them:
+
+- **X.25**, for wide-area networks, part of the COSMOS X.25 Option. Its Operator Guide is dated
+  January 1984, and it replaces an older X.25 guide that we do not have. So X.25 came earlier, but
+  we cannot say when.
+- **X.21**, also for wide-area networks. Its Operator Guide is dated June 1984.
+- **Ethernet**, for a local network.
+
+So the HDLC line is not a side road. It is the way XMSG worked first, and for some years the only
+way it worked. A device that speaks XMSG over HDLC, as this library does, joins the network
+the way the machines themselves first did.
+
 ## Documentation
 
 - The documentation site, [retrocorelabs.github.io/libxmsg](https://retrocorelabs.github.io/libxmsg/):
