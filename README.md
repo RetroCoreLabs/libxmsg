@@ -10,6 +10,9 @@ machine over XMSG: log in to it as a terminal, and (optionally) move files to an
 
 [What you can use it for](#what-you-can-use-it-for) · [Status](#status) · [Quick start](#quick-start) · [Building](#building-from-source) · [About XMSG](#about-xmsg) · [Documentation](#documentation)
 
+The reference for every call is on the [documentation site](https://retrocorelabs.github.io/libxmsg/);
+the source, issues and releases are on [GitHub](https://github.com/RetroCoreLabs/libxmsg).
+
 ```c
 #include "libxmsg/xmsg.h"
 
@@ -182,6 +185,8 @@ few real ones still power up, and this library is how a modern device joins thei
 
 ## Documentation
 
+- The documentation site, [retrocorelabs.github.io/libxmsg](https://retrocorelabs.github.io/libxmsg/):
+  one page per header, made from its comments, an index of every call, and the notes below.
 - The protocol registry this library is generated from: `extras/protocols/` (a vendored copy; the
   original lives in the RetroIO and NDInsight repositories).
 - The C# reference implementation: the `RetroIO.Protocols.Xmsg` packages in the RetroIO repository.

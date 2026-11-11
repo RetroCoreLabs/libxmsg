@@ -1,0 +1,89 @@
+# The libxmsg documentation site: https://retrocorelabs.github.io/libxmsg/
+#
+# Why MkDocs: libxmsg is C, and the reference pages come from its header comments through a
+# project script (extras/tools/gen_docs.py); DocFX reads only C#. MkDocs Material gives the
+# page tree, search and dark mode, and renders the same Markdown github.com shows.
+#
+# This file holds the settings. The pages and the menu are written into build-site/ by the
+# generator, whose mkdocs.yml inherits this one. Build it the way CI does:
+#   pip install -r extras/docs-site/requirements.txt
+#   python3 extras/tools/gen_docs.py build-site
+#   mkdocs build --strict -f build-site/mkdocs.yml -d <a folder outside the checkout>
+site_name: libxmsg
+site_description: Portable C libraries that talk XMSG to a Norsk Data SINTRAN III machine
+site_url: https://retrocorelabs.github.io/libxmsg/
+repo_url: https://github.com/RetroCoreLabs/libxmsg
+repo_name: RetroCoreLabs/libxmsg
+# The pages are generated, so "edit this page" would point at files that do not exist.
+edit_uri: ""
+
+theme:
+  name: material
+  logo: assets/libxmsg.svg
+  favicon: assets/libxmsg.svg
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+  features:
+    - navigation.indexes
+    - navigation.path
+    - navigation.top
+    - navigation.footer
+    - navigation.prune
+    - search.suggest
+    - search.highlight
+    - toc.follow
+    - content.code.copy
+
+plugins:
+  - search
+
+extra_css:
+  - assets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/RetroCoreLabs/libxmsg
+      name: libxmsg on GitHub
+
+markdown_extensions:
+  - toc:
+      permalink: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - tables
+  - attr_list
+  - md_in_html
+  - admonition
+  - footnotes
+  - def_list
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.tabbed:
+      alternate_style: true
+  - mdx_truly_sane_lists:
+      nested_indent: 2
+
+validation:
+  links:
+    not_found: warn
+    anchors: warn

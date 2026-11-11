@@ -90,6 +90,20 @@ be edited. Change the registry upstream (RetroIO / NDInsight), refresh the vendo
 The README follows the RetroCore Labs template: one sentence at the top that a stranger to the
 subject understands, a code example early, install before build-from-source, licence last.
 
+The documentation site (retrocorelabs.github.io/libxmsg) is written from the headers: the
+comment block at the top of each header and the `/** ... */` block before each declaration
+become its reference page. To change a page, change the comment in the header. Nothing
+generated is committed; `.github/workflows/docs.yml` builds and publishes it on every push to
+main. To build it yourself, from the repository root, with Python 3.11 or newer:
+
+```sh
+pip install -r extras/docs-site/requirements.txt
+python3 extras/tools/gen_docs.py build-site
+mkdocs build --strict -f build-site/mkdocs.yml -d <a folder outside the checkout>
+```
+
+A warning fails the build: a link that goes nowhere is a dead link on the live site.
+
 ---
 
 ## Submitting a change
