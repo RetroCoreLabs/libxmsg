@@ -42,6 +42,26 @@ static size_t finish(QformWriter *w)
     return w->failed ? 0u : w->len;
 }
 
+/* 8C 80 <len>: a constructed value with its length in the marker form, as the real client
+ * writes it on its walk requests. The length is filled in by end_marked(). */
+static size_t begin_marked(QformWriter *w)
+{
+    size_t at = w->len;
+    qform_put_u8(w, QFORM_TAG_CONSTRUCTED);
+    qform_put_u8(w, 0x80u);
+    qform_put_u8(w, 0);
+    return at;
+}
+
+static void end_marked(QformWriter *w, size_t at)
+{
+    if (w->failed)
+    {
+        return;
+    }
+    w->buf[at + 2u] = (uint8_t)(w->len - at - 3u);
+}
+
 /* A user name in a 16-byte slot: the name, an apostrophe, zeros. */
 static void put_user_slot(QformWriter *w, const char *name, size_t len)
 {
@@ -176,6 +196,85 @@ size_t fa_build_open_read(uint8_t *out, size_t cap, const FaEnvelope *env, uint1
     return finish(&w);
 }
 
+size_t fa_build_open_write(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
+                           const char *spec)
+{
+    uint8_t text[255];
+    size_t len;
+    QformWriter w;
+
+    if (out == NULL || env == NULL || spec == NULL)
+    {
+        return 0;
+    }
+    len = strlen(spec);
+    if (len == 0u || len + 4u > sizeof text)
+    {
+        return 0;
+    }
+    text[0] = (uint8_t)'"';
+    memcpy(text + 1, spec, len);
+    text[len + 1u] = (uint8_t)'"';
+    text[len + 2u] = (uint8_t)'\'';
+    text[len + 3u] = (uint8_t)'W';
+    qform_writer_init(&w, out, cap);
+    put_head(&w, env, FA_OP_OPEN, seq);
+    qform_put_selector(&w, 2);
+    qform_put_string(&w, text, len + 4u);
+    qform_put_selector(&w, 3);
+    qform_put_tag16(&w, QFORM_TAG_INT16, 1);
+    return finish(&w);
+}
+
+size_t fa_build_write_block(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
+                            uint32_t block)
+{
+    QformWriter w;
+
+    if (out == NULL || env == NULL)
+    {
+        return 0;
+    }
+    qform_writer_init(&w, out, cap);
+    put_head(&w, env, FA_OP_WRITE, seq);
+    qform_put_selector(&w, 1);
+    qform_put_typed32(&w, block);
+    return finish(&w);
+}
+
+size_t fa_build_set_end_of_file(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
+                                uint32_t length)
+{
+    QformWriter w;
+    size_t at;
+
+    if (out == NULL || env == NULL || length == 0u)
+    {
+        return 0;
+    }
+    qform_writer_init(&w, out, cap);
+    put_head(&w, env, FA_OP_SPECIAL, seq);
+    qform_put_selector(&w, 1);
+    qform_put_tag16(&w, QFORM_TAG_INT16, FA_SPECIAL_SET_END_OF_FILE);
+    qform_put_selector(&w, 2);
+    at = begin_marked(&w);
+    qform_put_typed32(&w, length - 1u); /* the last byte's index */
+    end_marked(&w, at);
+    return finish(&w);
+}
+
+size_t fa_build_data_message(uint8_t *out, size_t cap, const FaEnvelope *env,
+                             const uint8_t *bytes)
+{
+    if (out == NULL || env == NULL || bytes == NULL || cap < FA_DATA_MESSAGE_SIZE)
+    {
+        return 0;
+    }
+    fa_envelope_write(out, env);
+    memcpy(out + FA_ENVELOPE_SIZE, bytes, FA_DATA_BYTES);
+    return FA_DATA_MESSAGE_SIZE;
+}
+
 size_t fa_build_set_block_size(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
                                uint16_t size)
 {
@@ -251,26 +350,6 @@ bool fa_build_walk_block(uint8_t *block, const char *user, const char *spec)
         block[pos++] = (uint8_t)0x27; /* the SINTRAN terminator ' */
     }
     return true;
-}
-
-/* 8C 80 <len>: a constructed value with its length in the marker form, as the real client
- * writes it on its walk requests. The length is filled in by end_marked(). */
-static size_t begin_marked(QformWriter *w)
-{
-    size_t at = w->len;
-    qform_put_u8(w, QFORM_TAG_CONSTRUCTED);
-    qform_put_u8(w, 0x80u);
-    qform_put_u8(w, 0);
-    return at;
-}
-
-static void end_marked(QformWriter *w, size_t at)
-{
-    if (w->failed)
-    {
-        return;
-    }
-    w->buf[at + 2u] = (uint8_t)(w->len - at - 3u);
 }
 
 size_t fa_build_walk_next(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,

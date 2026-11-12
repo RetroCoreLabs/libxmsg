@@ -1,6 +1,6 @@
 /*
- * test_cosmos_fa.c - libcosmos: QFORM, the password fold, and the FA read client replayed
- * against a real SINTRAN file server's captured messages.
+ * test_cosmos_fa.c - libcosmos: QFORM, the password fold, and the FA client (read, write,
+ * listing) replayed against a real SINTRAN file server's captured messages.
  *
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Ronny Hansen
@@ -31,11 +31,16 @@
 #include "vectors/fa_open_error_d100_d102.h"
 #include "vectors/fa_read_d100_d102.h"
 #include "vectors/fa_stat_d102_d100.h"
+#include "vectors/fa_write_d100_d102.h"
 
 #define N_READ  (sizeof k_fa_read_events / sizeof k_fa_read_events[0])
 #define N_ERROR (sizeof k_fa_open_error_events / sizeof k_fa_open_error_events[0])
 #define N_LIST  (sizeof k_fa_list_events / sizeof k_fa_list_events[0])
 #define N_STAT  (sizeof k_fa_stat_events / sizeof k_fa_stat_events[0])
+#define N_WRITE (sizeof k_fa_write_events / sizeof k_fa_write_events[0])
+
+/* The file the captured write carried, WRTEST1:OUT. */
+#define WRITE_LENGTH 17905u
 
 /* The server's session port in the captures (the confirm and everything after come from it). */
 #define SERVER_PORT 0x06B6u
@@ -221,6 +226,7 @@ typedef struct Run
     const char *asker;
     uint16_t peer_system;
     bool mask_residue; /* see the file comment */
+    bool writing;      /* fa_client_write of s_write_file */
 } Run;
 
 static Run s_run;
@@ -244,6 +250,9 @@ typedef struct Sink
     bool cancel_at_data;    /* fa_client_cancel from inside the first data callback */
     bool cancelled;         /* fa_client_cancel has been called */
     int data_calls;
+    uint32_t cancel_at_offset; /* nonzero: fa_client_cancel when the source is asked for it */
+    uint32_t fail_at_offset;   /* nonzero: the source gives nothing for that offset */
+    int source_calls;
 } Sink;
 
 static XmsgNode s_a; /* our client's machine, node 100 */
@@ -254,6 +263,7 @@ static TestPairPort s_port_b;
 static Server s_server;
 static Sink s_sink;
 static FaClient s_client;
+static uint8_t s_write_file[WRITE_LENGTH]; /* the captured write's content, see write_file_load */
 
 static void server_keep(void *ctx, const XmsgDatagram *dg)
 {
@@ -309,6 +319,24 @@ static void sink_done(void *ctx, int result, uint16_t sintran_error)
     k->done_calls++;
     k->result = result;
     k->sintran_error = sintran_error;
+}
+
+static size_t sink_source(void *ctx, uint32_t offset, uint8_t *out, size_t n)
+{
+    Sink *k = (Sink *)ctx;
+    k->source_calls++;
+    if (k->fail_at_offset != 0u && offset == k->fail_at_offset)
+    {
+        return 0;
+    }
+    if (k->cancel_at_offset != 0u && offset == k->cancel_at_offset && !k->cancelled)
+    {
+        k->cancelled = true;
+        CHECK_EQ(fa_client_cancel(&s_client, 0), XMSG_OK);
+    }
+    CHECK((size_t)offset + n <= sizeof s_write_file);
+    memcpy(out, s_write_file + offset, n);
+    return n;
 }
 
 static void sink_directory(void *ctx, const char *directory, const char *user)
@@ -399,14 +427,20 @@ static uint32_t bring_up(void)
 
 static void client_start(const FaClientConfig *cfg, const char *spec, uint32_t now)
 {
-    FaClientCallbacks cb = {&s_sink,        sink_opened, sink_data, sink_done,
-                            sink_directory, sink_entry};
+    FaClientCallbacks cb = {&s_sink,        sink_opened, sink_data,  sink_done,
+                            sink_directory, sink_entry,  sink_source};
     const char *remote = (s_run.remote_user != NULL) ? s_run.remote_user : "SYSTEM";
     uint16_t system = (s_run.peer_system != 0u) ? s_run.peer_system : 102u;
     CHECK_EQ(fa_client_init(&s_client, cfg, &cb), XMSG_OK);
     if (s_run.listing)
     {
         CHECK_EQ(fa_client_list(&s_client, &s_a, 102, system, "SYSTEM", remote, "", spec, now),
+                 XMSG_OK);
+    }
+    else if (s_run.writing)
+    {
+        CHECK_EQ(fa_client_write(&s_client, &s_a, 102, system, "SYSTEM", remote, "", spec,
+                                 WRITE_LENGTH, now),
                  XMSG_OK);
     }
     else
@@ -481,7 +515,7 @@ static void check_client_message(const uint8_t *ours, size_t ours_len, const Xms
             CHECK_EQ(got[len - 1], 0x00); /* our pad */
             got[len - 1] = want[len - 1];
         }
-        if (want[9] == 0x00 && want[10] == FA_OP_OPEN)
+        if (want[9] == 0x00 && want[10] == FA_OP_OPEN && !s_run.writing)
         {
             CHECK_EQ(got[end - 1], '.'); /* BUGS.md C1 */
             got[end - 1] = want[end - 1];
@@ -660,9 +694,9 @@ static void repeated_confirm_changes_nothing(void)
 static void listing_replays_the_capture(void)
 {
     FaNdDate d;
-    s_run = (Run){true, "SYS", "BAK04", 0, true};
+    s_run = (Run){true, "SYS", "BAK04", 0, true, false};
     CHECK(replay(k_fa_list_events, N_LIST, "", false));
-    s_run = (Run){false, NULL, NULL, 0, false};
+    s_run = (Run){false, NULL, NULL, 0, false, false};
 
     CHECK_EQ(s_sink.done_calls, 1);
     CHECK_EQ(s_sink.result, 0); /* 197, the end of the directory, is the normal end */
@@ -688,9 +722,9 @@ static void listing_replays_the_capture(void)
 
 static void file_statistics_replays_the_capture(void)
 {
-    s_run = (Run){true, "SYSTEM", "BAK05", 100, false};
+    s_run = (Run){true, "SYSTEM", "BAK05", 100, false, false};
     CHECK(replay(k_fa_stat_events, N_STAT, "SINTRAN:DATA", false));
-    s_run = (Run){false, NULL, NULL, 0, false};
+    s_run = (Run){false, NULL, NULL, 0, false, false};
 
     CHECK_EQ(s_sink.result, 0);
     CHECK_EQ(s_sink.entry_count, 1);
@@ -764,7 +798,7 @@ typedef struct CancelAt
     bool at_start;      /* right after the client started, before the confirm */
     size_t at_entry;    /* nonzero: inside the entry callback of that file */
     bool at_first_data; /* inside the first data callback */
-    size_t keep_server; /* captured server messages that still go out after the cancel */
+    uint32_t at_offset; /* nonzero: inside the source call for that file offset (a write) */
 } CancelAt;
 
 static Teardown s_down;
@@ -792,7 +826,7 @@ static void answer_teardown(const uint8_t *msg, size_t len, uint32_t now)
         CHECK_EQ(server_send(k_close, sizeof k_close, now), XMSG_OK);
         return;
     }
-    if (type != FA_TYPE_REQUEST || len < 14u || msg[8] != 0x92u)
+    if (type != FA_TYPE_REQUEST || len < 14u || len == FA_DATA_MESSAGE_SIZE || msg[8] != 0x92u)
     {
         return; /* a short ack, or the letter when cancelled before the confirm */
     }
@@ -807,11 +841,38 @@ static void answer_teardown(const uint8_t *msg, size_t len, uint32_t now)
     CHECK_EQ(server_send(reply, sizeof reply, now), XMSG_OK);
 }
 
+/* Whether our message is the captured one's kind: the same type and length, and for a request
+ * the same op. After a cancel the client still sends what the captured client sent for the
+ * work already under way (short acks, the halves of a block); its next request differs. */
+static bool same_kind(const uint8_t *ours, size_t len, const char *captured_hex)
+{
+    uint8_t want[FA_DATA_MESSAGE_SIZE];
+    int n = test_hex_to_bytes(captured_hex, want, sizeof want);
+    if (n < 2 || (size_t)n != len || ours[0] != want[0] || ours[1] != want[1])
+    {
+        return false;
+    }
+    if (ours[0] == 0x07 && ours[1] == 0xF0 && len != FA_DATA_MESSAGE_SIZE && len > 10u)
+    {
+        return ours[9] == want[9] && ours[10] == want[10];
+    }
+    return true;
+}
+
+/* Whether a captured event is a client request (not a short ack, not a data message). */
+static bool is_client_request(const FaVectorEvent *e)
+{
+    uint8_t b[FA_DATA_MESSAGE_SIZE];
+    int n = test_hex_to_bytes(e->hex, b, sizeof b);
+    return e->who == 'C' && n >= 2 && n != (int)FA_DATA_MESSAGE_SIZE &&
+           ((b[0] == 0x07 && b[1] == 0xF0) || (b[0] == 0x07 && b[1] == 0x82));
+}
+
 /* Play a capture until the client is cancelled, then let the test server answer the teardown.
- * Before the cancel every client message must equal the captured one. After it the captured
- * server finishes the answer it was sending (as a real server does: the second half of a block
- * is already on its way) and then stops; with `keep_server` it also sends that many messages
- * in all before stopping (the confirm, when cancelled at the start). */
+ * Every client message is compared with the captured one while they are of the same kind; the
+ * captured server goes on answering them, as a real server finishes the work under way. From
+ * the first client message the capture does not have (its first teardown request), the test
+ * server answers instead, and the captured server says nothing more. */
 static void cancel_run(const FaVectorEvent *ev, size_t n, const char *spec, CancelAt at)
 {
     FaClientConfig cfg;
@@ -819,12 +880,13 @@ static void cancel_run(const FaVectorEvent *ev, size_t n, const char *spec, Canc
     uint32_t until = now + 60000u;
     size_t c_idx = next_client_event(ev, n, 0);
     size_t s_idx = 0;
-    size_t s_sent = 0;
+    bool off_script = false;
     uint8_t body[FA_DATA_MESSAGE_SIZE];
 
     memset(&s_down, 0, sizeof s_down);
     s_sink.cancel_at_entry = at.at_entry;
     s_sink.cancel_at_data = at.at_first_data;
+    s_sink.cancel_at_offset = at.at_offset;
     fa_client_config_default(&cfg);
     if (s_run.asker != NULL)
     {
@@ -843,37 +905,32 @@ static void cancel_run(const FaVectorEvent *ev, size_t n, const char *spec, Canc
         while (s_server.count > 0)
         {
             size_t slot = s_server.head;
-            if (s_sink.cancelled)
+            const uint8_t *m = s_server.bodies[slot];
+            size_t len = s_server.lens[slot];
+            if (!off_script && c_idx < n && s_sink.cancelled && !same_kind(m, len, ev[c_idx].hex))
             {
-                answer_teardown(s_server.bodies[slot], s_server.lens[slot], now);
+                off_script = true;
+            }
+            if (off_script)
+            {
+                answer_teardown(m, len, now);
             }
             else if (c_idx < n)
             {
-                check_client_message(s_server.bodies[slot], s_server.lens[slot],
-                                     &s_server.subs[slot], ev[c_idx].hex);
+                check_client_message(m, len, &s_server.subs[slot], ev[c_idx].hex);
                 c_idx = next_client_event(ev, n, c_idx + 1u);
             }
             s_server.head = (s_server.head + 1u) % MAX_SEEN;
             s_server.count--;
         }
-        while (s_idx < n)
+        while (!off_script && s_idx < n)
         {
             int len;
-            if (ev[s_idx].who == 'C' && s_sink.cancelled)
-            {
-                if (s_sent < at.keep_server)
-                {
-                    s_idx++; /* the letter: the confirm still goes out */
-                    continue;
-                }
-                s_idx = n; /* the answer in flight is complete: the captured server stops */
-                break;
-            }
             if (ev[s_idx].who == 'C')
             {
-                if (s_idx >= c_idx)
+                if (s_idx >= c_idx || (s_sink.cancelled && is_client_request(&ev[s_idx])))
                 {
-                    break; /* that client message has not come yet */
+                    break; /* not come yet, or a request the cancelled client will not send */
                 }
                 s_idx++;
                 continue;
@@ -884,7 +941,6 @@ static void cancel_run(const FaVectorEvent *ev, size_t n, const char *spec, Canc
                 break; /* window full: next millisecond */
             }
             s_idx++;
-            s_sent++;
         }
     }
     /* Let the last acknowledgements settle. */
@@ -897,9 +953,9 @@ static void cancel_run(const FaVectorEvent *ev, size_t n, const char *spec, Canc
 
 static void cancelled_listing_gives_the_seat_back(void)
 {
-    s_run = (Run){true, "SYS", "BAK04", 0, true};
+    s_run = (Run){true, "SYS", "BAK04", 0, true, false};
     cancel_run(k_fa_list_events, N_LIST, "", (CancelAt){false, 3, false, 0});
-    s_run = (Run){false, NULL, NULL, 0, false};
+    s_run = (Run){false, NULL, NULL, 0, false, false};
 
     CHECK(s_sink.cancelled);
     CHECK_EQ(s_sink.done_calls, 1);
@@ -932,8 +988,9 @@ static void cancelled_read_closes_the_file(void)
 
 static void cancelled_before_the_confirm(void)
 {
-    /* The captured confirm still comes; then only session finished goes out. */
-    cancel_run(k_fa_read_events, N_READ, "PATCH-FILE:OUT", (CancelAt){true, 0, false, 1});
+    /* The captured confirm still comes (the letter is what the capture has); then only
+     * session finished goes out. */
+    cancel_run(k_fa_read_events, N_READ, "PATCH-FILE:OUT", (CancelAt){true, 0, false, 0});
 
     CHECK_EQ(s_sink.done_calls, 1);
     CHECK_EQ(s_sink.result, XMSG_ECANCELED);
@@ -941,6 +998,153 @@ static void cancelled_before_the_confirm(void)
     CHECK_EQ(s_down.op_count, 0);
     CHECK_EQ(s_down.finished, 1);
     CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_DONE);
+}
+
+/* The captured write's content: the 1024-byte payloads of its data messages, in order, cut at
+ * the length its set end of file declared (17904 + 1). */
+static void write_file_load(void)
+{
+    uint8_t body[FA_DATA_MESSAGE_SIZE];
+    uint32_t at = 0;
+    for (size_t i = 0; i < N_WRITE; i++)
+    {
+        int len = test_hex_to_bytes(k_fa_write_events[i].hex, body, sizeof body);
+        if (k_fa_write_events[i].who == 'C' && len == (int)FA_DATA_MESSAGE_SIZE)
+        {
+            uint32_t n = WRITE_LENGTH - at;
+            if (n > FA_DATA_BYTES)
+            {
+                n = FA_DATA_BYTES;
+            }
+            memcpy(s_write_file + at, body + FA_ENVELOPE_SIZE, n);
+            at += n;
+        }
+    }
+    CHECK_EQ(at, WRITE_LENGTH);
+}
+
+static void write_requests_match_the_capture(void)
+{
+    uint8_t out[FA_REQUEST_MAX];
+    uint8_t data[FA_DATA_MESSAGE_SIZE];
+    uint8_t bytes[FA_DATA_BYTES];
+    FaEnvelope env = {FA_TYPE_REQUEST, 0x0044, 0x9E, FA_TOKEN_CLIENT};
+    size_t n;
+
+    /* 02:33:04.663: set end of file for 17905 bytes carries 45F0. */
+    n = fa_build_set_end_of_file(out, sizeof out, &env, 0x000D, WRITE_LENGTH);
+    CHECK_BYTES(out, n, "07F000449E00D76192000C92000DF2000192003BF200028C8005A4000045F0F200FF");
+    CHECK_EQ(fa_build_set_end_of_file(out, sizeof out, &env, 1, 0), 0);
+    /* 02:33:02.035, pad byte aside: open WRTEST1:OUT for writing. */
+    env.counter = 0x81;
+    n = fa_build_open_write(out, sizeof out, &env, 0x0002, "WRTEST1:OUT");
+    CHECK_BYTES(out, n, "07F000448100D761920005920002F20002BF22575254455354313A4F5554222757F20003"
+                        "920001F200FF");
+    /* A data message is the envelope and the bytes, nothing else. */
+    memset(bytes, 0x5A, sizeof bytes);
+    env.counter = 0x04;
+    CHECK_EQ(fa_build_data_message(data, sizeof data, &env, bytes), FA_DATA_MESSAGE_SIZE);
+    CHECK_EQ(data[4], 0x04);
+    CHECK_EQ(data[8], 0x5A);
+    CHECK_EQ(fa_build_data_message(data, FA_DATA_MESSAGE_SIZE - 1u, &env, bytes), 0);
+}
+
+static void write_replays_the_capture(void)
+{
+    write_file_load();
+    s_run = (Run){false, NULL, NULL, 0, false, true};
+    CHECK(replay(k_fa_write_events, N_WRITE, "WRTEST1:OUT", false));
+    s_run = (Run){false, NULL, NULL, 0, false, false};
+
+    CHECK_EQ(s_sink.done_calls, 1);
+    CHECK_EQ(s_sink.result, 0);
+    CHECK_EQ(s_sink.sintran_error, 0);
+    CHECK_EQ(s_sink.opened_calls, 0);
+    CHECK_EQ(s_client.file_number, 0x40); /* the open reply, F2 0002 A2 0040 */
+    CHECK_EQ(s_client.blocks, 9);
+    CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_DONE);
+    CHECK(!s_client.base.attached);
+    CHECK_EQ(s_client.stats.ignored, 0);
+}
+
+static void cancelled_write_closes_the_file(void)
+{
+    /* Inside the second half of block 1: that block is finished, then close and release, with
+     * no set end of file. */
+    write_file_load();
+    s_run = (Run){false, NULL, NULL, 0, false, true};
+    cancel_run(k_fa_write_events, N_WRITE, "WRTEST1:OUT",
+               (CancelAt){false, 0, false, FA_BLOCK_SIZE + FA_DATA_BYTES});
+    s_run = (Run){false, NULL, NULL, 0, false, false};
+
+    CHECK(s_sink.cancelled);
+    CHECK_EQ(s_sink.done_calls, 1);
+    CHECK_EQ(s_sink.result, XMSG_ECANCELED);
+    CHECK_EQ(s_down.op_count, 2);
+    CHECK_EQ(s_down.ops[0], FA_OP_CLOSE);
+    CHECK_EQ(s_down.ops[1], FA_OP_RELEASE);
+    CHECK_EQ(s_down.finished, 1);
+    CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_DONE);
+    CHECK(!s_client.base.attached);
+}
+
+static void write_source_that_fails(void)
+{
+    FaClientConfig cfg;
+    uint32_t now = bring_up();
+    uint32_t until = now + 60000u;
+    size_t s_idx = 0;
+    uint8_t body[FA_DATA_MESSAGE_SIZE];
+
+    write_file_load();
+    s_sink.fail_at_offset = FA_DATA_BYTES; /* the second half of block 0 */
+    s_run = (Run){false, NULL, NULL, 0, false, true};
+    fa_client_config_default(&cfg);
+    client_start(&cfg, "WRTEST1:OUT", now);
+    s_run = (Run){false, NULL, NULL, 0, false, false};
+    /* The captured server answers the first steps; the client stops at the bad half. */
+    while (now < until && s_sink.done_calls == 0)
+    {
+        now++;
+        pump(now);
+        s_server.head = (s_server.head + s_server.count) % MAX_SEEN;
+        s_server.count = 0;
+        while (s_idx < 13u)
+        {
+            int len;
+            if (k_fa_write_events[s_idx].who == 'C')
+            {
+                s_idx++;
+                continue;
+            }
+            len = test_hex_to_bytes(k_fa_write_events[s_idx].hex, body, sizeof body);
+            if (server_send(body, (size_t)len, now) != XMSG_OK)
+            {
+                break;
+            }
+            s_idx++;
+        }
+    }
+    CHECK_EQ(s_sink.done_calls, 1);
+    CHECK_EQ(s_sink.result, XMSG_EIO);
+    CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_FAILED);
+    CHECK(!s_client.base.attached);
+}
+
+static void write_arguments_are_refused(void)
+{
+    FaClient c;
+    FaClientCallbacks cb;
+    memset(&cb, 0, sizeof cb);
+    (void)fa_client_init(&c, NULL, &cb);
+    /* No source. */
+    CHECK_EQ(fa_client_write(&c, &s_a, 102, 102, "A", "A", "", "X:Y", 10, 0), XMSG_EINVAL);
+    cb.source = sink_source;
+    (void)fa_client_init(&c, NULL, &cb);
+    /* An empty file: no capture shows one being written. */
+    CHECK_EQ(fa_client_write(&c, &s_a, 102, 102, "A", "A", "", "X:Y", 0, 0), XMSG_EINVAL);
+    CHECK_EQ(fa_client_write(&c, &s_a, 102, 102, "A", "A", "", "", 10, 0), XMSG_EINVAL);
+    CHECK_EQ(fa_client_state(&c), FA_CLIENT_IDLE);
 }
 
 static void cancel_when_nothing_runs(void)
@@ -990,6 +1194,11 @@ int main(void)
     cancelled_read_closes_the_file();
     cancelled_before_the_confirm();
     cancel_when_nothing_runs();
+    write_requests_match_the_capture();
+    write_replays_the_capture();
+    cancelled_write_closes_the_file();
+    write_source_that_fails();
+    write_arguments_are_refused();
     bad_arguments_are_refused();
     TEST_DONE();
 }

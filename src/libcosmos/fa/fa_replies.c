@@ -62,6 +62,20 @@ bool fa_reply_open_info(const FaReply *r, uint16_t *file_number, uint32_t *lengt
     return true;
 }
 
+bool fa_reply_file_number(const FaReply *r, uint16_t *file_number)
+{
+    QformItem it;
+    uint32_t v;
+
+    if (r == NULL || file_number == NULL ||
+        !qform_find_field(r->fields, r->fields_len, 2, &it) || !qform_item_uint(&it, &v))
+    {
+        return false;
+    }
+    *file_number = (uint16_t)v;
+    return true;
+}
+
 const uint8_t *fa_reply_object_entry(const FaReply *r)
 {
     QformReader rd;

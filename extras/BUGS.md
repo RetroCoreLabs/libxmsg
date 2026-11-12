@@ -54,6 +54,24 @@ wraps from 0xFF to 0x00.
 **Why it is open:** no capture of a transfer that long. What to do: capture a real client
 reading a file of 100 KB or more and read the counter of its 128th short ack.
 
+## C3 - a write whose source fails leaves the file open on the server
+
+**Where:** `src/libcosmos/fa/fa_client.c`, `build_data()` and `client_poll_tx()`.
+
+**What:** `fa_client_write` asks the application for each 1024-byte half of a block just
+before sending it. When the `source` callback gives less than it was asked for, the write ends
+at once with XMSG_EIO. By then the write request for that block has gone out, so the server is
+waiting for the block's data. The client sends no close, no release and no session finished,
+so the file stays open on the server and its seat stays taken. How long the server keeps them
+is not known. RetroIO measured on D100 on 2026-08-17 that a write which stopped part way left
+the file open until the file server was restarted (`FaClientWriteSession._fileOpenOnPeer`).
+
+**Why it is open:** the block that was announced cannot be finished without its bytes, and
+sending zeros instead would write a wrong file. What to do: ask the source for both halves of
+a block before its write request goes out (the client then needs a 2048-byte buffer, or a
+check-only call on the source), so a failure is found while no block is announced and the
+normal teardown (close, release, session finished) can run.
+
 # libhdlc (moved in from RetroCoreLabs/libhdlc, 2026-11-10)
 
 

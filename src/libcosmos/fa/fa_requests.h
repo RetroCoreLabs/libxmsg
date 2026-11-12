@@ -46,6 +46,9 @@ extern "C"
 #define FA_SPECIAL_DIRECTORY  0x00A4u /**< the directory entry (its name, "PACK-ONE") */
 #define FA_SPECIAL_USER       0x008Cu /**< the user entry (its name, "SYSTEM") */
 
+/** Sub-function of FA_OP_SPECIAL that sets the end of a written file. */
+#define FA_SPECIAL_SET_END_OF_FILE 0x003Bu
+
 /** The name block a walk carries, and the cursor of the first walk request. */
 #define FA_WALK_BLOCK_SIZE   62u
 #define FA_WALK_FIRST_CURSOR 0xFFFFu
@@ -111,6 +114,44 @@ size_t fa_build_reserve(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_
  */
 size_t fa_build_open_read(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
                           const char *spec);
+
+/**
+ * @brief Open for writing (op 05): F2 0002 <string "\"<spec>\"'W"> F2 0003 92 0001 F2 00FF.
+ *
+ * MEASURED: capture-write.txt 02:33:02.035, COPY-FILE writing WRTEST1:OUT, sent
+ * BF "\"WRTEST1:OUT\"'W" then F2 0003 92 0001. In SINTRAN a name in quotes is created when it
+ * does not exist. What the server does with a quoted name that already exists is not in any
+ * capture we hold.
+ * @param spec The file as the server names it, without quotes: "NAME:TYPE".
+ * @return Bytes written, or 0 when the specification is longer than 251 characters.
+ */
+size_t fa_build_open_write(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
+                           const char *spec);
+
+/** @brief Write a block (op 09): F2 0001 A4 <block> F2 00FF (capture-write.txt). */
+size_t fa_build_write_block(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
+                            uint32_t block);
+
+/**
+ * @brief Set end of file (op 0C/3B): F2 0001 92 003B F2 0002 8C 80 05 A4 <length - 1> F2 00FF.
+ *
+ * The value is the index of the LAST byte, not the length. MEASURED: capture-write.txt
+ * 02:33:04.663 sent 000045F0 for a file of 17905 bytes (0x45F1), and the read of the same file
+ * reports 17905 in its open reply; RetroIO FaWriteRequests.SetEndOfFile gives two more sources.
+ * @param length The file's length in bytes, at least 1.
+ * @return Bytes written, or 0 when length is 0.
+ */
+size_t fa_build_set_end_of_file(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
+                                uint32_t length);
+
+/**
+ * @brief A data message the client writes: the envelope, then FA_DATA_BYTES raw bytes.
+ * @param bytes FA_DATA_BYTES bytes of file content (the caller pads the end of the file with
+ *              zeros, as the captured client did).
+ * @return FA_DATA_MESSAGE_SIZE, or 0 when it does not fit.
+ */
+size_t fa_build_data_message(uint8_t *out, size_t cap, const FaEnvelope *env,
+                             const uint8_t *bytes);
 
 /** @brief Set block size (op 07): F2 0001 A2 <size> F2 00FF. */
 size_t fa_build_set_block_size(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,

@@ -1,5 +1,5 @@
 /*
- * fa_client.h - a COSMOS file-access client: read one file from a SINTRAN machine.
+ * fa_client.h - a COSMOS file-access client: read, write or list files on a SINTRAN machine.
  *
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Ronny Hansen
@@ -31,6 +31,14 @@
  *   release (03), session finished, the server's close
  *
  * Which files match the name is decided by the server.
+ *
+ * A WRITE, MEASURED in capture-write.txt (COPY-FILE writing WRTEST1:OUT, 17905 bytes):
+ *   reserve (02) - open (05, the name in quotes and 'W) - set block size 2048 (07) -
+ *   for each block: write (09, block number), then at once the block's two data messages
+ *     (1032 bytes each, the end of the file padded with zeros); the server answers each of the
+ *     three with a short ack and then sends the reply, which we ack -
+ *   set end of file (0C/3B, the last byte's index) - close (06) - release (03) -
+ *   session finished, the server's close
  *
  * The client is an XmsgSession (the first member) and sends one frame at a time, waiting for the
  * XMSG acknowledgement before the next, as the TAD asker does.
@@ -88,6 +96,10 @@ typedef struct FaClientCallbacks
     void (*directory)(void *ctx, const char *directory, const char *user);
     /** Listing: one file. */
     void (*entry)(void *ctx, const FaFileEntry *e);
+    /** Writing: copy the `n` file bytes that start at `offset` into `out` and return `n`.
+     *  The same range can be asked for again (a frame sent twice), so the bytes must stay
+     *  available until `done`. Returning anything but `n` ends the write with XMSG_EIO. */
+    size_t (*source)(void *ctx, uint32_t offset, uint8_t *out, size_t n);
 } FaClientCallbacks;
 
 typedef struct FaClientConfig
@@ -113,7 +125,8 @@ typedef enum FaClientSend
     FA_SEND_LETTER,
     FA_SEND_REQUEST,
     FA_SEND_ACK,
-    FA_SEND_FINISH
+    FA_SEND_FINISH,
+    FA_SEND_DATA /**< one half of a block being written; the item's seq is the half, 0 or 1 */
 } FaClientSend;
 
 typedef enum FaClientStep
@@ -127,7 +140,9 @@ typedef enum FaClientStep
     FA_STEP_RELEASE,
     FA_STEP_WALK,      /**< listing: next entry */
     FA_STEP_DIRECTORY, /**< listing: the directory entry, once */
-    FA_STEP_USER       /**< listing: the user entry, once */
+    FA_STEP_USER,      /**< listing: the user entry, once */
+    FA_STEP_WRITE,     /**< writing: one block, with its two data messages */
+    FA_STEP_END_OF_FILE /**< writing: set end of file (0C/3B) */
 } FaClientStep;
 
 /** One frame waiting: its kind and the numbers given to it when queued. */
@@ -170,6 +185,7 @@ typedef struct FaClient
     bool has_object_entry;
 
     bool listing;                          /**< a walk rather than a read */
+    bool writing;                          /**< a write rather than a read */
     bool cancelled;                        /**< fa_client_cancel: tearing down, no more
                                                 callbacks but `done` */
     uint8_t walk_block[FA_WALK_BLOCK_SIZE]; /**< the name block every walk request carries */
@@ -234,12 +250,32 @@ int fa_client_list(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t pee
                    const char *filter, uint32_t now_ms);
 
 /**
- * @brief Stop a read or a listing early (the user pressed the escape key).
+ * @brief Start writing one file: `length` bytes, taken through the `source` callback.
+ *
+ * The file is opened with its name in quotes, as SINTRAN's COPY-FILE does, which creates it
+ * when it does not exist. `done` comes with 0 when the server has the whole file, with
+ * FA_CLIENT_EREFUSED and the SINTRAN error when it refused a step (the file is then closed and
+ * the seat given back), or with XMSG_EIO when `source` did not give the bytes (the file is
+ * then left open on the server: BUGS.md C3).
+ * @param length The file's length in bytes, at least 1 (no capture shows how an empty file is
+ *               written, so 0 is refused rather than guessed).
+ * The other arguments are as fa_client_read(); `spec` is "NAME:TYPE" in remote_user's
+ * directory, without quotes.
+ * @return As fa_client_read(); XMSG_EINVAL also when length is 0 or there is no `source`.
+ */
+int fa_client_write(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_system,
+                    const char *local_user, const char *remote_user, const char *password,
+                    const char *spec, uint32_t length, uint32_t now_ms);
+
+/**
+ * @brief Stop a read, a write or a listing early (the user pressed the escape key).
  *
  * From this call on no `opened`, `data`, `directory` or `entry` callback comes. The request
  * already sent is answered by the server and acknowledged; then the client gives the server's
  * seat back with the same teardown it uses after a refusal: close the file if one is open,
  * release, session finished, and the server's close. `done` then comes with XMSG_ECANCELED.
+ * A write stopped this way ends without its set end of file: what the server keeps of the
+ * blocks already written is not known from any capture.
  *
  * No capture shows what SINTRAN's own client sends when its user breaks a LIST-FILES or a
  * COPY-FILE (the captures we have were stopped while the walk ran, with nothing sent after),

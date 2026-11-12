@@ -1,5 +1,5 @@
 /*
- * fa_client.c - a COSMOS file-access client: read one file from a SINTRAN machine.
+ * fa_client.c - a COSMOS file-access client: read, write or list files on a SINTRAN machine.
  *
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Ronny Hansen
@@ -99,13 +99,22 @@ static void enqueue_request(FaClient *c, uint32_t now_ms)
     /* MEASURED: block requests alternate the 0x8000 bit, clear on the first block (read blocks
      * 0005 8006 0007 8008 .. in capture-read.txt; RetroIO FaReadLadder.AlternatingBlockSequenceBit,
      * which leaves it out; the real client sends it, so this does). */
-    if (c->step == FA_STEP_READ && (c->block & 1u) != 0u)
+    if ((c->step == FA_STEP_READ || c->step == FA_STEP_WRITE) && (c->block & 1u) != 0u)
     {
+        /* MEASURED the same for writes: 0004 8005 0006 .. in capture-write.txt. */
         seq = (uint16_t)(seq | FA_SEQ_ALTERNATE_BIT);
     }
     c->reply_in = false;
     c->data_in = 0;
     enqueue(c, FA_SEND_REQUEST, fa_counter_take(&c->counter, false), seq, now_ms);
+    if (c->step == FA_STEP_WRITE)
+    {
+        /* MEASURED (capture-write.txt): the block's two data messages follow the request at
+         * once, before the server has answered it; the counter runs on, bit 7 clear on the
+         * first half only (83 04 85, 86 07 88, ..). */
+        enqueue(c, FA_SEND_DATA, fa_counter_take(&c->counter, true), 0, now_ms);
+        enqueue(c, FA_SEND_DATA, fa_counter_take(&c->counter, false), 1, now_ms);
+    }
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -126,6 +135,10 @@ static size_t build_request(FaClient *c, const FaClientItem *it, uint8_t *body, 
         return fa_build_reserve(body, cap, &env, it->seq, c->cfg.asker, c->local_user,
                                 c->remote_user, c->password);
     case FA_STEP_OPEN:
+        if (c->writing)
+        {
+            return fa_build_open_write(body, cap, &env, it->seq, c->spec);
+        }
         return fa_build_open_read(body, cap, &env, it->seq, c->spec);
     case FA_STEP_SET_BLOCK_SIZE:
         return fa_build_set_block_size(body, cap, &env, it->seq, (uint16_t)FA_BLOCK_SIZE);
@@ -145,9 +158,50 @@ static size_t build_request(FaClient *c, const FaClientItem *it, uint8_t *body, 
         return fa_build_special_index(body, cap, &env, it->seq, FA_SPECIAL_DIRECTORY, 0);
     case FA_STEP_USER:
         return fa_build_special_index(body, cap, &env, it->seq, FA_SPECIAL_USER, c->user_index);
+    case FA_STEP_WRITE:
+        return fa_build_write_block(body, cap, &env, it->seq, c->block);
+    case FA_STEP_END_OF_FILE:
+        return fa_build_set_end_of_file(body, cap, &env, it->seq, c->length);
     default:
         return 0;
     }
+}
+
+/* One half of the block being written: the envelope and 1024 bytes from the source, the end
+ * of the file padded with zeros (MEASURED: the last message of capture-write.txt carries 497
+ * file bytes and then 527 zeros). Returns 0 when the source fails. */
+static size_t build_data(FaClient *c, const FaClientItem *it, uint8_t *body, size_t cap)
+{
+    FaEnvelope env;
+    uint32_t offset = c->block * FA_BLOCK_SIZE + ((it->seq != 0u) ? FA_DATA_BYTES : 0u);
+    size_t n = 0;
+
+    if (cap < FA_DATA_MESSAGE_SIZE || c->cb.source == NULL)
+    {
+        return 0;
+    }
+    env.type = FA_TYPE_REQUEST;
+    env.conversation = c->server_conversation;
+    env.counter = it->counter;
+    env.token = (it->seq != 0u) ? FA_TOKEN_CLIENT_DATA_SECOND : FA_TOKEN_CLIENT;
+    fa_envelope_write(body, &env);
+    memset(body + FA_ENVELOPE_SIZE, 0, FA_DATA_BYTES);
+    if (offset < c->length)
+    {
+        n = c->length - offset;
+        if (n > FA_DATA_BYTES)
+        {
+            n = FA_DATA_BYTES;
+        }
+        if (c->cb.source(c->cb.ctx, offset, body + FA_ENVELOPE_SIZE, n) != n)
+        {
+            XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_ERROR,
+                     "fa client: the source gave less than %u bytes at %u", (unsigned)n,
+                     (unsigned)offset);
+            return 0;
+        }
+    }
+    return FA_DATA_MESSAGE_SIZE;
 }
 
 static int send_item(FaClient *c, const FaClientItem *it, uint32_t now_ms)
@@ -189,6 +243,14 @@ static int send_item(FaClient *c, const FaClientItem *it, uint32_t now_ms)
     case FA_SEND_FINISH:
         len = fa_build_session_finished(body, cap, c->server_conversation, c->cfg.word);
         break;
+    case FA_SEND_DATA:
+        len = build_data(c, it, body, cap);
+        if (len == 0u)
+        {
+            xmsg_node_send_cancel(n);
+            return XMSG_EIO;
+        }
+        break;
     default:
         break;
     }
@@ -219,23 +281,35 @@ static int send_item(FaClient *c, const FaClientItem *it, uint32_t now_ms)
 /* The ladder                                                                                 */
 /* ------------------------------------------------------------------------------------------ */
 
-/* After fa_client_cancel the step that just completed leads to the teardown: close an open
- * file, then release, then session finished. */
-static FaClientStep cancel_step(const FaClient *c)
+/* Whether the file is open on the server while this step runs (the open has succeeded). */
+static bool step_has_open_file(FaClientStep step)
 {
-    switch (c->step)
+    switch (step)
     {
-    case FA_STEP_OPEN:
-        /* fall through */
     case FA_STEP_SET_BLOCK_SIZE:
         /* fall through */
     case FA_STEP_FILE_INFO:
         /* fall through */
     case FA_STEP_READ:
-        return FA_STEP_CLOSE; /* the open succeeded: the file is open */
+        /* fall through */
+    case FA_STEP_WRITE:
+        /* fall through */
+    case FA_STEP_END_OF_FILE:
+        return true;
     default:
-        return FA_STEP_RELEASE;
+        return false;
     }
+}
+
+/* After fa_client_cancel the step that just completed leads to the teardown: close an open
+ * file, then release, then session finished. */
+static FaClientStep cancel_step(const FaClient *c)
+{
+    if (c->step == FA_STEP_OPEN || step_has_open_file(c->step))
+    {
+        return FA_STEP_CLOSE; /* the open succeeded: the file is open */
+    }
+    return FA_STEP_RELEASE;
 }
 
 /* The current step is complete: go on to the next one. */
@@ -268,7 +342,18 @@ static void next_step(FaClient *c, uint32_t now_ms)
         c->step = FA_STEP_SET_BLOCK_SIZE;
         break;
     case FA_STEP_SET_BLOCK_SIZE:
-        c->step = FA_STEP_FILE_INFO;
+        c->step = c->writing ? FA_STEP_WRITE : FA_STEP_FILE_INFO;
+        c->block = 0;
+        break;
+    case FA_STEP_WRITE:
+        c->block++;
+        if (c->block >= c->blocks)
+        {
+            c->step = FA_STEP_END_OF_FILE;
+        }
+        break;
+    case FA_STEP_END_OF_FILE:
+        c->step = FA_STEP_CLOSE;
         break;
     case FA_STEP_FILE_INFO:
         c->step = FA_STEP_READ;
@@ -343,7 +428,7 @@ static void on_reply(FaClient *c, const uint8_t *body, size_t len, uint32_t now_
     static const uint16_t step_ops[] = {FA_OP_RESERVE, FA_OP_OPEN,    FA_OP_SET_BLOCK_SIZE,
                                         FA_OP_SPECIAL, FA_OP_READ,    FA_OP_CLOSE,
                                         FA_OP_RELEASE, FA_OP_SPECIAL, FA_OP_SPECIAL,
-                                        FA_OP_SPECIAL};
+                                        FA_OP_SPECIAL, FA_OP_WRITE,   FA_OP_SPECIAL};
     FaReply r;
 
     memset(&r, 0, sizeof r);
@@ -378,7 +463,7 @@ static void on_reply(FaClient *c, const uint8_t *body, size_t len, uint32_t now_
         {
             go_to_step(c, FA_STEP_RELEASE, now_ms);
         }
-        else if (c->step < FA_STEP_CLOSE)
+        else if (step_has_open_file(c->step))
         {
             go_to_step(c, FA_STEP_CLOSE, now_ms);
         }
@@ -388,7 +473,18 @@ static void on_reply(FaClient *c, const uint8_t *body, size_t len, uint32_t now_
         }
         return;
     }
-    if (c->step == FA_STEP_OPEN)
+    if (c->step == FA_STEP_OPEN && c->writing)
+    {
+        if (!fa_reply_file_number(&r, &c->file_number))
+        {
+            XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_ERROR, "fa client: open reply without a file");
+            fail(c, XMSG_EPROTO, now_ms);
+            return;
+        }
+        XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_INFO, "fa client: writing %s, %u bytes, %u blocks",
+                 c->spec, (unsigned)c->length, (unsigned)c->blocks);
+    }
+    else if (c->step == FA_STEP_OPEN)
     {
         if (!fa_reply_open_info(&r, &c->file_number, &c->length))
         {
@@ -739,9 +835,17 @@ static bool copy_name(char *dst, size_t size, const char *src)
     return true;
 }
 
+/* What start() is asked to do. */
+typedef enum FaClientJob
+{
+    FA_JOB_READ = 0,
+    FA_JOB_LIST,
+    FA_JOB_WRITE
+} FaClientJob;
+
 static int start(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_system,
                  const char *local_user, const char *remote_user, const char *password,
-                 const char *spec, bool listing, uint32_t now_ms)
+                 const char *spec, FaClientJob job, uint32_t length, uint32_t now_ms)
 {
     FaClientConfig cfg;
     FaClientCallbacks cb;
@@ -749,6 +853,7 @@ static int start(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_
     unsigned v;
     size_t nd = 0;
     char digits[6];
+    bool listing;
 
     if (c == NULL || node == NULL || peer_node == 0u || peer_system == 0u)
     {
@@ -759,9 +864,20 @@ static int start(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_
     {
         return XMSG_ESTATE;
     }
+    if (job == FA_JOB_WRITE && (length == 0u || c->cb.source == NULL))
+    {
+        return XMSG_EINVAL;
+    }
     cfg = c->cfg;
     cb = c->cb;
     (void)fa_client_init(c, &cfg, &cb);
+    listing = (job == FA_JOB_LIST);
+    c->writing = (job == FA_JOB_WRITE);
+    if (c->writing)
+    {
+        c->length = length;
+        c->blocks = (length + FA_BLOCK_SIZE - 1u) / FA_BLOCK_SIZE;
+    }
     if (!copy_name(c->local_user, sizeof c->local_user, local_user) ||
         !copy_name(c->remote_user, sizeof c->remote_user, remote_user) ||
         !copy_name(c->spec, sizeof c->spec, spec) || (!listing && c->spec[0] == '\0'))
@@ -803,7 +919,8 @@ static int start(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_
     c->state = FA_CLIENT_CONNECTING;
     c->wait_since_ms = now_ms;
     XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_INFO, "fa client: %s \"%s\" on %s (node %u) as %s",
-             listing ? "list" : "read", c->spec, c->system_name, (unsigned)peer_node,
+             listing ? "list" : (c->writing ? "write" : "read"), c->spec, c->system_name,
+             (unsigned)peer_node,
              c->remote_user);
     enqueue(c, FA_SEND_LETTER, 0, 0, now_ms);
     return XMSG_OK;
@@ -813,8 +930,16 @@ int fa_client_read(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t pee
                    const char *local_user, const char *remote_user, const char *password,
                    const char *spec, uint32_t now_ms)
 {
-    return start(c, node, peer_node, peer_system, local_user, remote_user, password, spec, false,
-                 now_ms);
+    return start(c, node, peer_node, peer_system, local_user, remote_user, password, spec,
+                 FA_JOB_READ, 0, now_ms);
+}
+
+int fa_client_write(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_system,
+                    const char *local_user, const char *remote_user, const char *password,
+                    const char *spec, uint32_t length, uint32_t now_ms)
+{
+    return start(c, node, peer_node, peer_system, local_user, remote_user, password, spec,
+                 FA_JOB_WRITE, length, now_ms);
 }
 
 int fa_client_list(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_system,
@@ -822,7 +947,7 @@ int fa_client_list(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t pee
                    const char *filter, uint32_t now_ms)
 {
     return start(c, node, peer_node, peer_system, local_user, remote_user, password, filter,
-                 true, now_ms);
+                 FA_JOB_LIST, 0, now_ms);
 }
 
 FaClientState fa_client_state(const FaClient *c)

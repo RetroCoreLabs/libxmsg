@@ -45,6 +45,9 @@ extern "C"
 #define FA_TOKEN_CLIENT_FIRST 0x0001u /**< token on the client's first request */
 #define FA_TOKEN_CLIENT       0xD761u /**< token on every later client request */
 #define FA_TOKEN_CLIENT_ACK   0x8485u /**< token on a client short ack */
+/** Token on the SECOND data message of a block the client writes; the first carries
+ *  FA_TOKEN_CLIENT. MEASURED on all nine blocks of capture-write.txt (02:33:02.581 on). */
+#define FA_TOKEN_CLIENT_DATA_SECOND 0x0001u
 
 /** The 8-byte head. */
 typedef struct FaEnvelope

@@ -25,6 +25,7 @@ extern "C"
 #define XMSG_EPROTO    (-5) /**< the bytes do not form a valid frame or message */
 #define XMSG_ETIMEDOUT (-6) /**< an answer did not come in time */
 #define XMSG_ECANCELED (-7) /**< the caller stopped it (fa_client_cancel) */
+#define XMSG_EIO       (-8) /**< the application could not give the bytes asked for */
 
 #ifdef __cplusplus
 }

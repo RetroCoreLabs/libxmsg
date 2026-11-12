@@ -56,6 +56,15 @@ bool fa_reply_parse(const uint8_t *body, size_t len, FaReply *r);
 bool fa_reply_open_info(const FaReply *r, uint16_t *file_number, uint32_t *length);
 
 /**
+ * @brief Read the file number of an open reply: selector 2 (A2).
+ *
+ * An open for writing is answered with the file number only. MEASURED: capture-write.txt
+ * 02:33:02.320, F2 0002 A2 0040 and no selector 3.
+ * @return true when it is there.
+ */
+bool fa_reply_file_number(const FaReply *r, uint16_t *file_number);
+
+/**
  * @brief Find the 64-byte object entry in a file information reply: F2 0002 8C 42 B0 40 <64>.
  * @return A pointer to the 64 bytes, or NULL.
  */

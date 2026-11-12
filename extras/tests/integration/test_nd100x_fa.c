@@ -169,7 +169,7 @@ int main(void)
         CHECK(got.out != NULL);
     }
     static FaClient client;
-    FaClientCallbacks fcb = {&got, on_opened, on_data, on_done, on_directory, on_entry};
+    FaClientCallbacks fcb = {&got, on_opened, on_data, on_done, on_directory, on_entry, NULL};
     CHECK_EQ(fa_client_init(&client, NULL, &fcb), XMSG_OK);
 
     uint32_t start = test_now_ms();
