@@ -747,6 +747,15 @@ static void cmd_who(ConsoleSession *self, uint32_t now_ms)
             say(self, buf + head); /* the entry's line, without the heading again */
         }
     }
+    if (h->cfg.services.who_more != NULL)
+    {
+        char more[1024];
+        if (h->cfg.services.who_more(h->cfg.services.ctx, more, sizeof more) > 0)
+        {
+            more[sizeof more - 1u] = '\0';
+            say(self, more);
+        }
+    }
 }
 
 static void cmd_info(ConsoleSession *s)

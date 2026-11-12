@@ -860,6 +860,13 @@ static int fn_command(void *ctx, int place, const char *line, AuthLevel level, c
     return 1;
 }
 
+/* An FTP user that is not on the console, as XMSGGW shows it in WHO. */
+static int fn_who_more(void *ctx, char *buf, size_t cap)
+{
+    (void)ctx;
+    return snprintf(buf, cap, "  ftp  bob  ftp 10.0.0.9:51000\r\n");
+}
+
 static void application_commands(void)
 {
     FakeLine f;
@@ -870,6 +877,7 @@ static void application_commands(void)
     s_host.cfg.services.command = fn_command;
     s_host.cfg.services.help_user = "NODE               the node (app)\r\n";
     s_host.cfg.services.help_admin = "RESTART            restart (app admin)\r\n";
+    s_host.cfg.services.who_more = fn_who_more;
     s = login(&f, &l, "alice", "pw");
     type(s, "node\r", 3);
     CHECK(has(&f, "node 0 admin\r\nTAD> "));
@@ -880,6 +888,9 @@ static void application_commands(void)
     clear(&f);
     type(s, "who\r", 3); /* a core command never reaches the application */
     CHECK_EQ(s_app_calls, 2);
+    /* The application's own WHO lines come after the console sessions. */
+    CHECK(has(&f, "*    1 alice") && has(&f, "ftp  bob  ftp 10.0.0.9:51000\r\nTAD> "));
+    clear(&f);
     type(s, "help\r", 3);
     CHECK(has(&f, "NODE               the node (app)") && has(&f, "RESTART            restart"));
     {

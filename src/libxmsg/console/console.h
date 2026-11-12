@@ -207,6 +207,11 @@ typedef struct ConsoleServices
     const char *help_user;
     /** HELP lines shown to admins only, before the core's admin lines. NULL: none. */
     const char *help_admin;
+    /** More WHO lines of the application's own (CR LF ended), after the console sessions: users
+     *  that are not on the console, such as an FTP user. To keep WHO's columns, build each line
+     *  with term_report_who() and drop the heading, as the console does. May be NULL. Returns
+     *  the length written. */
+    int (*who_more)(void *ctx, char *buf, size_t cap);
 } ConsoleServices;
 
 /** The whole user list, for USERS and DELUSER. Looking one up and saving one go through the
