@@ -414,6 +414,7 @@ static bool take_walk_entry(FaClient *c, const FaReply *r)
         return true; /* answered after fa_client_cancel: not reported */
     }
     fa_entry_parse(raw, &e);
+    e.object_index = object_index;
     XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_DEBUG, "fa client: entry %u %s:%s, %u bytes",
              (unsigned)object_index, e.name, e.type, (unsigned)e.bytes);
     if (c->cb.entry != NULL)

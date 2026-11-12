@@ -104,9 +104,14 @@ typedef struct FaFileEntry
     uint32_t bytes;        /**< bytes in the file; 0 when the entry carries none */
     bool has_bytes;        /**< false when the entry carries no byte count (FFFFFFFF) */
     uint32_t file_pointer; /**< type bits and page id, raw */
+    /** The entry's slot in the user's directory, from the walk reply (0C/78), not from the 64
+     *  bytes; 0 when the entry came another way. Whether it is the number SINTRAN prints as the
+     *  file number ("no." in its FTP listing) is not checked: RetroIO's NDFS reader says the two
+     *  are equal only inside a user's first block of 256 files (ObjectEntry.FileNumber). */
+    uint16_t object_index;
 } FaFileEntry;
 
-/** @brief Read a 64-byte object entry. */
+/** @brief Read a 64-byte object entry (object_index is set to 0). */
 void fa_entry_parse(const uint8_t *raw, FaFileEntry *e);
 
 /** One ND date word taken apart. */

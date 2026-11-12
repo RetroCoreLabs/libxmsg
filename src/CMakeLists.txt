@@ -139,7 +139,8 @@ if(XMSG_WITH_COSMOS)
         libcosmos/fa/fa_envelope.c
         libcosmos/fa/fa_requests.c
         libcosmos/fa/fa_replies.c
-        libcosmos/fa/fa_client.c)
+        libcosmos/fa/fa_client.c
+        libcosmos/fa/fa_text.c)
     target_include_directories(cosmos PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(cosmos PUBLIC xmsg::xmsg PRIVATE house_warnings)
     add_library(cosmos::cosmos ALIAS cosmos)

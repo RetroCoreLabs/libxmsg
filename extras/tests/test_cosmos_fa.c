@@ -21,6 +21,7 @@
 #include "libcosmos/fa/fa_client.h"
 #include "libcosmos/fa/fa_replies.h"
 #include "libcosmos/fa/fa_requests.h"
+#include "libcosmos/fa/fa_text.h"
 #include "libcosmos/qform/qform.h"
 #include "libcosmos/sintran/sintran_password.h"
 #include "libxmsg/xmsg/xmsg_node.h"
@@ -718,6 +719,20 @@ static void listing_replays_the_capture(void)
     CHECK(strcmp(s_sink.entries[3].name, "MAILBOX") == 0);
     CHECK(!s_sink.entries[3].has_bytes);
     CHECK_EQ(s_client.stats.ignored, 0);
+    /* Every captured record has one version: next-version points at its own slot. */
+    for (size_t i = 0; i < 49u; i++)
+    {
+        CHECK_EQ(fa_text_version(&s_sink.entries[i]), 1);
+    }
+    {
+        char name[FA_TEXT_NAME];
+        CHECK_EQ(fa_text_name(&s_sink.entries[0], FA_NAME_SINTRAN_VERSION, name, sizeof name), 14);
+        CHECK(strcmp(name, "SINTRAN:DATA;1") == 0);
+        CHECK_EQ(fa_text_name(&s_sink.entries[0], FA_NAME_FTP_VERSION, name, sizeof name), 14);
+        CHECK(strcmp(name, "SINTRAN.DATA-1") == 0);
+        CHECK_EQ(fa_text_name(&s_sink.entries[48], FA_NAME_FTP, name, sizeof name), 21);
+        CHECK(strcmp(name, "ENCOS-LOAD-0-B01.LIST") == 0);
+    }
 }
 
 static void file_statistics_replays_the_capture(void)
@@ -1165,6 +1180,88 @@ static void cancel_when_nothing_runs(void)
     CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_DONE);
 }
 
+/* ------------------------------------------------------------------ text forms */
+
+static void access_text(void)
+{
+    char t[FA_TEXT_ACCESS_WORDS];
+
+    /* 003777: D100's FILE-STAT of STARTX3:MODE; the letters as SINTRAN's FTP server prints. */
+    CHECK_EQ(fa_text_access_letters(03777, t, sizeof t), 15);
+    CHECK(strcmp(t, "rwacdrwacdr----") == 0);
+    /* The second measured FTP line: own RWAD, friend RWA, public R. */
+    CHECK_EQ(fa_text_access_letters(0x17u | (0x07u << 5) | (0x01u << 10), t, sizeof t), 15);
+    CHECK(strcmp(t, "rwa-drwa--r----") == 0);
+    CHECK_EQ(fa_text_access_letters(0, t, 15), -1);
+
+    CHECK_EQ(fa_text_access_words(03777, FA_ACCESS_OWN_SHIFT, t, sizeof t), 38);
+    CHECK(strcmp(t, "READ, WRITE, APPEND, COMMON, DIRECTORY") == 0);
+    CHECK_EQ(fa_text_access_words(03777, FA_ACCESS_PUBLIC_SHIFT, t, sizeof t), 4);
+    CHECK(strcmp(t, "READ") == 0);
+    /* RetroIO's SINTRAN printout: OWN READ, WRITE, APPEND; FRIEND and PUBLIC NONE. */
+    CHECK_EQ(fa_text_access_words(0x07u, FA_ACCESS_OWN_SHIFT, t, sizeof t), 19);
+    CHECK(strcmp(t, "READ, WRITE, APPEND") == 0);
+    CHECK_EQ(fa_text_access_words(0x07u, FA_ACCESS_FRIEND_SHIFT, t, sizeof t), 4);
+    CHECK(strcmp(t, "NONE") == 0);
+    CHECK_EQ(fa_text_access_words(0x07u, 3, t, sizeof t), -1);
+    CHECK_EQ(fa_text_access_words(03777, FA_ACCESS_OWN_SHIFT, t, 20), -1);
+}
+
+static void date_text(void)
+{
+    char t[FA_TEXT_DATE_STAT];
+
+    /* 0xC1FAAA75: 1998, July 29, 10.41.53. */
+    CHECK_EQ(fa_text_date_stat(0xC1FAAA75u, t, sizeof t), 23);
+    CHECK(strcmp(t, "10.41.53  JULY 29, 1998") == 0);
+    CHECK_EQ(fa_text_date_stat(0, t, sizeof t), 0);
+    CHECK_EQ(t[0], '\0');
+    CHECK_EQ(fa_text_date_ftp(0xC1FAAA75u, t, sizeof t), 15);
+    CHECK(strcmp(t, "29 Jul 98 10:41") == 0);
+    CHECK_EQ(fa_text_date_ftp(0, t, sizeof t), 15);
+    CHECK(strcmp(t, "00 pre 50 00:00") == 0);
+    CHECK_EQ(fa_text_date_ftp(0, t, 15), -1);
+}
+
+static void name_text(void)
+{
+    FaFileEntry e;
+    char t[FA_TEXT_NAME];
+
+    memset(&e, 0, sizeof e);
+    memcpy(e.name, "AIP-CONFIG", 11);
+    e.object_index = 59;
+    e.next_version = 59;
+    CHECK_EQ(fa_text_name(&e, FA_NAME_SINTRAN, t, sizeof t), 11);
+    CHECK(strcmp(t, "AIP-CONFIG:") == 0); /* no type */
+    CHECK_EQ(fa_text_name(&e, FA_NAME_FTP_VERSION, t, sizeof t), 13);
+    CHECK(strcmp(t, "AIP-CONFIG.-1") == 0);
+    memcpy(e.type, "SYMB", 5);
+    CHECK_EQ(fa_text_name(&e, FA_NAME_SINTRAN_VERSION, t, sizeof t), 17);
+    CHECK(strcmp(t, "AIP-CONFIG:SYMB;1") == 0);
+    e.next_version = 60; /* another version: its number is not known */
+    CHECK_EQ(fa_text_version(&e), 0);
+    CHECK_EQ(fa_text_name(&e, FA_NAME_SINTRAN_VERSION, t, sizeof t), -1);
+    CHECK_EQ(fa_text_name(&e, FA_NAME_FTP, t, sizeof t), 15);
+    CHECK(strcmp(t, "AIP-CONFIG.SYMB") == 0);
+
+    CHECK_EQ(fa_text_name_from_ftp("ECHOPL.PLNC", t, sizeof t), 11);
+    CHECK(strcmp(t, "ECHOPL:PLNC") == 0);
+    CHECK_EQ(fa_text_name_from_ftp("ECHOPL.PLNC-1", t, sizeof t), 11);
+    CHECK(strcmp(t, "ECHOPL:PLNC") == 0);
+    CHECK_EQ(fa_text_name_from_ftp("LOAD-MODE.BATC-12", t, sizeof t), 14);
+    CHECK(strcmp(t, "LOAD-MODE:BATC") == 0);
+    CHECK_EQ(fa_text_name_from_ftp("NAME.", t, sizeof t), 5);
+    CHECK(strcmp(t, "NAME:") == 0);
+    CHECK_EQ(fa_text_name_from_ftp("A.B-X", t, sizeof t), 5); /* not a version */
+    CHECK(strcmp(t, "A:B-X") == 0);
+    CHECK_EQ(fa_text_name_from_ftp("NAME:TYPE;1", t, sizeof t), 11);
+    CHECK(strcmp(t, "NAME:TYPE;1") == 0);
+    CHECK_EQ(fa_text_name_from_ftp("ECHO", t, sizeof t), 4);
+    CHECK(strcmp(t, "ECHO") == 0);
+    CHECK_EQ(fa_text_name_from_ftp("ECHOPL.PLNC", t, 11), -1);
+}
+
 static void bad_arguments_are_refused(void)
 {
     FaClient c;
@@ -1199,6 +1296,9 @@ int main(void)
     cancelled_write_closes_the_file();
     write_source_that_fails();
     write_arguments_are_refused();
+    access_text();
+    date_text();
+    name_text();
     bad_arguments_are_refused();
     TEST_DONE();
 }
