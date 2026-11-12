@@ -106,9 +106,11 @@ typedef struct FaFileEntry
     bool has_bytes;        /**< false when the entry carries no byte count (FFFFFFFF) */
     uint32_t file_pointer; /**< type bits and page id, raw */
     /** The entry's slot in the user's directory, from the walk reply (0C/78), not from the 64
-     *  bytes; 0 when the entry came another way. Whether it is the number SINTRAN prints as the
-     *  file number ("no." in its FTP listing) is not checked: RetroIO's NDFS reader says the two
-     *  are equal only inside a user's first block of 256 files (ObjectEntry.FileNumber). */
+     *  bytes; 0 when the entry came another way. It is the FILE number SINTRAN prints: MEASURED
+     *  equal for all 18 :MODE files of SYSTEM on D100 against SINTRAN's own LIST-FILES
+     *  (38 to 239; HDLCGW session, 2026-11-12). Only files below 256 were compared; RetroIO's
+     *  NDFS reader says a user's later blocks of 256 files number differently on disk
+     *  (ObjectEntry.FileNumber), so a number of 256 or more is unverified. */
     uint16_t object_index;
 } FaFileEntry;
 
