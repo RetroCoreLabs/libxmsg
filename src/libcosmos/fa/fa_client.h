@@ -263,8 +263,10 @@ typedef enum FaWriteMode
  * FA_WRITE_CREATE opens the name in quotes, as SINTRAN's COPY-FILE does (capture-write.txt);
  * a file that exists is then refused with FA_ERR_FILE_EXISTS (62), and is left as it was
  * (measured on D100 2026-11-12). FA_WRITE_OVERWRITE opens the bare name, as RetroIO's sync
- * daemon did on D100 (2026-08-18). The set end of file declares the new length; that a file
- * written shorter than before is cut to it is not yet measured.
+ * daemon did on D100 (2026-08-18). A shorter file written over a longer one reads back at its
+ * new length; SINTRAN keeps the pages it had (MEASURED on D100 2026-11-12 through the gateway:
+ * 2000, 3000, then 500 bytes, FILE-STATISTICS "2 PAGES , 500 BYTES IN FILE"). What
+ * FA_WRITE_OVERWRITE gets back for a file that does not exist is not measured.
  * A caller that does not know whether the file exists can create, and overwrite on error 62.
  * `done` comes with 0 when the server has the whole file, with
  * FA_CLIENT_EREFUSED and the SINTRAN error when it refused a step (the file is then closed and
