@@ -510,8 +510,11 @@ static void check_client_message(const uint8_t *ours, size_t ours_len, const Xms
     int len = test_hex_to_bytes(captured_hex, want, sizeof want);
     size_t end;
 
+    CHECK(len >= 0); /* -1: the captured hex did not decode or does not fit */
     CHECK_EQ(ours_len, len);
-    if (ours_len != (size_t)len)
+    /* Both bounds before the copy: a bad capture string gives len -1, which as a size_t would
+     * pass the length compare for a huge ours_len (gcc 15 -O3 -Wstringop-overflow found it). */
+    if (len < 0 || ours_len != (size_t)len || ours_len > sizeof got)
     {
         CHECK_BYTES(ours, ours_len, captured_hex);
         return;
