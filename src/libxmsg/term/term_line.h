@@ -60,6 +60,15 @@ void term_line_clear(TermLine *l);
  */
 int term_line_byte(TermLine *l, uint8_t b, uint8_t echo[3], size_t *echo_len);
 
+/**
+ * @brief Add text to the end of the line as if it had been typed (TAB completion).
+ *        Only printable bytes are taken, and only while the line has room.
+ * @param l    Editor.
+ * @param text The text, zero-terminated.
+ * @return The count of bytes added (the caller echoes exactly those), 0 for a NULL argument.
+ */
+size_t term_line_append(TermLine *l, const char *text);
+
 /** The bridge's commands. */
 typedef enum TermCmd
 {
@@ -67,7 +76,7 @@ typedef enum TermCmd
     TERM_CMD_UNKNOWN,
     TERM_CMD_CONNECT,  /**< CONNECT <system> */
     TERM_CMD_LIST,     /**< LIST: the systems that can be reached */
-    TERM_CMD_HELP,     /**< HELP or ? */
+    TERM_CMD_HELP,     /**< HELP or ?, with an optional command word: HELP COPY-TERM */
     TERM_CMD_WHO,      /**< WHO: the clients on the bridge */
     TERM_CMD_INFO,     /**< INFO: the link facts */
     TERM_CMD_EXIT,     /**< EXIT, LOGOUT or QUIT */

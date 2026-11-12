@@ -121,6 +121,9 @@ typedef struct ConsoleLine
     void (*close)(void *ctx, ConsoleClose why);
     /** The peer, for WHO ("127.0.0.1:50211", "system 100 port 0x08F0"). May be NULL. */
     void (*describe)(void *ctx, char *buf, size_t cap);
+    /** This line's own prompt ("XMSG# " on a USB console). NULL: ConsoleConfig.prompt. Not
+     *  copied: keep it alive. */
+    const char *prompt;
 } ConsoleLine;
 
 /** Where an onward session stands; reported with console_onward_state(). */
@@ -132,6 +135,21 @@ typedef enum ConsoleOnward
     CONSOLE_ONWARD_CLOSED,
     CONSOLE_ONWARD_FAILED
 } ConsoleOnward;
+
+/** One command, for HELP and for TAB completion of the command word. The core keeps a table
+ *  of its own commands (CONNECT, LIST, ...); the application gives its table in
+ *  ConsoleServices.commands. Running a command does not go through this table: the core's
+ *  commands are its own, the application's go to ConsoleServices.command. */
+typedef struct ConsoleCommandInfo
+{
+    const char *name;    /**< the command word, upper case: "COPY-TERM" */
+    AuthLevel level;     /**< the lowest level that sees it in HELP and TAB: AUTH_LEVEL_USER or
+                              AUTH_LEVEL_ADMIN (the application still checks the level itself) */
+    const char *summary; /**< a few words for the plain HELP list, no CR LF. NULL: not listed,
+                              but HELP <name> and TAB still know it (an alias such as QUIT) */
+    const char *detail;  /**< what HELP <name> prints: lines ended by CR LF, with the usage and
+                              examples. NULL: HELP <name> prints the name and the summary */
+} ConsoleCommandInfo;
 
 /** What the core needs from the XMSG node, by place. Every call may be marshalled to the task
  *  that owns the node; every answer comes back through a feed call. */
@@ -201,16 +219,22 @@ typedef struct ConsoleServices
      *  console_command_done() is needed after it, and text fed after it is refused. May be
      *  NULL only when command never answers 2. */
     void (*command_cancel)(void *ctx, int place);
-    /** HELP lines for the application's commands, shown to every user (CR LF ended). NULL:
-     *  none. */
+    /** The older way to list the application's commands: HELP lines shown to every user (CR
+     *  LF ended), printed after the command list. Prefer `commands`, which also gives HELP
+     *  <command> and TAB completion. NULL: none. */
     const char *help_user;
-    /** HELP lines shown to admins only, before the core's admin lines. NULL: none. */
+    /** The older way, for admins only: HELP lines printed after help_user. NULL: none. */
     const char *help_admin;
     /** More WHO lines of the application's own (CR LF ended), after the console sessions: users
      *  that are not on the console, such as an FTP user. To keep WHO's columns, build each line
      *  with term_report_who() and drop the heading, as the console does. May be NULL. Returns
      *  the length written. */
     int (*who_more)(void *ctx, char *buf, size_t cap);
+    /** The application's commands for HELP, HELP <command> and TAB completion, in the order
+     *  HELP lists them (after the core's). Not copied: keep the table alive. NULL: none. */
+    const ConsoleCommandInfo *commands;
+    /** The number of entries in `commands`. */
+    size_t command_count;
 } ConsoleServices;
 
 /** The whole user list, for USERS and DELUSER. Looking one up and saving one go through the

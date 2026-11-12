@@ -82,6 +82,28 @@ int term_line_byte(TermLine *l, uint8_t b, uint8_t echo[3], size_t *echo_len)
     return 0;
 }
 
+size_t term_line_append(TermLine *l, const char *text)
+{
+    size_t n = 0;
+
+    if (l == NULL || text == NULL)
+    {
+        return 0;
+    }
+    while (text[n] != '\0' && l->len < TERM_LINE_MAX)
+    {
+        uint8_t b = (uint8_t)text[n];
+        if (b < 0x20u || b > 0x7Eu)
+        {
+            break; /* the same rule as a typed byte: printable only */
+        }
+        l->text[l->len++] = (char)b;
+        n++;
+    }
+    l->text[l->len] = '\0';
+    return n;
+}
+
 static char upper(char c)
 {
     return (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
@@ -194,6 +216,10 @@ TermCmd term_cmd_parse(const char *line, char *arg, size_t cap)
     if (strcmp(word, "NAMES") == 0)
     {
         return TERM_CMD_NAMES; /* the system is optional: none is the host we are linked to */
+    }
+    if (strcmp(word, "HELP") == 0 || strcmp(word, "?") == 0)
+    {
+        return TERM_CMD_HELP; /* HELP <command>: the command is optional */
     }
     if (al > 0)
     {

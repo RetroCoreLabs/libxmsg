@@ -458,7 +458,9 @@ static void commands(void)
     s = login(&f, &l, "alice", "pw");
 
     type(s, "help\r", 3);
-    CHECK(has(&f, "CONNECT <system>") && has(&f, "DELUSER name"));
+    CHECK(has(&f, "CONNECT   connect to a SINTRAN system\r\n") &&
+          has(&f, "DELUSER   delete a user (admin)\r\n"));
+    CHECK(!has(&f, "CONNECT <system>")); /* the details are HELP CONNECT's */
     clear(&f);
     type(s, "who\r", 3);
     CHECK(has(&f, "TERM USER") && has(&f, "*    1 alice") && has(&f, "telnet 1.2.3.4:5"));
@@ -788,9 +790,14 @@ static void seven_bit_own_echo_and_esca(void)
     CHECK(!has(&f, "alice")); /* we never echo on such a line */
     type(s, "pw\r", 2);
     CHECK(f.echo_last);
-    type(s, "help\r", 3);
-    CHECK(has(&f, "ADDUSER name <admin>"));
+    type(s, "help adduser\r", 3);
+    CHECK(has(&f, "ADDUSER <name> ADMIN"));
     CHECK(clean_7bit(&f));
+    /* TAB is ignored on a line whose far side echoes: nothing is completed. */
+    clear(&f);
+    type(s, "wh\t", 3);
+    CHECK_EQ(f.len, 0);
+    type(s, "\r", 3); /* "wh" is not a command */
 
     type(s, "connect D102\r", 4);
     console_onward_state(s, CONSOLE_ONWARD_RUNNING, 0);
@@ -902,6 +909,106 @@ static void application_commands(void)
         type(t, "node\r", 3);
         CHECK(has(&g, "node 1 user"));
     }
+}
+
+/* HELP <command>, the level rule, TAB completion and a line's own prompt (XMSGGW's request,
+ * 2026-11-12: plain HELP one line per command, the examples behind HELP <command>). */
+static const ConsoleCommandInfo APP_COMMANDS[] = {
+    {"LIST-FILES", AUTH_LEVEL_USER, "the files of a SINTRAN user",
+     "LIST-FILES <system>(<user>)  the files of a user, e.g. LIST-FILES D100(SYSTEM)\r\n"},
+    {"COPY-TERM", AUTH_LEVEL_USER, "show a SINTRAN file", NULL},
+    {"RESTART", AUTH_LEVEL_ADMIN, "restart the gateway", NULL},
+};
+
+static void help_and_completion(void)
+{
+    FakeLine f;
+    FakeLine g;
+    ConsoleLine l = make_line(&f, 0);
+    ConsoleLine m = make_line(&g, 0);
+    ConsoleSession *s;
+    ConsoleSession *t;
+    setup(CONSOLE_MODE_PROMPT);
+    s_host.cfg.services.commands = APP_COMMANDS;
+    s_host.cfg.services.command_count = sizeof APP_COMMANDS / sizeof APP_COMMANDS[0];
+    m.prompt = "XMSG# ";               /* the second line has its own prompt */
+    s = login(&f, &l, "alice", "pw");  /* admin */
+    t = login(&g, &m, "carol", "cpw"); /* user */
+    type(s, "\r", 3); /* login() cleared the output: an empty line gives the prompt again */
+    type(t, "\r", 3);
+    CHECK(strcmp(f.out, "\r\nTAD> ") == 0);
+    CHECK(strcmp(g.out, "\r\nXMSG# ") == 0);
+
+    /* Plain HELP: one line per command, the width of the longest name; no examples. */
+    clear(&f);
+    type(s, "help\r", 3);
+    CHECK(has(&f, "CONNECT     connect to a SINTRAN system\r\n"));
+    CHECK(has(&f, "LIST-FILES  the files of a SINTRAN user\r\n"));
+    CHECK(has(&f, "RESTART     restart the gateway\r\n"));
+    CHECK(!has(&f, "e.g.") && !has(&f, "LOGOUT  ")); /* aliases are not listed */
+    CHECK(has(&f, "HELP <command> tells more about one command.\r\nTAD> "));
+
+    /* HELP <command>: the detail, the summary when there is none, a unique start, an alias. */
+    clear(&f);
+    type(s, "help list-files\r", 3);
+    CHECK(has(&f, "e.g. LIST-FILES D100(SYSTEM)\r\nTAD> "));
+    clear(&f);
+    type(s, "HELP copy\r", 3);
+    CHECK(has(&f, "COPY-TERM          show a SINTRAN file\r\n"));
+    clear(&f);
+    type(s, "help co\r", 3);
+    CHECK(has(&f, "CO is more than one command: CONNECT COPY-TERM\r\n"));
+    clear(&f);
+    type(s, "help list\r", 3); /* the exact name wins over LIST-FILES */
+    CHECK(has(&f, "the systems the host we are linked to can reach"));
+    clear(&f);
+    type(s, "? quit\r", 3);
+    CHECK(has(&f, "the same as EXIT"));
+    clear(&f);
+    type(s, "help frob\r", 3);
+    CHECK(has(&f, "no such command: FROB; HELP lists them\r\n"));
+
+    /* A user sees no admin command, and HELP on one says it does not exist. */
+    clear(&g);
+    type(t, "help\r", 3);
+    CHECK(!has(&g, "RESTART") && !has(&g, "USERS") && has(&g, "COPY-TERM"));
+    clear(&g);
+    type(t, "help restart\r", 3);
+    CHECK(has(&g, "no such command: RESTART"));
+    clear(&g);
+    type(t, "help us\r", 3);
+    CHECK(has(&g, "no such command: US"));
+
+    /* TAB: a unique start is finished with a space, in the case it was typed. */
+    clear(&g);
+    type(t, "cop\t", 3);
+    CHECK(strcmp(g.out, "copy-term ") == 0);
+    type(t, "\x08\x08\x08\x08\x08\x08\x08\x08\x08\x08", 3); /* back to an empty line */
+    clear(&g);
+    /* Several matches: completed as far as they agree; TAB again lists them and draws the
+     * line again after this line's own prompt. */
+    type(t, "LI\t", 3);
+    CHECK(strcmp(g.out, "LIST") == 0);
+    type(t, "\t", 3);
+    CHECK(strcmp(g.out, "LIST\r\nLIST  LIST-FILES  \r\nXMSG# LIST") == 0);
+    type(t, "\x08\x08\x08\x08", 3); /* the line still holds LIST: empty it */
+    clear(&g);
+    type(t, "x\t", 3); /* no match: nothing */
+    CHECK(strcmp(g.out, "x") == 0);
+    type(t, "\x08", 3);
+    clear(&g);
+    type(t, "res\t", 3); /* an admin command is not completed for a user */
+    CHECK(strcmp(g.out, "res") == 0);
+    type(t, "\x08\x08\x08", 3);
+    clear(&g);
+    type(t, "who \t", 3); /* past the first word: nothing */
+    CHECK(strcmp(g.out, "who ") == 0);
+    type(t, "\r", 3);
+    CHECK(has(&g, "*    2 carol") && has(&g, "XMSG# "));
+    clear(&f);
+    type(s, "res\t", 3); /* the admin has RESETPW and RESTART: nothing to add, so a list */
+    type(s, "\t", 3);
+    CHECK(has(&f, "\r\nRESETPW  RESTART  \r\nTAD> res"));
 }
 
 /* An application command whose answer comes later (XMSGGW LIST-FILES over XMSG). */
@@ -1034,6 +1141,7 @@ int main(void)
     seven_bit_own_echo_and_esca();
     trusted_admin_and_names();
     application_commands();
+    help_and_completion();
     application_command_answered_later();
     names_of_a_system_and_own_system_refused();
     TEST_DONE();

@@ -238,7 +238,14 @@ static void show_prompt(ConsoleSession *s)
         break;
     case CONSOLE_PH_PROMPT:
         set_echo(s, true);
-        say(s, (s->host->cfg.prompt != NULL) ? s->host->cfg.prompt : "> ");
+        if (s->line.prompt != NULL)
+        {
+            say(s, s->line.prompt);
+        }
+        else
+        {
+            say(s, (s->host->cfg.prompt != NULL) ? s->host->cfg.prompt : "> ");
+        }
         break;
     default:
         break;
@@ -681,34 +688,294 @@ void console_host_poll(ConsoleHost *h, uint32_t now_ms)
 /* Commands                                                                                   */
 /* ------------------------------------------------------------------------------------------ */
 
-static void cmd_help(ConsoleSession *s)
+/* The core's own commands, for HELP and TAB. Running them is prompt_line()'s switch. */
+static const ConsoleCommandInfo CORE_COMMANDS[] = {
+    {"CONNECT", AUTH_LEVEL_USER, "connect to a SINTRAN system",
+     "CONNECT <system>   connect to a SINTRAN system, e.g. CONNECT D102\r\n"
+     "In the session, ESC alone breaks the running program. Log out of SINTRAN to\r\n"
+     "come back here.\r\n"},
+    {"LIST", AUTH_LEVEL_USER, "the routing table of the host we are linked to",
+     "LIST               the systems the host we are linked to can reach\r\n"},
+    {"NAMES", AUTH_LEVEL_USER, "the system names and named ports a host knows",
+     "NAMES              the names the host we are linked to knows\r\n"
+     "NAMES <system>     the names that system knows, e.g. NAMES D102\r\n"},
+    {"WHO", AUTH_LEVEL_USER, "the users on this bridge", NULL},
+    {"INFO", AUTH_LEVEL_USER, "the link to the SINTRAN machine", NULL},
+    {"PASSWORD", AUTH_LEVEL_USER, "change your password", NULL},
+    {"HELP", AUTH_LEVEL_USER, "the commands; HELP <command> tells more",
+     "HELP               one line per command\r\n"
+     "HELP <command>     more about one command, e.g. HELP CONNECT\r\n"
+     "TAB completes a command word; TAB again lists the choices.\r\n"},
+    {"EXIT", AUTH_LEVEL_USER, "close the connection (also LOGOUT, QUIT)", NULL},
+    {"LOGOUT", AUTH_LEVEL_USER, NULL,
+     "LOGOUT             close the connection, the same as EXIT\r\n"},
+    {"QUIT", AUTH_LEVEL_USER, NULL,
+     "QUIT               close the connection, the same as EXIT\r\n"},
+    {"USERS", AUTH_LEVEL_ADMIN, "the users (admin)", NULL},
+    {"ADDUSER", AUTH_LEVEL_ADMIN, "add a user (admin)",
+     "ADDUSER <name>        add a user; the password is set at the first login\r\n"
+     "ADDUSER <name> ADMIN  add an admin\r\n"},
+    {"DELUSER", AUTH_LEVEL_ADMIN, "delete a user (admin)", "DELUSER <name>     delete a user\r\n"},
+    {"RESETPW", AUTH_LEVEL_ADMIN, "set a new password, changed at login (admin)",
+     "RESETPW <name>     set a new password, which the user must change at the next login\r\n"},
+};
+
+#define CORE_COMMAND_COUNT (sizeof CORE_COMMANDS / sizeof CORE_COMMANDS[0])
+
+/* Entry `i` of the core table followed by the application's, or NULL past the end or when the
+ * user's level does not see it. */
+static const ConsoleCommandInfo *command_at(const ConsoleSession *s, size_t i)
 {
     const ConsoleServices *sv = &s->host->cfg.services;
-    say(s, "CONNECT <system>   connect to a SINTRAN system, e.g. CONNECT D102\r\n"
-           "LIST               the routing table of the host we are linked to\r\n"
-           "NAMES              the system names and named ports the host knows\r\n"
-           "WHO                the users on this bridge\r\n"
-           "INFO               the link to the SINTRAN machine\r\n"
-           "PASSWORD           change your password\r\n"
-           "HELP               this text\r\n"
-           "EXIT, LOGOUT, QUIT close the connection\r\n");
+    const ConsoleCommandInfo *c;
+    if (i < CORE_COMMAND_COUNT)
+    {
+        c = &CORE_COMMANDS[i];
+    }
+    else if (sv->commands != NULL && i - CORE_COMMAND_COUNT < sv->command_count)
+    {
+        c = &sv->commands[i - CORE_COMMAND_COUNT];
+    }
+    else
+    {
+        return NULL;
+    }
+    if (c->name == NULL || c->level > s->level)
+    {
+        return NULL;
+    }
+    return c;
+}
+
+static size_t command_total(const ConsoleSession *s)
+{
+    const ConsoleServices *sv = &s->host->cfg.services;
+    return CORE_COMMAND_COUNT + ((sv->commands != NULL) ? sv->command_count : 0u);
+}
+
+/* Whether `name` starts with the first `n` bytes of `prefix`, letters compared without case. */
+static bool starts_with(const char *name, const char *prefix, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+    {
+        char a = name[i];
+        char b = prefix[i];
+        if (a == '\0')
+        {
+            return false;
+        }
+        if (a >= 'a' && a <= 'z')
+        {
+            a = (char)(a - 'a' + 'A');
+        }
+        if (b >= 'a' && b <= 'z')
+        {
+            b = (char)(b - 'a' + 'A');
+        }
+        if (a != b)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* HELP: one line per command the user's level sees, then the older help_user/help_admin text. */
+static void help_list(ConsoleSession *s)
+{
+    const ConsoleServices *sv = &s->host->cfg.services;
+    size_t total = command_total(s);
+    int width = 8;
+    for (size_t i = 0; i < total; i++)
+    {
+        const ConsoleCommandInfo *c = command_at(s, i);
+        if (c != NULL && c->summary != NULL && (int)strlen(c->name) > width)
+        {
+            width = (int)strlen(c->name);
+        }
+    }
+    if (width > 20)
+    {
+        width = 20; /* a longer name just pushes its own summary out */
+    }
+    for (size_t i = 0; i < total; i++)
+    {
+        const ConsoleCommandInfo *c = command_at(s, i);
+        if (c != NULL && c->summary != NULL)
+        {
+            sayf(s, "%-*s  %s\r\n", width, c->name, c->summary);
+        }
+    }
     if (sv->help_user != NULL)
     {
         say(s, sv->help_user);
     }
-    if (s->level == AUTH_LEVEL_ADMIN)
+    if (s->level == AUTH_LEVEL_ADMIN && sv->help_admin != NULL)
     {
-        if (sv->help_admin != NULL)
-        {
-            say(s, sv->help_admin);
-        }
-        say(s, "USERS              the users (admin)\r\n"
-               "ADDUSER name [admin]  add a user (admin)\r\n"
-               "DELUSER name       delete a user (admin)\r\n"
-               "RESETPW name       set a new password, changed at login (admin)\r\n");
+        say(s, sv->help_admin);
     }
-    say(s, "In a session: ESC alone breaks the running program; log out of SINTRAN to\r\n"
-           "come back here.\r\n");
+    say(s, "HELP <command> tells more about one command.\r\n");
+}
+
+/* HELP <word>: the command named exactly, or the one command the word starts. A command the
+ * user's level does not see is "no such command", the same as one that does not exist. */
+static void help_detail(ConsoleSession *s, const char *word)
+{
+    size_t total = command_total(s);
+    size_t n = strlen(word);
+    const ConsoleCommandInfo *found = NULL;
+    int matches = 0;
+    for (size_t i = 0; i < total; i++)
+    {
+        const ConsoleCommandInfo *c = command_at(s, i);
+        if (c == NULL || !starts_with(c->name, word, n))
+        {
+            continue;
+        }
+        if (c->name[n] == '\0')
+        {
+            found = c; /* an exact name wins over longer names it starts */
+            matches = 1;
+            break;
+        }
+        found = c;
+        matches++;
+    }
+    if (matches == 0)
+    {
+        sayf(s, "no such command: %s; HELP lists them\r\n", word);
+        return;
+    }
+    if (matches > 1)
+    {
+        sayf(s, "%s is more than one command:", word);
+        for (size_t i = 0; i < total; i++)
+        {
+            const ConsoleCommandInfo *c = command_at(s, i);
+            if (c != NULL && starts_with(c->name, word, n))
+            {
+                sayf(s, " %s", c->name);
+            }
+        }
+        say(s, "\r\n");
+        return;
+    }
+    if (found->detail != NULL)
+    {
+        say(s, found->detail);
+    }
+    else
+    {
+        sayf(s, "%-18s %s\r\n", found->name, (found->summary != NULL) ? found->summary : "");
+    }
+}
+
+static void cmd_help(ConsoleSession *s, const char *arg)
+{
+    if (arg[0] == '\0')
+    {
+        help_list(s);
+    }
+    else
+    {
+        help_detail(s, arg);
+    }
+}
+
+/* TAB at the prompt: complete the command word. A unique match is finished and followed by a
+ * space; several are completed as far as they agree; when nothing can be added, the matches
+ * are listed and the line is drawn again. Only the first word is completed. Not on a line
+ * whose far side echoes (CONSOLE_LINE_OWN_ECHO, a SINTRAN caller): the far side has already
+ * moved its cursor for the TAB, so our text would land in the wrong place. */
+static void complete_word(ConsoleSession *s)
+{
+    const char *text = s->edit.text;
+    size_t lead = 0;
+    size_t n;
+    size_t total = command_total(s);
+    const ConsoleCommandInfo *first = NULL;
+    size_t common = 0;
+    int matches = 0;
+    bool lower = false;
+    char add[TERM_LINE_MAX + 1u];
+    size_t added;
+
+    while (text[lead] == ' ')
+    {
+        lead++;
+    }
+    if (strchr(text + lead, ' ') != NULL)
+    {
+        return; /* past the command word */
+    }
+    n = strlen(text + lead);
+    for (size_t i = 0; i < total; i++)
+    {
+        const ConsoleCommandInfo *c = command_at(s, i);
+        if (c == NULL || !starts_with(c->name, text + lead, n))
+        {
+            continue;
+        }
+        if (first == NULL)
+        {
+            first = c;
+            common = strlen(c->name);
+        }
+        else
+        {
+            size_t k = n;
+            while (k < common && starts_with(c->name, first->name, k + 1u))
+            {
+                k++;
+            }
+            common = k;
+        }
+        matches++;
+    }
+    if (matches == 0)
+    {
+        return;
+    }
+    for (size_t i = 0; i < n; i++)
+    {
+        if (text[lead + i] >= 'a' && text[lead + i] <= 'z')
+        {
+            lower = true; /* typed in lower case: complete in lower case */
+        }
+    }
+    added = 0;
+    for (size_t i = n; i < common && added < TERM_LINE_MAX; i++)
+    {
+        char c = first->name[i];
+        add[added++] = (lower && c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+    }
+    if (matches == 1 && added < TERM_LINE_MAX)
+    {
+        add[added++] = ' ';
+    }
+    add[added] = '\0';
+    if (added > 0)
+    {
+        added = term_line_append(&s->edit, add);
+        out_raw(s, (const uint8_t *)add, added);
+        return;
+    }
+    if (matches == 1)
+    {
+        return;
+    }
+    say(s, "\r\n");
+    for (size_t i = 0; i < total; i++)
+    {
+        const ConsoleCommandInfo *c = command_at(s, i);
+        if (c != NULL && starts_with(c->name, text + lead, n))
+        {
+            sayf(s, "%s  ", c->name);
+        }
+    }
+    say(s, "\r\n");
+    show_prompt(s);
+    out_raw(s, (const uint8_t *)s->edit.text, s->edit.len);
 }
 
 static void cmd_who(ConsoleSession *self, uint32_t now_ms)
@@ -1216,7 +1483,7 @@ static void prompt_line(ConsoleSession *s, const char *text, uint32_t now_ms)
         cmd_info(s);
         break;
     case TERM_CMD_HELP:
-        cmd_help(s);
+        cmd_help(s, arg);
         break;
     case TERM_CMD_EXIT:
         say(s, "bye\r\n");
@@ -1348,6 +1615,16 @@ static void line_byte(ConsoleSession *s, uint8_t k, uint32_t now_ms)
     if (s->phase == CONSOLE_PH_LOGIN && s->login.state == AUTH_LOGIN_WAIT)
     {
         return; /* typed while a failed login waits: thrown away */
+    }
+    if (k == 0x09u)
+    {
+        /* TAB: completion at the prompt. Anywhere else (login, a password, a line whose far
+         * side echoes) it is ignored, as the editor ignores every control byte. */
+        if (s->phase == CONSOLE_PH_PROMPT && s->edit.echo && !line_is(s, CONSOLE_LINE_OWN_ECHO))
+        {
+            complete_word(s);
+        }
+        return;
     }
     if (term_line_byte(&s->edit, k, echo, &el) != 1)
     {

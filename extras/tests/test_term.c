@@ -446,6 +446,25 @@ static void command_words(void)
     CHECK_EQ(term_cmd_parse("list", arg, sizeof arg), TERM_CMD_LIST);
     CHECK_EQ(term_cmd_parse("Help", arg, sizeof arg), TERM_CMD_HELP);
     CHECK_EQ(term_cmd_parse("?", arg, sizeof arg), TERM_CMD_HELP);
+    CHECK_EQ(term_cmd_parse("help copy-term", arg, sizeof arg), TERM_CMD_HELP);
+    CHECK(strcmp(arg, "COPY-TERM") == 0); /* the command word, in upper case */
+    CHECK_EQ(term_cmd_parse("? who", arg, sizeof arg), TERM_CMD_HELP);
+    CHECK(strcmp(arg, "WHO") == 0);
+    CHECK_EQ(term_cmd_parse("help a b", arg, sizeof arg), TERM_CMD_UNKNOWN);
+    {
+        /* term_line_append: what TAB completion adds, as if typed, within the line's room. */
+        TermLine tl;
+        term_line_init(&tl, true);
+        CHECK_EQ(term_line_append(&tl, "cop"), 3);
+        CHECK_EQ(term_line_append(&tl, "y-term "), 7);
+        CHECK(strcmp(tl.text, "copy-term ") == 0 && tl.len == 10);
+        CHECK_EQ(term_line_append(&tl, "a\tb"), 1); /* stops at a control byte */
+        while (term_line_append(&tl, "xxxxxxxxxx") > 0)
+        {
+        }
+        CHECK_EQ(tl.len, TERM_LINE_MAX);
+        CHECK_EQ(term_line_append(NULL, "x"), 0);
+    }
     CHECK_EQ(term_cmd_parse("who", arg, sizeof arg), TERM_CMD_WHO);
     CHECK_EQ(term_cmd_parse("INFO", arg, sizeof arg), TERM_CMD_INFO);
     CHECK_EQ(term_cmd_parse("exit", arg, sizeof arg), TERM_CMD_EXIT);
