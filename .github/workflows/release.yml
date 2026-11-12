@@ -15,7 +15,7 @@ jobs:
     name: Package and publish
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check the tag matches library.properties and CMake
         run: |
@@ -27,7 +27,7 @@ jobs:
 
       - name: Build and test once more
         run: |
-          cmake -S src -B build -DXMSG_BUILD_TESTS=ON -DXMSG_WERROR=ON -DCMAKE_BUILD_TYPE=Release
+          cmake -S src -B build -DXMSG_BUILD_TESTS=ON -DXMSG_WITH_COSMOS=ON -DXMSG_WERROR=ON -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel
           ctest --test-dir build --output-on-failure
 

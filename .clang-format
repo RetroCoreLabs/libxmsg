@@ -1,6 +1,6 @@
 # House C standard (rule numbers refer to the c-coding-standard skill).
-# Apply to changed lines only:  git clang-format origin/main
-# Never reformat a whole existing file inside a functional commit.
+# CI checks every hand-written file (.github/workflows/build.yml). Format what you change:
+#   git clang-format origin/main     - and never mix a layout-only change into a functional commit.
 BasedOnStyle: LLVM
 Language: Cpp
 IndentWidth: 4
