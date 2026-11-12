@@ -505,8 +505,9 @@ static size_t end_of_fields(const uint8_t *b, size_t n)
 static void check_client_message(const uint8_t *ours, size_t ours_len, const XmsgSubhdr *sub,
                                  const char *captured_hex)
 {
-    uint8_t want[FA_DATA_MESSAGE_SIZE];
-    uint8_t got[FA_DATA_MESSAGE_SIZE];
+    /* Zeroed: only the first `len` bytes are decoded, so nothing past them may hold stack data. */
+    uint8_t want[FA_DATA_MESSAGE_SIZE] = {0};
+    uint8_t got[FA_DATA_MESSAGE_SIZE] = {0};
     int len = test_hex_to_bytes(captured_hex, want, sizeof want);
     size_t end;
 
@@ -521,7 +522,9 @@ static void check_client_message(const uint8_t *ours, size_t ours_len, const Xms
     }
     memcpy(got, ours, ours_len);
     end = end_of_fields(want, (size_t)len);
-    if (want[0] == 0x07 && want[1] == 0xF0 && end > 0)
+    /* A request is at least the 8-byte envelope and "92 op": bytes 9 and 10 are read below
+     * (found by MinGW gcc -O3 -Wmaybe-uninitialized: a shorter capture would read past it). */
+    if (len >= 11 && want[0] == 0x07 && want[1] == 0xF0 && end > 0)
     {
         if (end + 3u == (size_t)len - 1u)
         {
