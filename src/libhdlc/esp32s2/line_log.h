@@ -15,7 +15,8 @@
 #define LINE_LOG_H
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /** @brief Receives one piece of finished text; no newline is added. */

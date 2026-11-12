@@ -18,9 +18,9 @@ static void build_examples(void)
 {
     uint8_t f[64];
     uint8_t st[2 + 2 * 64];
-    static const uint8_t ok[] = { 'O', 'K' };
-    static const uint8_t level[] = { 3 };
-    static const uint8_t period[] = { 0xE8, 0x03 };
+    static const uint8_t ok[] = {'O', 'K'};
+    static const uint8_t level[] = {3};
+    static const uint8_t period[] = {0xE8, 0x03};
     int n;
 
     n = control_frame_build(CONTROL_FRAME_PING, 7, 0, NULL, 0, f);
@@ -45,7 +45,7 @@ static void build_examples(void)
 
 static void parse_and_the_two_locks(void)
 {
-    static const uint8_t reply[] = { 0xFE, 0x82, 0x07, 0x01, 0x4F, 0x4B, 0x28, 0x59 };
+    static const uint8_t reply[] = {0xFE, 0x82, 0x07, 0x01, 0x4F, 0x4B, 0x28, 0x59};
     uint8_t data[8];
     control_frame cf;
     uint16_t crc;
@@ -93,8 +93,9 @@ static void payload_limits(void)
     CHECK_EQ(n, BYTE_FRAME_MAX);
     CHECK(control_frame_parse(f, n, &cf));
     CHECK_EQ(cf.payload_len, CONTROL_FRAME_MAX_PAYLOAD);
-    CHECK_EQ(control_frame_build(CONTROL_FRAME_COMMAND, 9, 0, big, CONTROL_FRAME_MAX_PAYLOAD + 1, f),
-             -1);
+    CHECK_EQ(
+        control_frame_build(CONTROL_FRAME_COMMAND, 9, 0, big, CONTROL_FRAME_MAX_PAYLOAD + 1, f),
+        -1);
     CHECK_EQ(control_frame_build(CONTROL_FRAME_COMMAND, 9, 0, big, -1, f), -1);
 }
 

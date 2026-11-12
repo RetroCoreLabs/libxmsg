@@ -14,9 +14,9 @@
 static const char s_letters[5] = {'r', 'w', 'a', 'c', 'd'};
 static const char *const s_words[5] = {"READ", "WRITE", "APPEND", "COMMON", "DIRECTORY"};
 
-static const char *const s_months_stat[12] = {
-    "JANUARY", "FEBRUARY", "MARCH",     "APRIL",   "MAY",      "JUNE",
-    "JULY",    "AUGUST",   "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"};
+static const char *const s_months_stat[12] = {"JANUARY",   "FEBRUARY", "MARCH",    "APRIL",
+                                              "MAY",       "JUNE",     "JULY",     "AUGUST",
+                                              "SEPTEMBER", "OCTOBER",  "NOVEMBER", "DECEMBER"};
 static const char *const s_months_ftp[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
@@ -109,8 +109,8 @@ int fa_text_date_ftp(uint32_t raw, char *out, size_t cap)
         return fitted(snprintf(out, cap, "00 pre 50 00:00"), cap); /* measured, see the header */
     }
     return fitted(snprintf(out, cap, "%02u %s %02u %02u:%02u", (unsigned)d.day,
-                           s_months_ftp[d.month - 1u], (unsigned)(d.year % 100u),
-                           (unsigned)d.hour, (unsigned)d.minute),
+                           s_months_ftp[d.month - 1u], (unsigned)(d.year % 100u), (unsigned)d.hour,
+                           (unsigned)d.minute),
                   cap);
 }
 

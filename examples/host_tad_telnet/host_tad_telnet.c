@@ -858,12 +858,12 @@ typedef struct Place
     TadAsker asker;
     char system[CONSOLE_SYSTEM_MAX + 1u];
     char user[TAD_IAM_USER_SIZE];
-    bool pending;       /* waiting for the link before the connect letter can go */
-    bool running_seen;  /* RUNNING not yet told to the console */
-    bool ended;         /* CLOSED/FAILED not yet told to the console */
+    bool pending;      /* waiting for the link before the connect letter can go */
+    bool running_seen; /* RUNNING not yet told to the console */
+    bool ended;        /* CLOSED/FAILED not yet told to the console */
     ConsoleOnward end_state;
     int end_error;
-    bool logout;        /* the host said its login ended */
+    bool logout; /* the host said its login ended */
     XroutWalk walk;
     bool listing;
     XroutNamesWalk names_walk;
@@ -941,8 +941,7 @@ static void asker_logged_out(void *ctx)
 /* The console's services port, on this single thread                                         */
 /* ------------------------------------------------------------------------------------------ */
 
-static int svc_open(void *ctx, int place, const char *system, uint16_t number,
-                    const char *tad_user)
+static int svc_open(void *ctx, int place, const char *system, uint16_t number, const char *tad_user)
 {
     Place *p = &s_places[place];
     TadAskerConfig cfg;
@@ -1175,7 +1174,7 @@ typedef struct Client
     bool used;
     Sock sock;
     TermTelnet tn;
-    ConsoleSession *s; /* NULL once the console closed the line */
+    ConsoleSession *s;  /* NULL once the console closed the line */
     uint8_t out[16384]; /* bytes for the client socket */
     size_t out_len;
     bool closing; /* flush and close */
@@ -1899,8 +1898,8 @@ int main(int argc, char **argv)
     }
     s_started_at = now_ms();
     printf("telnet to port %u (%s mode); line %s:%s, we are node %u, host node %u (%s)\n",
-           a.listen_port, (s_mode == MODE_PROMPT) ? "prompt" : "direct", host, port, s_own,
-           s_peer, s_system);
+           a.listen_port, (s_mode == MODE_PROMPT) ? "prompt" : "direct", host, port, s_own, s_peer,
+           s_system);
     for (int i = 0; i < s_route_count; i++)
     {
         printf("system %s is node %u\n", s_routes[i].name, (unsigned)s_routes[i].number);

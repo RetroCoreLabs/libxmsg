@@ -392,8 +392,8 @@ int HOT_PATH_CODE byte_frame_encode(const uint8_t *frame, int len, uint8_t *out)
         out[1] = BYTE_FRAME_FLAG;
         return 2;
     }
-    return (int)byte_frame_encode_accm(frame, (size_t)len, BYTE_FRAME_ACCM_ALL_CONTROL, false,
-                                       out, 2u + (2u * (size_t)len));
+    return (int)byte_frame_encode_accm(frame, (size_t)len, BYTE_FRAME_ACCM_ALL_CONTROL, false, out,
+                                       2u + (2u * (size_t)len));
 }
 
 void byte_frame_decoder_reset(byte_frame_decoder *dec)
@@ -414,7 +414,7 @@ bool HOT_PATH_CODE byte_frame_decoder_feed(byte_frame_decoder *dec, uint8_t data
 
     if (dec->rx.buf == NULL)
     {
-        byte_frame_decoder_reset(dec);   /* zeroed storage, never reset */
+        byte_frame_decoder_reset(dec); /* zeroed storage, never reset */
     }
     st = byte_frame_rx_feed(&dec->rx, &data, 1u, &used);
     if (st == BYTE_FRAME_RX_FRAME)

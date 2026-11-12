@@ -76,7 +76,7 @@ typedef struct ConsoleTadConfig
     /** Guard the queues when the two sides run in two tasks; NULL when they do not. */
     void (*lock)(void *app_ctx);
     void (*unlock)(void *app_ctx);
-    bool seven_bit;             /**< CONSOLE_LINE_7BIT on the line: true */
+    bool seven_bit;               /**< CONSOLE_LINE_7BIT on the line: true */
     TadResponderConfig responder; /**< the responder's settings (give each its logical unit) */
 } ConsoleTadConfig;
 
@@ -86,13 +86,13 @@ typedef struct ConsoleTadLine
     TadResponder r;
     ConsoleTadConfig cfg;
     ConsoleTadState state;
-    bool greeted;       /**< ECKM 01 and SYCN 0002 sent at RUNNING */
-    bool escape;        /**< the caller pressed the escape key; not yet delivered */
-    bool close_wanted;  /**< the core closed the line: hang up once the queue is out */
-    uint8_t echo_sent;  /**< 0 not known, 1 on (ECKM 01), 2 off (ECKM FF) */
+    bool greeted;            /**< ECKM 01 and SYCN 0002 sent at RUNNING */
+    bool escape;             /**< the caller pressed the escape key; not yet delivered */
+    bool close_wanted;       /**< the core closed the line: hang up once the queue is out */
+    uint8_t echo_sent;       /**< 0 not known, 1 on (ECKM 01), 2 off (ECKM FF) */
     ConsoleSession *session; /**< console side: the session on this line, NULL when none */
     bool had_session;        /**< a session was attached during this call */
-    char who[40];       /**< "system 100 port 0x08F0" */
+    char who[40];            /**< "system 100 port 0x08F0" */
     uint8_t out[CONSOLE_TAD_OUT_MAX];
     size_t out_len;
     uint8_t in[CONSOLE_TAD_IN_MAX];
@@ -124,8 +124,7 @@ int console_tad_init(ConsoleTadLine *t, const ConsoleTadConfig *cfg);
  * @return As tad_responder_offer(): 1 handled, 0 not a TAD connect letter, XMSG_EAGAIN this
  *         line is in use (offer it to the next), other negative errors.
  */
-int console_tad_offer(ConsoleTadLine *t, XmsgNode *node, const XmsgDatagram *dg,
-                      uint32_t now_ms);
+int console_tad_offer(ConsoleTadLine *t, XmsgNode *node, const XmsgDatagram *dg, uint32_t now_ms);
 
 /**
  * @brief NODE side: move what the console queued into the responder, grant input, hang up.

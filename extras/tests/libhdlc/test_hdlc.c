@@ -187,19 +187,19 @@ static void crc_vectors(void)
 static void round_trip_every_offset(void)
 {
     static const uint8_t frames[][8] = {
-        { 0x01, 0x3F },                                     /* SABM with P */
-        { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }, /* every bit stuffed */
-        { 0x7E, 0x7E, 0x7D, 0x7F, 0x00, 0x7E, 0xFE, 0x3F }, /* flags and aborts as data */
-        { 0x03, 0x00, 0x1F, 0xF8, 0x0F, 0xF0, 0x55, 0xAA },
+        {0x01, 0x3F},                                     /* SABM with P */
+        {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, /* every bit stuffed */
+        {0x7E, 0x7E, 0x7D, 0x7F, 0x00, 0x7E, 0xFE, 0x3F}, /* flags and aborts as data */
+        {0x03, 0x00, 0x1F, 0xF8, 0x0F, 0xF0, 0x55, 0xAA},
     };
-    static const int lens[] = { 2, 8, 8, 8 };
+    static const int lens[] = {2, 8, 8, 8};
 
     for (int f = 0; f < 4; f++)
     {
         Line l;
         l.n = 0;
         encode_frame(&l, frames[f], lens[f]);
-        CHECK(longest_ones_inside(&l) <= 6);    /* the closing flag's six ones may show */
+        CHECK(longest_ones_inside(&l) <= 6); /* the closing flag's six ones may show */
 
         for (int k = 0; k < 8; k++)
         {
@@ -246,8 +246,8 @@ static void long_random_frames(void)
 
 static void back_to_back_frames_no_phantoms(void)
 {
-    static const uint8_t a[] = { 0x01, 0x73 };          /* UA with F */
-    static const uint8_t b[] = { 0x03, 0x00, 0x42, 0x43 };
+    static const uint8_t a[] = {0x01, 0x73}; /* UA with F */
+    static const uint8_t b[] = {0x03, 0x00, 0x42, 0x43};
     Line l;
     hdlc_decoder dec;
     Sink s;
@@ -267,7 +267,7 @@ static void back_to_back_frames_no_phantoms(void)
 
 static void corrupted_fcs_is_bad(void)
 {
-    static const uint8_t p[] = { 0x01, 0x00, 0x10, 0x20 };
+    static const uint8_t p[] = {0x01, 0x00, 0x10, 0x20};
     hdlc_encoder enc;
     hdlc_decoder dec;
     Sink s;
@@ -293,7 +293,7 @@ static void corrupted_fcs_is_bad(void)
 
 static void abort_drops_frame(void)
 {
-    static const uint8_t p[] = { 0x01, 0x00, 0x10, 0x20, 0x30 };
+    static const uint8_t p[] = {0x01, 0x00, 0x10, 0x20, 0x30};
     hdlc_encoder enc;
     hdlc_decoder dec;
     Sink s;
@@ -308,7 +308,7 @@ static void abort_drops_frame(void)
         line_put(&l, out, hdlc_encoder_write(&enc, p[i], out));
     }
     line_put(&l, out, hdlc_encoder_abort(&enc, out));
-    encode_frame(&l, p, 5);     /* a good frame afterwards still arrives */
+    encode_frame(&l, p, 5); /* a good frame afterwards still arrives */
     hdlc_decoder_reset(&dec);
     feed_line(&l, &dec, &sink);
     CHECK_EQ(s.aborts, 1);
@@ -328,12 +328,12 @@ static void control_field(void)
     CHECK(strcmp(c.name, "UA") == 0);
     CHECK(!c.poll_final);
 
-    c = hdlc_decode_control(0xA1);     /* RR, N(R) = 5 */
+    c = hdlc_decode_control(0xA1); /* RR, N(R) = 5 */
     CHECK_EQ(c.type, HDLC_FRAME_S);
     CHECK(strcmp(c.name, "RR") == 0);
     CHECK_EQ(c.nr, 5);
 
-    c = hdlc_decode_control(0x46);     /* I, N(S) = 3, N(R) = 2 */
+    c = hdlc_decode_control(0x46); /* I, N(S) = 3, N(R) = 2 */
     CHECK_EQ(c.type, HDLC_FRAME_I);
     CHECK_EQ(c.ns, 3);
     CHECK_EQ(c.nr, 2);
@@ -349,7 +349,7 @@ static void control_field(void)
  */
 static void idle_then_six_ones_is_not_a_flag(void)
 {
-    static const uint8_t line[] = { 0xFF, 0x3F, 0x00, 0x12, 0x34, 0x56, 0x78, 0x7E, 0xFF };
+    static const uint8_t line[] = {0xFF, 0x3F, 0x00, 0x12, 0x34, 0x56, 0x78, 0x7E, 0xFF};
     hdlc_decoder dec;
     Sink s;
     hdlc_frame_sink sink = make_sink(&s);
@@ -482,9 +482,9 @@ static void too_long_cut_and_counted(void)
         payload[i] = (uint8_t)(i * 7);
     }
     l.n = 0;
-    encode_frame(&l, payload, 624);     /* 626 with FCS: exactly the limit */
-    encode_frame(&l, payload, 625);     /* 627: one byte over */
-    encode_frame(&l, payload, 10);      /* and the decoder carries on */
+    encode_frame(&l, payload, 624); /* 626 with FCS: exactly the limit */
+    encode_frame(&l, payload, 625); /* 627: one byte over */
+    encode_frame(&l, payload, 10);  /* and the decoder carries on */
     hdlc_decoder_reset(&dec);
     hdlc_decoder_set_max_bytes(&dec, 626);
     feed_line(&l, &dec, &sink);
@@ -590,8 +590,9 @@ static void ref_decode(const uint8_t *line, int nbits, Events *e)
             {
                 if (active && count >= HDLC_MIN_FRAME_BYTES)
                 {
-                    int st = (nacc != 7) ? (int)HDLC_RX_ODD_BITS
-                             : (crc != HDLC_CRC_GOOD) ? (int)HDLC_RX_BAD_CRC : (int)HDLC_RX_OK;
+                    int st = (nacc != 7)              ? (int)HDLC_RX_ODD_BITS
+                             : (crc != HDLC_CRC_GOOD) ? (int)HDLC_RX_BAD_CRC
+                                                      : (int)HDLC_RX_OK;
                     ev(e, 'E', st);
                     s_ref_ends++;
                 }
@@ -764,9 +765,9 @@ static void fast_path_matches_reference(void)
 typedef struct
 {
     Events *e;
-    uint8_t frame[1024];    /* per-byte side: bytes of the frame so far */
+    uint8_t frame[1024]; /* per-byte side: bytes of the frame so far */
     int count;
-    hdlc_decoder *dec;      /* per-frame side: decoder to give the next buffer */
+    hdlc_decoder *dec; /* per-frame side: decoder to give the next buffer */
     uint8_t slot[2][1024];
     int size;
     int next;
@@ -890,7 +891,7 @@ static void per_frame_run(int limit)
         b.dec = &db;
         b.size = (limit != 0) ? limit : (int)sizeof b.slot[0];
         b.next = 0;
-        memset(&sb, 0, sizeof sb);       /* on_byte and on_end stay NULL: must not be called */
+        memset(&sb, 0, sizeof sb); /* on_byte and on_end stay NULL: must not be called */
         sb.ctx = &b;
         sb.on_frame = pf_frame;
         sb.on_abort = pf_abort;
@@ -905,8 +906,8 @@ static void per_frame_run(int limit)
         }
         frames += (long)(da.stats.ok + da.stats.bad_crc + da.stats.odd_bits + da.stats.too_long);
         too_long += (long)da.stats.too_long;
-        if (by_byte.n != by_frame.n || memcmp(by_byte.log, by_frame.log, (size_t)by_byte.n) != 0
-            || memcmp(&da.stats, &db.stats, sizeof da.stats) != 0)
+        if (by_byte.n != by_frame.n || memcmp(by_byte.log, by_frame.log, (size_t)by_byte.n) != 0 ||
+            memcmp(&da.stats, &db.stats, sizeof da.stats) != 0)
         {
             if (mismatches == 0)
             {
@@ -944,7 +945,7 @@ static void per_frame_equals_per_byte(void)
 /** A good frame lands in the buffer whole, FCS last, length reported; then back to per-byte. */
 static void per_frame_basic(void)
 {
-    static const uint8_t payload[] = { 0x01, 0x3F, 0xAA, 0x55, 0x7E, 0xFF };
+    static const uint8_t payload[] = {0x01, 0x3F, 0xAA, 0x55, 0x7E, 0xFF};
     Line l;
     ModeCtx c;
     hdlc_decoder dec;
@@ -957,7 +958,7 @@ static void per_frame_basic(void)
     e.n = 0;
     c.e = &e;
     c.dec = &dec;
-    c.size = 8;                          /* exactly payload + FCS */
+    c.size = 8; /* exactly payload + FCS */
     c.next = 0;
     memset(&sink, 0, sizeof sink);
     sink.ctx = &c;
@@ -1020,7 +1021,7 @@ static void bit_groups_equal_byte_form(void)
         for (int i = 0; i < len; i++)
         {
             seed = seed * 1103515245u + 12345u;
-            payload[i] = (uint8_t)((seed >> 16u) | (seed >> 20u));   /* many ones */
+            payload[i] = (uint8_t)((seed >> 16u) | (seed >> 20u)); /* many ones */
         }
         /* Byte form. */
         bl.n = 0;

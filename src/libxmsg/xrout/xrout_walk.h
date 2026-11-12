@@ -81,15 +81,15 @@ typedef struct XroutWalk
     XroutWalkCallbacks cb;
     XroutWalkState state;
     uint16_t host_system;
-    uint16_t asked;        /**< the system of the question in hand */
-    uint16_t sent_flags1;  /**< its Flags1, to match a refusal to it */
-    uint32_t since_ms;     /**< when the question became due, or went out */
+    uint16_t asked;       /**< the system of the question in hand */
+    uint16_t sent_flags1; /**< its Flags1, to match a refusal to it */
+    uint32_t since_ms;    /**< when the question became due, or went out */
     uint32_t timeout_ms;
     unsigned steps;
     unsigned entries;
     uint8_t resends;
-    uint8_t last_status;   /**< the XROUT status byte of a refused reply */
-    int16_t last_error;    /**< the XMSG error code of a refusal frame */
+    uint8_t last_status; /**< the XROUT status byte of a refused reply */
+    int16_t last_error;  /**< the XMSG error code of a refusal frame */
 } XroutWalk;
 
 /**

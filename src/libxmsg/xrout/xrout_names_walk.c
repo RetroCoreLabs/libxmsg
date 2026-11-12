@@ -137,8 +137,7 @@ static void names_on_datagram(XmsgSession *s, const XmsgDatagram *dg, uint32_t n
     }
     if (w->steps >= XROUT_NAMES_WALK_MAX_STEPS)
     {
-        XMSG_LOG(XMSG_LOG_XROUT, XMSG_LOG_WARN, "name walk: no end after %u questions",
-                 w->steps);
+        XMSG_LOG(XMSG_LOG_XROUT, XMSG_LOG_WARN, "name walk: no end after %u questions", w->steps);
         names_finish(w, XMSG_EPROTO);
         return;
     }
@@ -207,9 +206,8 @@ static void names_on_peer_restart(XmsgSession *s)
     }
 }
 
-static const XmsgSessionOps NAMES_WALK_OPS = {names_on_datagram, names_poll_tx,
-                                              names_tick,        NULL,
-                                              names_on_error,    names_on_peer_restart};
+static const XmsgSessionOps NAMES_WALK_OPS = {
+    names_on_datagram, names_poll_tx, names_tick, NULL, names_on_error, names_on_peer_restart};
 
 int xrout_names_walk_start(XroutNamesWalk *w, XmsgNode *n, uint16_t link_node,
                            uint16_t remote_system, uint32_t timeout_ms,

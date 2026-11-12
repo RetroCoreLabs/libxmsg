@@ -40,8 +40,8 @@
 #include "libhdlc/esp32s2/line_log.h"
 #include "libhdlc/hdlc.h"
 
-#define PIN_TX_CLOCK SCK    /* 7 */
-#define PIN_TX_DATA  MOSI   /* 11 */
+#define PIN_TX_CLOCK SCK  /* 7 */
+#define PIN_TX_DATA  MOSI /* 11 */
 
 /* Bytes per DMA transaction: about CHUNK_MS of line time at the current bit
  * rate, between CHUNK_MIN and CHUNK_MAX, a multiple of 4. Two are queued, so
@@ -51,9 +51,9 @@
  * the CPU while sending mostly idle ones; with 10-byte frames both ways the
  * CPU had no headroom left for decoding plus USB (BUGS.md B4). At 9600 the
  * old 64 bytes held the line 107 ms ahead; now it is about 13 ms. */
-#define CHUNK_MS 2u
-#define CHUNK_MIN 8
-#define CHUNK_MAX 512
+#define CHUNK_MS         2u
+#define CHUNK_MIN        8
+#define CHUNK_MAX        512
 #define CHUNKS_IN_FLIGHT 2
 
 /* 4 KB: three maximum-size stuffed frames from the host can wait here
@@ -71,7 +71,7 @@ static uint8_t *g_chunk[CHUNKS_IN_FLIGHT];
 static int g_chunk_len = CHUNK_MIN;
 static spi_transaction_t g_trans[CHUNKS_IN_FLIGHT];
 
-ring_buffer g_tx_buffer;    /* storage allocated in init, see ring_buffer_alloc() */
+ring_buffer g_tx_buffer; /* storage allocated in init, see ring_buffer_alloc() */
 
 static volatile uint32_t g_bit_rate = 38400;
 static volatile bool g_clock_enabled = true;
@@ -166,7 +166,7 @@ static esp_err_t open_bus(void)
     bus.sclk_io_num = PIN_TX_CLOCK;
     bus.quadwp_io_num = -1;
     bus.quadhd_io_num = -1;
-    bus.data_io_default_level = true;   /* TD = 1 between transactions */
+    bus.data_io_default_level = true; /* TD = 1 between transactions */
     bus.max_transfer_sz = CHUNK_MAX;
     return spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO);
 }
@@ -211,9 +211,9 @@ static esp_err_t open_device(uint32_t bits_per_second)
 
     memset(&dev, 0, sizeof(dev));
     dev.clock_speed_hz = (int)bits_per_second;
-    dev.mode = 0;                           /* same as the receive side */
-    dev.spics_io_num = -1;                  /* no chip select on an HDLC line */
-    dev.flags = SPI_DEVICE_BIT_LSBFIRST;    /* HDLC coder puts first wire bit in bit 0 */
+    dev.mode = 0;                        /* same as the receive side */
+    dev.spics_io_num = -1;               /* no chip select on an HDLC line */
+    dev.flags = SPI_DEVICE_BIT_LSBFIRST; /* HDLC coder puts first wire bit in bit 0 */
     dev.queue_size = CHUNKS_IN_FLIGHT;
     return spi_bus_add_device(SPI2_HOST, &dev, &g_device);
 }
@@ -249,7 +249,7 @@ static esp_err_t queue_chunk(int i)
 
     fill_chunk(g_chunk[i], len);
     memset(&g_trans[i], 0, sizeof(g_trans[i]));
-    g_trans[i].length = (size_t)len * 8u;   /* in bits */
+    g_trans[i].length = (size_t)len * 8u; /* in bits */
     g_trans[i].tx_buffer = g_chunk[i];
     return spi_device_queue_trans(g_device, &g_trans[i], portMAX_DELAY);
 }
@@ -307,8 +307,8 @@ void spi_tx_task_run(void *params)
 
     for (int i = 0; i < CHUNKS_IN_FLIGHT; i++)
     {
-        g_chunk[i] = (uint8_t *)heap_caps_aligned_alloc(4, CHUNK_MAX,
-                                                        MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        g_chunk[i] =
+            (uint8_t *)heap_caps_aligned_alloc(4, CHUNK_MAX, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
         if (g_chunk[i] == NULL)
         {
             fail_forever("heap_caps_aligned_alloc (DMA chunk)", ESP_ERR_NO_MEM);

@@ -85,7 +85,7 @@ int HOT_PATH_CODE spsc_ring_write_some(spsc_ring *r, const uint8_t *data, int n)
     {
         return 0;
     }
-    in = atomic_load_explicit(&r->in_ptr, memory_order_relaxed);    /* only we write it */
+    in = atomic_load_explicit(&r->in_ptr, memory_order_relaxed); /* only we write it */
     out = atomic_load_explicit(&r->out_ptr, memory_order_acquire);
     room = r->size - 1 - used(r->size, in, out);
     if (n > room)
@@ -131,7 +131,7 @@ int HOT_PATH_CODE spsc_ring_read_block(spsc_ring *r, uint8_t *out_buf, int max)
     {
         return 0;
     }
-    out = atomic_load_explicit(&r->out_ptr, memory_order_relaxed);  /* only we write it */
+    out = atomic_load_explicit(&r->out_ptr, memory_order_relaxed); /* only we write it */
     /* Acquire: the bytes up to in are visible once we see the index. */
     in = atomic_load_explicit(&r->in_ptr, memory_order_acquire);
     count = used(r->size, in, out);

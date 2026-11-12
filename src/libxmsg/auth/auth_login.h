@@ -50,14 +50,14 @@ extern "C"
 /** Where the dialogue stands. */
 typedef enum AuthLoginState
 {
-    AUTH_LOGIN_NAME = 0,      /**< waiting for the name */
-    AUTH_LOGIN_PASSWORD,      /**< waiting for the password (do not echo) */
-    AUTH_LOGIN_WAIT,          /**< a try failed; waiting before asking again */
-    AUTH_LOGIN_DONE,          /**< logged in */
-    AUTH_LOGIN_REFUSED,       /**< tries used up, or a needed change impossible: close */
-    AUTH_LOGIN_OLD_PASSWORD,  /**< voluntary change: waiting for the current password */
-    AUTH_LOGIN_NEW_PASSWORD,  /**< waiting for the new password */
-    AUTH_LOGIN_NEW_AGAIN      /**< waiting for the new password a second time */
+    AUTH_LOGIN_NAME = 0,     /**< waiting for the name */
+    AUTH_LOGIN_PASSWORD,     /**< waiting for the password (do not echo) */
+    AUTH_LOGIN_WAIT,         /**< a try failed; waiting before asking again */
+    AUTH_LOGIN_DONE,         /**< logged in */
+    AUTH_LOGIN_REFUSED,      /**< tries used up, or a needed change impossible: close */
+    AUTH_LOGIN_OLD_PASSWORD, /**< voluntary change: waiting for the current password */
+    AUTH_LOGIN_NEW_PASSWORD, /**< waiting for the new password */
+    AUTH_LOGIN_NEW_AGAIN     /**< waiting for the new password a second time */
 } AuthLoginState;
 
 /** Why a step of a password change was refused; the application turns it into text. */

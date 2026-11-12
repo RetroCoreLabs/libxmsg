@@ -14,7 +14,7 @@
 
 static void encode_escapes(void)
 {
-    static const uint8_t in[] = { 0x01, 0x7E, 0x41, 0x7D, 0x1F, 0x20 };
+    static const uint8_t in[] = {0x01, 0x7E, 0x41, 0x7D, 0x1F, 0x20};
     uint8_t out[2 + 2 * sizeof in];
     int n = byte_frame_encode(in, (int)sizeof in, out);
     CHECK_BYTES(out, (size_t)n, "7E 7D 21 7D 5E 41 7D 5D 7D 3F 20 7E");
@@ -59,7 +59,8 @@ static void noise_empty_and_bad_endings(void)
 {
     /* Noise before the first flag, two empty frames, a frame ending on an escape (dropped),
      * then a good one. */
-    static const uint8_t wire[] = { 0x55, 0x66, 0x7E, 0x7E, 0x7E, 0x01, 0x7D, 0x7E, 0x02, 0x03, 0x7E };
+    static const uint8_t wire[] = {0x55, 0x66, 0x7E, 0x7E, 0x7E, 0x01,
+                                   0x7D, 0x7E, 0x02, 0x03, 0x7E};
     uint8_t got[BYTE_FRAME_MAX];
     int got_len = 0;
     byte_frame_decoder d;
@@ -107,7 +108,7 @@ static void overlong_counted_and_survives_reset(void)
  */
 static void escape_after_escape(void)
 {
-    static const uint8_t wire[] = { 0x7E, 0x01, 0x7D, 0x7D, 0x41, 0x02, 0x7E };
+    static const uint8_t wire[] = {0x7E, 0x01, 0x7D, 0x7D, 0x41, 0x02, 0x7E};
     byte_frame_decoder d;
     uint8_t got[16];
     int got_len = 0;
@@ -122,7 +123,7 @@ static void escape_after_escape(void)
 static void zeroed_decoder_needs_no_reset(void)
 {
     static byte_frame_decoder d;
-    static const uint8_t wire[] = { 0x7E, 0x11, 0x22, 0x7E };
+    static const uint8_t wire[] = {0x7E, 0x11, 0x22, 0x7E};
     uint8_t got[16];
     int got_len = 0;
 

@@ -77,8 +77,8 @@ bool fa_reply_file_number(const FaReply *r, uint16_t *file_number)
     QformItem it;
     uint32_t v;
 
-    if (r == NULL || file_number == NULL ||
-        !qform_find_field(r->fields, r->fields_len, 2, &it) || !qform_item_uint(&it, &v))
+    if (r == NULL || file_number == NULL || !qform_find_field(r->fields, r->fields_len, 2, &it) ||
+        !qform_item_uint(&it, &v))
     {
         return false;
     }
@@ -189,8 +189,8 @@ bool fa_nd_date_split(uint32_t raw, FaNdDate *d)
     d->hour = (uint8_t)((raw >> 12u) & 0x1Fu);
     d->minute = (uint8_t)((raw >> 6u) & 0x3Fu);
     d->second = (uint8_t)(raw & 0x3Fu);
-    return d->month >= 1u && d->month <= 12u && d->day >= 1u && d->day <= 31u &&
-           d->hour <= 23u && d->minute <= 59u && d->second <= 59u;
+    return d->month >= 1u && d->month <= 12u && d->day >= 1u && d->day <= 31u && d->hour <= 23u &&
+           d->minute <= 59u && d->second <= 59u;
 }
 
 bool fa_reply_walk_entry(const FaReply *r, uint16_t *user_index, uint16_t *object_index,

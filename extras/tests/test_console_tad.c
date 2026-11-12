@@ -85,8 +85,7 @@ static int sv_resolve(void *ctx, const char *system, uint16_t *number)
     return -1;
 }
 
-static int sv_open(void *ctx, int place, const char *system, uint16_t number,
-                   const char *user)
+static int sv_open(void *ctx, int place, const char *system, uint16_t number, const char *user)
 {
     (void)ctx;
     (void)place;

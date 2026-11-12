@@ -258,11 +258,12 @@ typedef struct TadAsker
     uint8_t lun[2];        /**< the 0x0B data of the port assignment, as received */
     bool rfi_open;         /**< input granted and not yet used */
     int8_t break_strategy; /**< from the host's BMMX; 1 until one comes (see the file comment) */
-    uint16_t break_max;    /**< BMMX BRKMAX word: most bytes per BDAT for strategies 3 and up (0 = no limit) */
+    uint16_t
+        break_max; /**< BMMX BRKMAX word: most bytes per BDAT for strategies 3 and up (0 = no limit) */
     TadBreakTable break_table; /**< what a strategy 7 table says, when it can be read */
-    bool hangup_wanted;    /**< tad_asker_hangup() came before the session port was known */
-    uint16_t who_port;     /**< the port the last 7WHO came from: where 7IAM goes */
-    bool resync_tried;     /**< the unanswered letter has already drawn one resync */
+    bool hangup_wanted;        /**< tad_asker_hangup() came before the session port was known */
+    uint16_t who_port;         /**< the port the last 7WHO came from: where 7IAM goes */
+    bool resync_tried;         /**< the unanswered letter has already drawn one resync */
     /* Frames waiting to go, oldest first. */
     uint8_t queue[TAD_ASKER_QUEUE];
     uint8_t q_head;

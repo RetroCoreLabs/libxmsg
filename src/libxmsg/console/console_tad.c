@@ -157,8 +157,7 @@ int console_tad_init(ConsoleTadLine *t, const ConsoleTadConfig *cfg)
     return 0;
 }
 
-int console_tad_offer(ConsoleTadLine *t, XmsgNode *node, const XmsgDatagram *dg,
-                      uint32_t now_ms)
+int console_tad_offer(ConsoleTadLine *t, XmsgNode *node, const XmsgDatagram *dg, uint32_t now_ms)
 {
     TadResponderState rs;
     if (t == NULL || node == NULL || dg == NULL)
@@ -285,8 +284,7 @@ void console_tad_pump(ConsoleTadLine *t, uint32_t now_ms)
             (void)tad_responder_grant_input(&t->r); /* refused only when every chain is full */
         }
     }
-    if (t->close_wanted && (t->out_len == 0u || rs != TAD_RESP_RUNNING) &&
-        rs != TAD_RESP_CLOSING)
+    if (t->close_wanted && (t->out_len == 0u || rs != TAD_RESP_RUNNING) && rs != TAD_RESP_CLOSING)
     {
         t->close_wanted = false;
         hang_up = true;

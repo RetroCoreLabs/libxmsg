@@ -140,8 +140,8 @@ static void station_pump_tx(Station *s)
         {
             return;
         }
-        size_t w = byte_frame_encode_accm(s->tx_frame, (size_t)n, BYTE_FRAME_ACCM_NONE, true, s->tx_wire,
-                               sizeof s->tx_wire);
+        size_t w = byte_frame_encode_accm(s->tx_frame, (size_t)n, BYTE_FRAME_ACCM_NONE, true,
+                                          s->tx_wire, sizeof s->tx_wire);
         CHECK(w > 0);
         station_write(s, s->tx_wire, w);
     }

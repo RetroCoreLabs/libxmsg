@@ -61,13 +61,13 @@ static void pbkdf2_vectors(void)
     static const char k_salt[] = "saltSALTsaltSALTsaltSALTsaltSALTsalt";
     uint8_t d[40];
 
-    CHECK_EQ(auth_pbkdf2_sha256((const uint8_t *)"password", 8, (const uint8_t *)"salt", 4, 1, d,
-                                32),
-             0);
+    CHECK_EQ(
+        auth_pbkdf2_sha256((const uint8_t *)"password", 8, (const uint8_t *)"salt", 4, 1, d, 32),
+        0);
     CHECK_BYTES(d, 32, "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b");
-    CHECK_EQ(auth_pbkdf2_sha256((const uint8_t *)"password", 8, (const uint8_t *)"salt", 4, 4096,
-                                d, 32),
-             0);
+    CHECK_EQ(
+        auth_pbkdf2_sha256((const uint8_t *)"password", 8, (const uint8_t *)"salt", 4, 4096, d, 32),
+        0);
     CHECK_BYTES(d, 32, "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a");
     CHECK_EQ(auth_pbkdf2_sha256((const uint8_t *)k_pw, strlen(k_pw), (const uint8_t *)k_salt,
                                 strlen(k_salt), 4096, d, 40),
@@ -150,8 +150,9 @@ static void user_records(void)
     CHECK(!auth_user_check(&u, ""));
 
     int n = auth_user_format_line(&u, line, sizeof line);
-    CHECK(strcmp(line, "ronny:pbkdf2-sha256:10:000102030405060708090a0b0c0d0e0f:"
-                       "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f:user") == 0);
+    CHECK(strcmp(line,
+                 "ronny:pbkdf2-sha256:10:000102030405060708090a0b0c0d0e0f:"
+                 "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f:user") == 0);
     CHECK_EQ(n, (int)strlen(line));
     CHECK_EQ(auth_user_parse_line(line, &back), 0);
     CHECK(memcmp(&back, &u, sizeof u) == 0); /* round trip */
@@ -168,30 +169,36 @@ static void user_records(void)
     CHECK_EQ(auth_user_parse_line("", &back), 1);
     CHECK_EQ(auth_user_parse_line("\n", &back), 1);
     /* Bad lines: wrong scheme, count 0, short salt, extra field, no name, bad hex. */
-    CHECK_EQ(auth_user_parse_line("a:md5:10:000102030405060708090a0b0c0d0e0f:" /* scheme */
-                                  "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f",
-                                  &back),
-             -1);
-    CHECK_EQ(auth_user_parse_line("a:pbkdf2-sha256:0:000102030405060708090a0b0c0d0e0f:"
-                                  "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f",
-                                  &back),
-             -1);
-    CHECK_EQ(auth_user_parse_line("a:pbkdf2-sha256:10:0001:"
-                                  "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f",
-                                  &back),
-             -1);
-    CHECK_EQ(auth_user_parse_line("a:pbkdf2-sha256:10:000102030405060708090a0b0c0d0e0f:"
-                                  "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f:x",
-                                  &back),
-             -1);
-    CHECK_EQ(auth_user_parse_line(":pbkdf2-sha256:10:000102030405060708090a0b0c0d0e0f:"
-                                  "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f",
-                                  &back),
-             -1);
-    CHECK_EQ(auth_user_parse_line("a:pbkdf2-sha256:10:000102030405060708090a0b0c0d0e0g:"
-                                  "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f",
-                                  &back),
-             -1);
+    CHECK_EQ(
+        auth_user_parse_line("a:md5:10:000102030405060708090a0b0c0d0e0f:" /* scheme */
+                             "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f",
+                             &back),
+        -1);
+    CHECK_EQ(
+        auth_user_parse_line("a:pbkdf2-sha256:0:000102030405060708090a0b0c0d0e0f:"
+                             "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f",
+                             &back),
+        -1);
+    CHECK_EQ(
+        auth_user_parse_line("a:pbkdf2-sha256:10:0001:"
+                             "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f",
+                             &back),
+        -1);
+    CHECK_EQ(
+        auth_user_parse_line("a:pbkdf2-sha256:10:000102030405060708090a0b0c0d0e0f:"
+                             "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f:x",
+                             &back),
+        -1);
+    CHECK_EQ(
+        auth_user_parse_line(":pbkdf2-sha256:10:000102030405060708090a0b0c0d0e0f:"
+                             "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f",
+                             &back),
+        -1);
+    CHECK_EQ(
+        auth_user_parse_line("a:pbkdf2-sha256:10:000102030405060708090a0b0c0d0e0g:"
+                             "f8332ea7a39557af003df934f09c9a92e648b4fe4cd432aeea7b4d017c35ab3f",
+                             &back),
+        -1);
 
     CHECK_EQ(auth_user_make(&u, "ronny", "", 10, &rng), -1); /* empty password refused */
     CHECK_EQ(auth_user_make(&u, "a:b", "x", 10, &rng), -1);  /* ':' in the name */
@@ -209,8 +216,8 @@ static void verify_through_a_store(void)
     CHECK_EQ(auth_user_make(&s_users[1], "guest", "other", 10, &rng), 0);
     CHECK(auth_user_verify(&store, "ronny", "secret"));
     CHECK(auth_user_verify(&store, "guest", "other"));
-    CHECK(!auth_user_verify(&store, "ronny", "other")); /* another user's password */
-    CHECK(!auth_user_verify(&store, "RONNY", "secret")); /* names are exact */
+    CHECK(!auth_user_verify(&store, "ronny", "other"));   /* another user's password */
+    CHECK(!auth_user_verify(&store, "RONNY", "secret"));  /* names are exact */
     CHECK(!auth_user_verify(&store, "nobody", "secret")); /* unknown user */
     CHECK(!auth_user_verify(&store, "", "secret"));
 }
@@ -281,9 +288,9 @@ static void flags_field(void)
         {AUTH_LEVEL_ADMIN, false, "admin"},
         {AUTH_LEVEL_ADMIN, true, "admin,change"},
     };
-    static const char *const k_bad[] = {"", "root", "Admin", "admin,", "change",
-                                        "user,change,change",
-                                        "user,Change", ",change", "admin change"};
+    static const char *const k_bad[] = {
+        "",        "root",        "Admin", "admin,", "change", "user,change,change", "user,Change",
+        ",change", "admin change"};
     const AuthRandom rng = {NULL, fixed_salt};
     AuthUser u;
     AuthUser back;

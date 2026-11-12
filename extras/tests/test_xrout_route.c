@@ -21,17 +21,17 @@
 
 /* ListRoutingTests.cs CapturedRequestHex: 102 -> 100, asks for system 100. */
 #define CAPTURED_REQUEST                                                                           \
-    "21 13 00 0e 00 64 00 66 01 2b 01 00 db e9 21 00 86 84 00 64 00 00 00 66 02 a5 01 00 "        \
+    "21 13 00 0e 00 64 00 66 01 2b 01 00 db e9 21 00 86 84 00 64 00 00 00 66 02 a5 01 00 "         \
     "01 4b 00 04 01 02 00 64"
 
 /* ListRoutingTests.cs CapturedResponseHex: 100 -> 102, 100 is local. */
 #define CAPTURED_RESPONSE                                                                          \
-    "21 13 00 0e 00 66 00 64 00 f4 01 00 dc 20 21 00 86 60 00 66 02 a5 00 66 02 a5 01 00 "        \
+    "21 13 00 0e 00 66 00 64 00 f4 01 00 dc 20 21 00 86 60 00 66 02 a5 00 66 02 a5 01 00 "         \
     "01 00 00 10 01 02 00 64 02 02 00 04 03 02 00 64 04 02 00 00"
 
 /* Line logger frame 4905 without LAPB address/control and FCS: D100 -> 101, asks for 101. */
 #define LIVE_D100_REQUEST                                                                          \
-    "21 13 00 0E 00 65 00 64 00 29 01 00 DC EC 21 00 86 84 00 65 00 00 00 64 09 D4 01 00 "        \
+    "21 13 00 0E 00 65 00 64 00 29 01 00 DC EC 21 00 86 84 00 65 00 00 00 64 09 D4 01 00 "         \
     "01 4B 00 04 01 02 00 65"
 
 static int hex(const char *h, uint8_t *out, size_t cap)

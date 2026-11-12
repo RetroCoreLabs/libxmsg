@@ -956,12 +956,10 @@ int tad_responder_init(TadResponder *r, const TadResponderConfig *cfg,
 
 static bool in_use(const TadResponder *r)
 {
-    return r->state != TAD_RESP_IDLE && r->state != TAD_RESP_CLOSED &&
-           r->state != TAD_RESP_FAILED;
+    return r->state != TAD_RESP_IDLE && r->state != TAD_RESP_CLOSED && r->state != TAD_RESP_FAILED;
 }
 
-int tad_responder_offer(TadResponder *r, XmsgNode *node, const XmsgDatagram *dg,
-                        uint32_t now_ms)
+int tad_responder_offer(TadResponder *r, XmsgNode *node, const XmsgDatagram *dg, uint32_t now_ms)
 {
     TadResponderCaller who;
     int32_t p4 = -1;
@@ -1020,8 +1018,8 @@ int tad_responder_offer(TadResponder *r, XmsgNode *node, const XmsgDatagram *dg,
     if (verdict != 0)
     {
         r->stats.refused++;
-        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_INFO, "call from system %u refused: XROUT %d",
-                 who.system, verdict);
+        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_INFO, "call from system %u refused: XROUT %d", who.system,
+                 verdict);
         (void)tad_responder_refuse(node, dg, (uint8_t)verdict, now_ms);
         return 1;
     }

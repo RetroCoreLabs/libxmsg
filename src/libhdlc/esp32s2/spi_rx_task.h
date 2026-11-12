@@ -29,26 +29,27 @@
 #include "libhdlc/esp32s2/line_log.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-extern ring_buffer g_rx_buffer;   /**< raw bytes read from the line */
+extern ring_buffer g_rx_buffer; /**< raw bytes read from the line */
 
 /** @brief Counters for the bench and the STAT command. */
 typedef struct
 {
-    uint32_t bytes;         /**< bytes copied out of the DMA ring */
-    uint32_t idle_dropped;  /**< repeated 0xFF idle bytes not copied */
-    uint32_t fifo_full;     /**< DMA input FIFO overruns (data lost) */
-    uint32_t dma_errors;    /**< DMA in_err_eof events */
-    uint32_t overflow;      /**< bytes dropped because g_rx_buffer was full */
-    uint32_t peeked;        /**< words taken from memory before the DMA closed
+    uint32_t bytes;           /**< bytes copied out of the DMA ring */
+    uint32_t idle_dropped;    /**< repeated 0xFF idle bytes not copied */
+    uint32_t fifo_full;       /**< DMA input FIFO overruns (data lost) */
+    uint32_t dma_errors;      /**< DMA in_err_eof events */
+    uint32_t overflow;        /**< bytes dropped because g_rx_buffer was full */
+    uint32_t peeked;          /**< words taken from memory before the DMA closed
                                  their descriptor (far end stopped its clock) */
-    uint32_t pass_gap_max_us;  /**< longest time between two passes over the ring
+    uint32_t pass_gap_max_us; /**< longest time between two passes over the ring
                                     (2026-11-09, BUGS.md T3: a gap longer than the
                                     ring lets the DMA lap the task unseen) */
-    uint32_t pass_gaps_over;   /**< passes more than SPI_RX_GAP_WARN_US apart */
-    uint32_t desc_max;         /**< most descriptors taken in one pass (DESC_COUNT
+    uint32_t pass_gaps_over;  /**< passes more than SPI_RX_GAP_WARN_US apart */
+    uint32_t desc_max;        /**< most descriptors taken in one pass (DESC_COUNT
                                     or near it means the DMA may have lapped) */
 } spi_rx_task_stats;
 

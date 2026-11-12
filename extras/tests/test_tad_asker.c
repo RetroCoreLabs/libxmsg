@@ -1162,7 +1162,7 @@ static void logout_signal_once(void)
     CHECK_EQ(s_logged_out, 1);
     CHECK_EQ(s_asker.stats.logouts, 1);
     CHECK_EQ(s_asker.state, TAD_ASKER_TERMINAL_SETUP); /* no hang-up by itself */
-    CHECK_EQ(s_host.count, before + 1u);                /* the DUMM, as before */
+    CHECK_EQ(s_host.count, before + 1u);               /* the DUMM, as before */
     if (s_host.count == before + 1u)
     {
         CHECK_BYTES(s_host.frames[before] + 28, s_host.lens[before] - 28, "000000021800");

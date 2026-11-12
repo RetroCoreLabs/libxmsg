@@ -79,20 +79,21 @@ typedef enum XmsgFraming
 /** Node parameters. xmsg_node_config_default() fills the measured defaults. */
 typedef struct XmsgNodeConfig
 {
-    uint16_t own_node;       /**< our LAPB node number; also the default system number */
-    uint16_t own_system;     /**< our XMSG system number (0 = same as own_node) */
-    LapbConfig lapb;         /**< link parameters; own_node is copied into it */
-    uint32_t settle_ms;      /**< quiet time after link-up before data may flow; 500 */
+    uint16_t own_node;          /**< our LAPB node number; also the default system number */
+    uint16_t own_system;        /**< our XMSG system number (0 = same as own_node) */
+    LapbConfig lapb;            /**< link parameters; own_node is copied into it */
+    uint32_t settle_ms;         /**< quiet time after link-up before data may flow; 500 */
     uint32_t resync_timeout_ms; /**< xmsg_node_resync() may ask again after this long; 5000 */
-    XmsgFraming framing;     /**< how the transport carries frames */
-    bool transport_adds_fcs; /**< raw framing only: the hardware appends and checks the FCS */
-    uint32_t hdlc_accm; /**< async framing: BYTE_FRAME_ACCM_NONE (nd100x) or ALL_CONTROL (USB gateway) */
-    uint16_t portword_seed; /**< seed for minting port words */
-    uint8_t persist_every;  /**< Flags1 store policy; 1 = save every frame */
-    bool answer_routing;    /**< answer XSGSY routing questions at port 0; true. When false they
+    XmsgFraming framing;        /**< how the transport carries frames */
+    bool transport_adds_fcs;    /**< raw framing only: the hardware appends and checks the FCS */
+    uint32_t
+        hdlc_accm; /**< async framing: BYTE_FRAME_ACCM_NONE (nd100x) or ALL_CONTROL (USB gateway) */
+    uint16_t portword_seed;    /**< seed for minting port words */
+    uint8_t persist_every;     /**< Flags1 store policy; 1 = save every frame */
+    bool answer_routing;       /**< answer XSGSY routing questions at port 0; true. When false they
                              *   go to on_letter like any other port-0 datagram */
     uint16_t route_link_index; /**< XSGSY detail for the directly connected peer; 1 */
-    bool answer_names;      /**< answer XSGNI "get next name" questions at port 0; true. When
+    bool answer_names;         /**< answer XSGNI "get next name" questions at port 0; true. When
                              *   false they go to on_letter like any other port-0 datagram */
     char system_name[XROUT_NAME_LEN_MAX + 1u]; /**< our own system name, the XSGNI row
                              *   own_system:0001; "" (the default) = "D" + own_system in

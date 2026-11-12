@@ -61,8 +61,7 @@ static void fail(FaClient *c, int result, uint32_t now_ms)
     finish_with(c, FA_CLIENT_FAILED, result, now_ms);
 }
 
-static void enqueue(FaClient *c, FaClientSend kind, uint8_t counter, uint16_t seq,
-                    uint32_t now_ms)
+static void enqueue(FaClient *c, FaClientSend kind, uint8_t counter, uint16_t seq, uint32_t now_ms)
 {
     FaClientItem *it;
 
@@ -773,7 +772,7 @@ static void client_tick(XmsgSession *s, uint32_t now_ms)
 }
 
 static const XmsgSessionOps s_fa_client_ops = {
-    client_on_datagram, client_poll_tx,     client_tick,
+    client_on_datagram,  client_poll_tx,  client_tick,
     client_on_delivered, client_on_error, client_on_peer_restart,
 };
 
@@ -860,8 +859,7 @@ static int start(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_
     {
         return XMSG_EINVAL;
     }
-    if (c->state != FA_CLIENT_IDLE && c->state != FA_CLIENT_DONE &&
-        c->state != FA_CLIENT_FAILED)
+    if (c->state != FA_CLIENT_IDLE && c->state != FA_CLIENT_DONE && c->state != FA_CLIENT_FAILED)
     {
         return XMSG_ESTATE;
     }
@@ -921,8 +919,7 @@ static int start(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_
     c->wait_since_ms = now_ms;
     XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_INFO, "fa client: %s \"%s\" on %s (node %u) as %s",
              listing ? "list" : (c->writing ? "write" : "read"), c->spec, c->system_name,
-             (unsigned)peer_node,
-             c->remote_user);
+             (unsigned)peer_node, c->remote_user);
     enqueue(c, FA_SEND_LETTER, 0, 0, now_ms);
     return XMSG_OK;
 }

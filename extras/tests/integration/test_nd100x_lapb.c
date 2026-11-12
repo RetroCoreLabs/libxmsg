@@ -127,7 +127,8 @@ int main(void)
         int n;
         while ((n = lapb_pull_tx(&link, frame, sizeof frame)) > 0)
         {
-            size_t w = byte_frame_encode_accm(frame, (size_t)n, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
+            size_t w = byte_frame_encode_accm(frame, (size_t)n, BYTE_FRAME_ACCM_NONE, true, wire,
+                                              sizeof wire);
             printf("  TX %02X %02X (%d bytes)\n", frame[0], frame[1], n);
             size_t off = 0;
             while (off < w)
@@ -205,7 +206,8 @@ int main(void)
         int n;
         while ((n = lapb_pull_tx(&link, frame, sizeof frame)) > 0)
         {
-            size_t w = byte_frame_encode_accm(frame, (size_t)n, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
+            size_t w = byte_frame_encode_accm(frame, (size_t)n, BYTE_FRAME_ACCM_NONE, true, wire,
+                                              sizeof wire);
             (void)test_tcp_write(sock, wire, w);
         }
         /* Wait with T1 running, so the DISC is sent again every T1 as LAPB (and the C#
@@ -217,7 +219,8 @@ int main(void)
             lapb_tick(&link, test_now_ms());
             while ((n = lapb_pull_tx(&link, frame, sizeof frame)) > 0)
             {
-                size_t w = byte_frame_encode_accm(frame, (size_t)n, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
+                size_t w = byte_frame_encode_accm(frame, (size_t)n, BYTE_FRAME_ACCM_NONE, true,
+                                                  wire, sizeof wire);
                 (void)test_tcp_write(sock, wire, w);
             }
             test_tcp_wait_readable(sock, 50);

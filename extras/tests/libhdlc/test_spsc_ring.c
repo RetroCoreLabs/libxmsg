@@ -24,7 +24,7 @@ static void basics(void)
     uint8_t store[8];
     uint8_t out[16];
     spsc_ring r;
-    static const uint8_t a[] = { 1, 2, 3, 4, 5 };
+    static const uint8_t a[] = {1, 2, 3, 4, 5};
 
     CHECK(!spsc_ring_init(&r, store, 1));
     CHECK(spsc_ring_init(&r, store, 8));
@@ -32,15 +32,15 @@ static void basics(void)
     CHECK_EQ(spsc_ring_room(&r), 7);
 
     CHECK(spsc_ring_write_block(&r, a, 5));
-    CHECK(!spsc_ring_write_block(&r, a, 5));      /* all or nothing */
-    CHECK(!spsc_ring_write_block(&r, a, 8));      /* never fits */
+    CHECK(!spsc_ring_write_block(&r, a, 5)); /* all or nothing */
+    CHECK(!spsc_ring_write_block(&r, a, 8)); /* never fits */
     CHECK_EQ(spsc_ring_length(&r), 5);
     CHECK_EQ(spsc_ring_read_block(&r, out, 3), 3);
     CHECK_BYTES(out, 3, "01 02 03");
 
-    CHECK(spsc_ring_write_block(&r, a, 5));       /* wraps */
+    CHECK(spsc_ring_write_block(&r, a, 5)); /* wraps */
     CHECK_EQ(spsc_ring_length(&r), 7);
-    CHECK_EQ(spsc_ring_write_some(&r, a, 5), 0);  /* full: holds size - 1 */
+    CHECK_EQ(spsc_ring_write_some(&r, a, 5), 0); /* full: holds size - 1 */
     CHECK_EQ(spsc_ring_high_water(&r), 7);
     CHECK_EQ(spsc_ring_read_block(&r, out, 16), 7);
     CHECK_BYTES(out, 7, "04 05 01 02 03 04 05");

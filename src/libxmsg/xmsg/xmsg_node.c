@@ -615,8 +615,8 @@ static void handle_name_request(XmsgNode *n, const XmsgDatagram *dg)
         return;
     }
     XMSG_LOG(XMSG_LOG_NODE, XMSG_LOG_DEBUG,
-             "name question from node %u F1=0x%04X from 0x%08lX%s: answer %s 0x%08lX",
-             p.peer_node, p.req_flags1, (unsigned long)asked, p.is_repeat ? " (repeat)" : "",
+             "name question from node %u F1=0x%04X from 0x%08lX%s: answer %s 0x%08lX", p.peer_node,
+             p.req_flags1, (unsigned long)asked, p.is_repeat ? " (repeat)" : "",
              found ? row.name : "(end)", (unsigned long)(found ? xrout_name_magic(&row) : 0u));
 }
 
@@ -658,9 +658,9 @@ static bool send_route_reply(XmsgNode *n, uint32_t now_ms)
         lapb_tx_cancel(&n->lapb);
         return false;
     }
-    written = xmsg_dg_write_data(info, cap, (uint8_t)SINTRAN_SUBTYPE_DATA, p->peer_node,
-                                 n->cfg.own_node, flags1, XROUT_ROUTE_XMCSM, &sub, p->body,
-                                 p->body_len);
+    written =
+        xmsg_dg_write_data(info, cap, (uint8_t)SINTRAN_SUBTYPE_DATA, p->peer_node, n->cfg.own_node,
+                           flags1, XROUT_ROUTE_XMCSM, &sub, p->body, p->body_len);
     if (written == 0 || lapb_tx_commit(&n->lapb, written, now_ms) != XMSG_OK)
     {
         lapb_tx_cancel(&n->lapb);

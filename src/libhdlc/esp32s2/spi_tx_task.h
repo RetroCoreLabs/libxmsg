@@ -17,10 +17,11 @@
 #include "libhdlc/ring_buffer.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-extern ring_buffer g_tx_buffer;   /**< bit-stuffed bytes waiting for the line */
+extern ring_buffer g_tx_buffer; /**< bit-stuffed bytes waiting for the line */
 
 /**
  * @brief Set up g_tx_buffer. Call once from setup(), before any task starts.

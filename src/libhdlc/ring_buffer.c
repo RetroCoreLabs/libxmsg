@@ -48,7 +48,7 @@ static void lock_destroy(ring_buffer_lock *lock)
     vSemaphoreDelete(*lock);
     *lock = NULL;
 #elif defined(_WIN32)
-    (void)lock;     /* an SRWLOCK holds no resources */
+    (void)lock; /* an SRWLOCK holds no resources */
 #else
     /* Fails only when the mutex is held; ring_buffer_free() forbids that. */
     (void)pthread_mutex_destroy(lock);

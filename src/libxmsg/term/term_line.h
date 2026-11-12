@@ -65,12 +65,12 @@ typedef enum TermCmd
 {
     TERM_CMD_EMPTY = 0, /**< nothing typed */
     TERM_CMD_UNKNOWN,
-    TERM_CMD_CONNECT, /**< CONNECT <system> */
-    TERM_CMD_LIST,    /**< LIST: the systems that can be reached */
-    TERM_CMD_HELP,    /**< HELP or ? */
-    TERM_CMD_WHO,     /**< WHO: the clients on the bridge */
-    TERM_CMD_INFO,    /**< INFO: the link facts */
-    TERM_CMD_EXIT,    /**< EXIT, LOGOUT or QUIT */
+    TERM_CMD_CONNECT,  /**< CONNECT <system> */
+    TERM_CMD_LIST,     /**< LIST: the systems that can be reached */
+    TERM_CMD_HELP,     /**< HELP or ? */
+    TERM_CMD_WHO,      /**< WHO: the clients on the bridge */
+    TERM_CMD_INFO,     /**< INFO: the link facts */
+    TERM_CMD_EXIT,     /**< EXIT, LOGOUT or QUIT */
     TERM_CMD_PASSWORD, /**< PASSWORD: change one's own password */
     TERM_CMD_USERS,    /**< USERS: list the users (admin) */
     TERM_CMD_ADDUSER,  /**< ADDUSER <name>: add a user of level user (admin) */

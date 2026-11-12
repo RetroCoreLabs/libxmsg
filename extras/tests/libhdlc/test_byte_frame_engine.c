@@ -54,7 +54,8 @@ static void anchor_encodes_byte_for_byte(void)
 {
     const uint8_t body[] = {0x01, 0x3F, 0x00, 0x64};
     uint8_t wire[32];
-    size_t n = byte_frame_encode_accm(body, sizeof body, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
+    size_t n =
+        byte_frame_encode_accm(body, sizeof body, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
     CHECK_BYTES(wire, n, "7E 01 3F 00 64 2E 09 7E");
 }
 
@@ -78,7 +79,8 @@ static void body_flag_and_escape_are_stuffed(void)
      * flags, and decodes back to the body. */
     const uint8_t body[] = {0x09, 0x20, 0x7E, 0x7D, 0x00};
     uint8_t wire[64];
-    size_t n = byte_frame_encode_accm(body, sizeof body, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
+    size_t n =
+        byte_frame_encode_accm(body, sizeof body, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
     int flags = 0;
     bool saw_5e = false;
     bool saw_5d = false;
@@ -150,7 +152,8 @@ static void accm_none_leaves_control_bytes_alone(void)
     hdlc_fcs_append(fcs, hdlc_fcs_compute(body, sizeof body));
     CHECK(fcs[0] != 0x7E && fcs[0] != 0x7D && fcs[1] != 0x7E && fcs[1] != 0x7D);
     uint8_t wire[64];
-    size_t n = byte_frame_encode_accm(body, sizeof body, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
+    size_t n =
+        byte_frame_encode_accm(body, sizeof body, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
     CHECK_EQ(n, sizeof body + 4);
     CHECK(memcmp(wire + 1, body, sizeof body) == 0);
     for (size_t i = 0; i < n; i++)
@@ -166,8 +169,10 @@ static void accm_all_control_escapes_them_and_decodes_the_same(void)
     const uint8_t body[] = {0x09, 0x01, 0x0D, 0x0A, 0x1B, 0x13, 0x11, 0x00, 0x20, 0x7F};
     uint8_t wire_none[64];
     uint8_t wire_all[64];
-    size_t n_none = byte_frame_encode_accm(body, sizeof body, BYTE_FRAME_ACCM_NONE, true, wire_none, 64);
-    size_t n_all = byte_frame_encode_accm(body, sizeof body, BYTE_FRAME_ACCM_ALL_CONTROL, true, wire_all, 64);
+    size_t n_none =
+        byte_frame_encode_accm(body, sizeof body, BYTE_FRAME_ACCM_NONE, true, wire_none, 64);
+    size_t n_all =
+        byte_frame_encode_accm(body, sizeof body, BYTE_FRAME_ACCM_ALL_CONTROL, true, wire_all, 64);
     /* Seven control bytes in the body (01 0D 0A 1B 13 11 00) each gain one byte; an FCS byte
      * below 0x20 would gain one more, so at least seven. */
     CHECK(n_all >= n_none + 7 && n_all <= n_none + 9);
@@ -300,7 +305,8 @@ static void oversize_run_is_dropped_and_the_decoder_resyncs(void)
     }
     n += byte_frame_encode_accm(big, 40, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
     const uint8_t sabm[] = {0x01, 0x3F, 0x00, 0x64};
-    n += byte_frame_encode_accm(sabm, sizeof sabm, BYTE_FRAME_ACCM_NONE, true, wire + n, sizeof wire - n);
+    n += byte_frame_encode_accm(sabm, sizeof sabm, BYTE_FRAME_ACCM_NONE, true, wire + n,
+                                sizeof wire - n);
     uint8_t frames[2][700];
     size_t lens[2];
     byte_frame_rx_status other;
@@ -350,8 +356,8 @@ static void resumable_encoder_matches_one_shot_at_any_chunk_size(void)
         /* Plenty of 7E, 7D and control bytes so escapes straddle chunk boundaries. */
         body[i] = (uint8_t)((i % 5 == 0) ? 0x7E : (i % 7 == 0) ? 0x7D : (i & 0x1F));
     }
-    size_t n1 =
-        byte_frame_encode_accm(body, sizeof body, BYTE_FRAME_ACCM_ALL_CONTROL, true, one_shot, sizeof one_shot);
+    size_t n1 = byte_frame_encode_accm(body, sizeof body, BYTE_FRAME_ACCM_ALL_CONTROL, true,
+                                       one_shot, sizeof one_shot);
     CHECK(n1 > sizeof body + 4);
     CHECK(n1 <= byte_frame_encoded_max(sizeof body));
 
@@ -393,7 +399,9 @@ static void one_shot_refuses_a_small_buffer(void)
 {
     const uint8_t body[] = {0x01, 0x3F, 0x00, 0x64};
     uint8_t wire[7];
-    CHECK_EQ(byte_frame_encode_accm(body, sizeof body, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire), 0);
+    CHECK_EQ(
+        byte_frame_encode_accm(body, sizeof body, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire),
+        0);
     CHECK_EQ(byte_frame_encode_accm(body, 0, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire), 0);
 }
 
@@ -402,7 +410,8 @@ static void without_fcs_mode_forwards_the_frame_as_given(void)
     /* A gateway forwarding a frame that already carries its FCS: nothing is added. */
     const uint8_t frame[] = {0x01, 0x3F, 0x00, 0x64, 0x2E, 0x09};
     uint8_t wire[16];
-    size_t n = byte_frame_encode_accm(frame, sizeof frame, BYTE_FRAME_ACCM_NONE, false, wire, sizeof wire);
+    size_t n =
+        byte_frame_encode_accm(frame, sizeof frame, BYTE_FRAME_ACCM_NONE, false, wire, sizeof wire);
     CHECK_BYTES(wire, n, "7E 01 3F 00 64 2E 09 7E");
 }
 

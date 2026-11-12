@@ -56,26 +56,27 @@
 #include "libhdlc/byte_frame.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-#define CONTROL_FRAME_ADDRESS   0xFEu   /**< HDLC address that marks a control frame */
-#define CONTROL_FRAME_VERSION   1u      /**< protocol version reported in HELLO_REPLY */
-#define CONTROL_FRAME_HEADER    4       /**< address, type, id, flags */
-#define CONTROL_FRAME_CHECK     2       /**< the un-inverted CRC */
-#define CONTROL_FRAME_OVERHEAD  (CONTROL_FRAME_HEADER + CONTROL_FRAME_CHECK)
+#define CONTROL_FRAME_ADDRESS  0xFEu /**< HDLC address that marks a control frame */
+#define CONTROL_FRAME_VERSION  1u    /**< protocol version reported in HELLO_REPLY */
+#define CONTROL_FRAME_HEADER   4     /**< address, type, id, flags */
+#define CONTROL_FRAME_CHECK    2     /**< the un-inverted CRC */
+#define CONTROL_FRAME_OVERHEAD (CONTROL_FRAME_HEADER + CONTROL_FRAME_CHECK)
 /** Longest payload that still fits in BYTE_FRAME_MAX. */
 #define CONTROL_FRAME_MAX_PAYLOAD (BYTE_FRAME_MAX - CONTROL_FRAME_OVERHEAD)
 /** CRC register after a control frame including its check bytes. */
-#define CONTROL_FRAME_RESIDUE   0x0000u
+#define CONTROL_FRAME_RESIDUE 0x0000u
 
 /** @name Message types, host to firmware (bit 7 clear)
  *  @{ */
-#define CONTROL_FRAME_HELLO      0x01u  /**< identify; resets log level and stat push to off */
-#define CONTROL_FRAME_COMMAND    0x02u  /**< payload: a console command line, no CR/LF */
-#define CONTROL_FRAME_LOG_LEVEL  0x03u  /**< payload: one byte, 0 off .. 5 trace */
-#define CONTROL_FRAME_STAT_PUSH  0x04u  /**< payload: u16 period in ms, 0 = off, min 100 */
-#define CONTROL_FRAME_PING       0x05u  /**< empty; answered with an empty REPLY */
+#define CONTROL_FRAME_HELLO     0x01u /**< identify; resets log level and stat push to off */
+#define CONTROL_FRAME_COMMAND   0x02u /**< payload: a console command line, no CR/LF */
+#define CONTROL_FRAME_LOG_LEVEL 0x03u /**< payload: one byte, 0 off .. 5 trace */
+#define CONTROL_FRAME_STAT_PUSH 0x04u /**< payload: u16 period in ms, 0 = off, min 100 */
+#define CONTROL_FRAME_PING      0x05u /**< empty; answered with an empty REPLY */
 /** @} */
 
 /** @name Message types, firmware to host (bit 7 set)
@@ -107,13 +108,13 @@ extern "C" {
 
 /** @name Event codes (EVENT first byte)
  *  @{ */
-#define CONTROL_FRAME_EVENT_BOOT           1u  /**< firmware started; text = banner */
-#define CONTROL_FRAME_EVENT_MODE_CHANGE    2u  /**< text = FORWARDING / DEBUG / PACKET_GEN */
-#define CONTROL_FRAME_EVENT_LINE_RX_ACTIVE 3u  /**< first byte from the line after idle */
-#define CONTROL_FRAME_EVENT_LINE_RX_IDLE   4u  /**< no byte from the line for 2 s */
+#define CONTROL_FRAME_EVENT_BOOT           1u /**< firmware started; text = banner */
+#define CONTROL_FRAME_EVENT_MODE_CHANGE    2u /**< text = FORWARDING / DEBUG / PACKET_GEN */
+#define CONTROL_FRAME_EVENT_LINE_RX_ACTIVE 3u /**< first byte from the line after idle */
+#define CONTROL_FRAME_EVENT_LINE_RX_IDLE   4u /**< no byte from the line for 2 s */
 #define CONTROL_FRAME_EVENT_CLOCK_ON       5u
 #define CONTROL_FRAME_EVENT_CLOCK_OFF      6u
-#define CONTROL_FRAME_EVENT_USB_HOST_LOST  7u  /**< seen by the NEXT host, in its log */
+#define CONTROL_FRAME_EVENT_USB_HOST_LOST  7u /**< seen by the NEXT host, in its log */
 /* 16 and up: sent only by HDLCGW in its WiFi mode (HDLCGW wifi_task.h). Text is
  * key=value, space separated. Numbers are given out here, in one list, so two
  * firmwares never use the same code for different things. */
@@ -137,11 +138,11 @@ extern "C" {
 /** @brief A parsed control frame. payload points into the caller's buffer. */
 typedef struct
 {
-    uint8_t type;               /**< CONTROL_FRAME_* message type */
-    uint8_t id;                 /**< request id, 0 = unsolicited */
-    uint8_t flags;              /**< CONTROL_FRAME_FLAG_* and the chunk counter */
-    const uint8_t *payload;     /**< first payload byte, valid while the frame buffer is */
-    int payload_len;            /**< 0..CONTROL_FRAME_MAX_PAYLOAD */
+    uint8_t type;           /**< CONTROL_FRAME_* message type */
+    uint8_t id;             /**< request id, 0 = unsolicited */
+    uint8_t flags;          /**< CONTROL_FRAME_FLAG_* and the chunk counter */
+    const uint8_t *payload; /**< first payload byte, valid while the frame buffer is */
+    int payload_len;        /**< 0..CONTROL_FRAME_MAX_PAYLOAD */
 } control_frame;
 
 /**

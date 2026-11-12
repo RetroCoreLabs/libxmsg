@@ -239,10 +239,10 @@ typedef struct App
     TadResponderCaller who;
     unsigned calls;
     int verdict;
-    bool replay;               /* script the captured D102 text */
-    const uint8_t *pending;    /* text still to write (the listing) */
+    bool replay;            /* script the captured D102 text */
+    const uint8_t *pending; /* text still to write (the listing) */
     size_t pending_len;
-    int after_pending;         /* what follows it: 1 = prompt after the listing */
+    int after_pending; /* what follows it: 1 = prompt after the listing */
     uint8_t listing[2100];
     size_t listing_len;
     uint8_t banner[128];
@@ -405,8 +405,8 @@ static void app_feed(void)
 static void responder_start(bool replay)
 {
     TadResponderConfig cfg;
-    TadResponderCallbacks cb = {&s_app, app_incoming, app_state, app_text_in, app_escape,
-                                 app_status};
+    TadResponderCallbacks cb = {&s_app,      app_incoming, app_state,
+                                app_text_in, app_escape,   app_status};
     memset(&s_app, 0, sizeof s_app);
     s_app.replay = replay;
     tad_responder_config_default(&cfg);
@@ -571,8 +571,8 @@ static void replay_against_the_real_asker(void)
     CHECK_EQ(s_app.inputs, 5);
     CHECK_BYTES(s_app.typed, s_app.typed_len, "7379730D0D6C692D66692C2C2C0D6C6F7501670D");
     CHECK(s_resp.stats.repeats_in >= 1);
-    static const TadResponderState seq[] = {TAD_RESP_ACCEPTING, TAD_RESP_BRINGUP,
-                                            TAD_RESP_RUNNING, TAD_RESP_CLOSING, TAD_RESP_CLOSED};
+    static const TadResponderState seq[] = {TAD_RESP_ACCEPTING, TAD_RESP_BRINGUP, TAD_RESP_RUNNING,
+                                            TAD_RESP_CLOSING, TAD_RESP_CLOSED};
     CHECK_EQ(s_app.state_count, sizeof seq / sizeof seq[0]);
     for (size_t i = 0; i < s_app.state_count && i < sizeof seq / sizeof seq[0]; i++)
     {
@@ -797,9 +797,10 @@ static void status_question_is_answered_without_a_session(void)
     XmsgDatagram dg;
     uint8_t *body;
     size_t cap;
-    int len = test_hex_to_bytes("2113000E0065006400960400D97F210086E400650000006409E8040000410014FF07"
-                                "2A54414441444D00FE044431303104020001",
-                                raw, sizeof raw);
+    int len =
+        test_hex_to_bytes("2113000E0065006400960400D97F210086E400650000006409E8040000410014FF07"
+                          "2A54414441444D00FE044431303104020001",
+                          raw, sizeof raw);
     CHECK_EQ(len, 52); /* 14 header + 14 sub-header + 24 body */
     responder_start(false);
     s_status_cb = true; /* the application says: 3 of 8 in use */
@@ -822,7 +823,8 @@ static void status_question_is_answered_without_a_session(void)
         CHECK_BYTES(f + 14, 4, "21008640");
         CHECK_EQ(xmsg_be16_read(f + OFF_DST_PORT), 0x09E8);
         CHECK_EQ(xmsg_be16_read(f + OFF_SRC_PORT), 0x0156);
-        CHECK_BYTES(f + 26, s_seen.lens[0] - 26, "040000410008010200030202000"
+        CHECK_BYTES(f + 26, s_seen.lens[0] - 26,
+                    "040000410008010200030202000"
                     "5");
     }
     /* Plain LI-SYS at D100's @ prompt (live 2026-11-10 19:09:27) sends parameter 4 = 0: also
@@ -876,8 +878,7 @@ static int cs_resolve(void *ctx, const char *system, uint16_t *number)
     return 0;
 }
 
-static int cs_open(void *ctx, int place, const char *system, uint16_t number,
-                   const char *tad_user)
+static int cs_open(void *ctx, int place, const char *system, uint16_t number, const char *tad_user)
 {
     (void)ctx;
     (void)place;
@@ -926,8 +927,8 @@ static void console_function_key_follows_break_setting(void)
     static const uint8_t help[] = {0x1B, 0x5B, 0x34, 0x36, 0x5F}; /* TDV HELP, measured */
     static const uint8_t wire[] = {0x1B, 0xDB, 0xB4, 0x36, 0x5F}; /* even parity in bit 7 */
     TadResponderConfig rcfg;
-    TadResponderCallbacks rcb = {&s_app, app_incoming, app_state, app_text_in, app_escape,
-                                 app_status};
+    TadResponderCallbacks rcb = {&s_app,      app_incoming, app_state,
+                                 app_text_in, app_escape,   app_status};
     ConsoleConfig cfg;
     ConsoleLine l;
     ConsoleSession *s;
@@ -972,7 +973,8 @@ static void console_function_key_follows_break_setting(void)
     CHECK_EQ(tad_responder_grant_input(&s_resp), XMSG_OK);
     now = run_console(now, 300);
     CHECK_EQ(s_app.inputs, 2);
-    CHECK(s_app.typed_len == sizeof wire - 1 && memcmp(s_app.typed, wire + 1, sizeof wire - 1) == 0);
+    CHECK(s_app.typed_len == sizeof wire - 1 &&
+          memcmp(s_app.typed, wire + 1, sizeof wire - 1) == 0);
     CHECK_EQ(s_cl_len, 0);
 
     /* No grant: nothing goes; the key waits whole in the console until the host grants. */

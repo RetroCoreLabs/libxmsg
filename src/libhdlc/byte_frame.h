@@ -64,12 +64,13 @@
 #include "libhdlc/hdlc.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-#define BYTE_FRAME_FLAG        0x7Eu    /**< frame delimiter */
-#define BYTE_FRAME_ESCAPE      0x7Du    /**< next byte is XOR 0x20 */
-#define BYTE_FRAME_ESCAPE_MASK 0x20u    /**< applied to an escaped byte */
+#define BYTE_FRAME_FLAG        0x7Eu /**< frame delimiter */
+#define BYTE_FRAME_ESCAPE      0x7Du /**< next byte is XOR 0x20 */
+#define BYTE_FRAME_ESCAPE_MASK 0x20u /**< applied to an escaped byte */
 
 /** Escape only 0x7E and 0x7D: nd100x, the C# reference, the real ND machines. */
 #define BYTE_FRAME_ACCM_NONE 0x00000000u

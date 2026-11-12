@@ -19,7 +19,8 @@
 #include <stdbool.h>
 
 #if defined(ARDUINO_ARCH_RP2040) || defined(PICO_BUILD)
-#error "libhdlc ring_buffer has no lock on the Raspberry Pi Pico: use spsc_ring.h (one writer, one reader, lock-free) - BUGS.md L-PICO"
+/* Use spsc_ring.h there instead: one writer, one reader, lock-free. */
+#error "libhdlc ring_buffer has no lock on the Raspberry Pi Pico - BUGS.md L-PICO"
 #elif defined(ESP_PLATFORM)
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -39,7 +40,8 @@ typedef pthread_mutex_t ring_buffer_lock;
 #endif
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /**
@@ -49,15 +51,15 @@ extern "C" {
  */
 typedef struct
 {
-    uint8_t *data;              /**< storage, size bytes, owned by the caller */
-    int size;                   /**< capacity in bytes */
-    volatile int in_ptr;        /**< next write position */
-    volatile int out_ptr;       /**< next read position */
-    volatile bool empty;        /**< true when nothing is waiting */
-    volatile bool full;         /**< true when a write would be dropped */
-    volatile int high_water;    /**< most bytes ever waiting at once since init */
-    bool owns_storage;          /**< data came from ring_buffer_alloc*(), freed by ring_buffer_free() */
-    ring_buffer_lock mutex;     /**< guards every field above */
+    uint8_t *data;           /**< storage, size bytes, owned by the caller */
+    int size;                /**< capacity in bytes */
+    volatile int in_ptr;     /**< next write position */
+    volatile int out_ptr;    /**< next read position */
+    volatile bool empty;     /**< true when nothing is waiting */
+    volatile bool full;      /**< true when a write would be dropped */
+    volatile int high_water; /**< most bytes ever waiting at once since init */
+    bool owns_storage;      /**< data came from ring_buffer_alloc*(), freed by ring_buffer_free() */
+    ring_buffer_lock mutex; /**< guards every field above */
 } ring_buffer;
 
 /**

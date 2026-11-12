@@ -134,8 +134,7 @@ size_t fa_build_reserve(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_
     remote_len = strlen(remote_user);
     /* Field 3 is "<asker>  <user>" in a compact string (15 bytes at most); the remote user
      * needs room for its apostrophe in 16. */
-    if (asker_len + 2u + local_len > sizeof text || remote_len == 0u ||
-        remote_len >= FA_USER_SLOT)
+    if (asker_len + 2u + local_len > sizeof text || remote_len == 0u || remote_len >= FA_USER_SLOT)
     {
         return 0;
     }
@@ -271,8 +270,7 @@ size_t fa_build_set_end_of_file(uint8_t *out, size_t cap, const FaEnvelope *env,
     return finish(&w);
 }
 
-size_t fa_build_data_message(uint8_t *out, size_t cap, const FaEnvelope *env,
-                             const uint8_t *bytes)
+size_t fa_build_data_message(uint8_t *out, size_t cap, const FaEnvelope *env, const uint8_t *bytes)
 {
     if (out == NULL || env == NULL || bytes == NULL || cap < FA_DATA_MESSAGE_SIZE)
     {

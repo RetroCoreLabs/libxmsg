@@ -87,9 +87,9 @@ extern "C"
 #define CONSOLE_TAD_USER_MAX 16u
 
 /* What a line can do; ConsoleLine.caps. */
-#define CONSOLE_LINE_OWN_ECHO      0x01u /**< the far side echoes typed keys (a SINTRAN caller) */
-#define CONSOLE_LINE_ESCAPE_MSG    0x02u /**< the escape key comes as a message (TAD ESCA), so
-                                              an ESC byte is always text */
+#define CONSOLE_LINE_OWN_ECHO 0x01u /**< the far side echoes typed keys (a SINTRAN caller) */
+/** The escape key comes as a message (TAD ESCA), so an ESC byte is always text. */
+#define CONSOLE_LINE_ESCAPE_MSG    0x02u
 #define CONSOLE_LINE_7BIT          0x04u /**< 7-bit national text: see the text rules above */
 #define CONSOLE_LINE_TRUSTED_ADMIN 0x08u /**< logged in as admin with no password (USB) */
 
@@ -196,8 +196,7 @@ typedef struct ConsoleServices
      *      stops it: the core calls command_cancel, prints "<cancelled>" and the prompt;
      *   0  the line is not the application's (the core says "unknown command").
      *  The application checks the level itself. NULL: no application commands. */
-    int (*command)(void *ctx, int place, const char *line, AuthLevel level, char *out,
-                   size_t cap);
+    int (*command)(void *ctx, int place, const char *line, AuthLevel level, char *out, size_t cap);
     /** Stop a command that answered 2: the user pressed the escape key or went away. No
      *  console_command_done() is needed after it, and text fed after it is refused. May be
      *  NULL only when command never answers 2. */

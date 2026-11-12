@@ -61,7 +61,7 @@ static int walk_poll_tx(XmsgSession *s, uint32_t now_ms)
     sub.frame_flags = XROUT_ROUTE_REQ_FRAME_FLAGS;
     sub.role = XROUT_ROUTE_REQ_ROLE;
     sub.dst_system = w->host_system;
-    sub.dst_port = 0; /* the host's XROUT */
+    sub.dst_port = 0;   /* the host's XROUT */
     sub.src_system = 0; /* filled in by the node */
     sub.src_port = s->local_port;
     sub.xmcsm = XROUT_ROUTE_XMCSM;
@@ -98,8 +98,7 @@ static void walk_on_datagram(XmsgSession *s, const XmsgDatagram *dg, uint32_t no
         w->last_status = status;
         XMSG_LOG(XMSG_LOG_XROUT, XMSG_LOG_WARN,
                  "routing walk: node %u answered system %u with status %u (%s), %u bytes",
-                 s->peer_node, w->asked, status, xrout_error_name(status),
-                 (unsigned)dg->body_len);
+                 s->peer_node, w->asked, status, xrout_error_name(status), (unsigned)dg->body_len);
         walk_finish(w, XMSG_EPROTO);
         return;
     }
@@ -198,8 +197,8 @@ static void walk_on_peer_restart(XmsgSession *s)
     }
 }
 
-static const XmsgSessionOps WALK_OPS = {walk_on_datagram, walk_poll_tx,  walk_tick,
-                                        NULL,             walk_on_error, walk_on_peer_restart};
+static const XmsgSessionOps WALK_OPS = {walk_on_datagram, walk_poll_tx,        walk_tick, NULL,
+                                        walk_on_error,    walk_on_peer_restart};
 
 int xrout_walk_start(XroutWalk *w, XmsgNode *n, uint16_t host_node, uint16_t host_system,
                      uint32_t timeout_ms, const XroutWalkCallbacks *cb, uint32_t now_ms)

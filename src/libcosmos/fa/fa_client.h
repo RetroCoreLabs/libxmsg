@@ -64,9 +64,9 @@ extern "C"
 /** The result code of a refused transfer (the SINTRAN error is passed beside it). */
 #define FA_CLIENT_EREFUSED (-20)
 
-#define FA_CLIENT_QUEUE   8u  /**< frames waiting to be sent */
-#define FA_CLIENT_NAME    32u /**< user names and the system name, with the NUL */
-#define FA_CLIENT_SPEC    128u /**< the file specification, with the NUL */
+#define FA_CLIENT_QUEUE 8u   /**< frames waiting to be sent */
+#define FA_CLIENT_NAME  32u  /**< user names and the system name, with the NUL */
+#define FA_CLIENT_SPEC  128u /**< the file specification, with the NUL */
 
 /** Sub-header values, MEASURED in capture-read.txt (every FA frame after the letter). */
 #define FA_ROLE_LETTER 0xE4u
@@ -138,10 +138,10 @@ typedef enum FaClientStep
     FA_STEP_READ,
     FA_STEP_CLOSE,
     FA_STEP_RELEASE,
-    FA_STEP_WALK,      /**< listing: next entry */
-    FA_STEP_DIRECTORY, /**< listing: the directory entry, once */
-    FA_STEP_USER,      /**< listing: the user entry, once */
-    FA_STEP_WRITE,     /**< writing: one block, with its two data messages */
+    FA_STEP_WALK,       /**< listing: next entry */
+    FA_STEP_DIRECTORY,  /**< listing: the directory entry, once */
+    FA_STEP_USER,       /**< listing: the user entry, once */
+    FA_STEP_WRITE,      /**< writing: one block, with its two data messages */
     FA_STEP_END_OF_FILE /**< writing: set end of file (0C/3B) */
 } FaClientStep;
 
@@ -175,25 +175,25 @@ typedef struct FaClient
     bool first_request_sent;
 
     FaClientStep step;
-    bool reply_in;    /**< the reply to the current step has come */
-    uint8_t data_in;  /**< data messages of the current block received (0..2) */
-    uint32_t block;   /**< current block when reading */
-    uint32_t blocks;  /**< blocks in the file */
-    uint32_t length;  /**< bytes in the file */
+    bool reply_in;   /**< the reply to the current step has come */
+    uint8_t data_in; /**< data messages of the current block received (0..2) */
+    uint32_t block;  /**< current block when reading */
+    uint32_t blocks; /**< blocks in the file */
+    uint32_t length; /**< bytes in the file */
     uint16_t file_number;
     uint8_t object_entry[64];
     bool has_object_entry;
 
-    bool listing;                          /**< a walk rather than a read */
-    bool writing;                          /**< a write rather than a read */
-    bool create;                           /**< writing: create (quoted name), not overwrite */
-    bool cancelled;                        /**< fa_client_cancel: tearing down, no more
+    bool listing;                           /**< a walk rather than a read */
+    bool writing;                           /**< a write rather than a read */
+    bool create;                            /**< writing: create (quoted name), not overwrite */
+    bool cancelled;                         /**< fa_client_cancel: tearing down, no more
                                                 callbacks but `done` */
     uint8_t walk_block[FA_WALK_BLOCK_SIZE]; /**< the name block every walk request carries */
-    uint16_t user_index;                   /**< from the last entry; 0 before the first */
-    uint16_t cursor;                       /**< FFFF first, then last object index + 1 */
-    bool names_asked;                      /**< directory and user entries asked */
-    uint32_t entries;                      /**< files reported */
+    uint16_t user_index;                    /**< from the last entry; 0 before the first */
+    uint16_t cursor;                        /**< FFFF first, then last object index + 1 */
+    bool names_asked;                       /**< directory and user entries asked */
+    uint32_t entries;                       /**< files reported */
     char directory_name[17];
     char user_name[17];
 

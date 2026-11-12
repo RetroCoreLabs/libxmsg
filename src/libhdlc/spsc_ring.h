@@ -38,7 +38,8 @@ typedef atomic_int spsc_ring_index;
 #endif
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /**
@@ -49,11 +50,11 @@ extern "C" {
  */
 typedef struct
 {
-    uint8_t *data;              /**< storage, size bytes, owned by the caller */
-    int size;                   /**< storage size in bytes */
-    spsc_ring_index in_ptr;     /**< next write position; written by the writer only */
-    spsc_ring_index out_ptr;    /**< next read position; written by the reader only */
-    int high_water;             /**< most bytes ever waiting; written by the writer only */
+    uint8_t *data;           /**< storage, size bytes, owned by the caller */
+    int size;                /**< storage size in bytes */
+    spsc_ring_index in_ptr;  /**< next write position; written by the writer only */
+    spsc_ring_index out_ptr; /**< next read position; written by the reader only */
+    int high_water;          /**< most bytes ever waiting; written by the writer only */
 } spsc_ring;
 
 /**

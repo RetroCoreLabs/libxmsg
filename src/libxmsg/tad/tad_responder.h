@@ -223,27 +223,27 @@ typedef struct TadResponderCallbacks
 /** Settings; tad_responder_config_default() fills them. */
 typedef struct TadResponderConfig
 {
-    uint16_t logical_unit;      /**< the 0B data of the port assignment: 0x0300 (see the file
+    uint16_t logical_unit;     /**< the 0B data of the port assignment: 0x0300 (see the file
                                      comment); give each responder its own */
-    bool strip_parity;          /**< clear bit 7 of typed bytes: true */
-    uint32_t ack_timeout_ms;    /**< how long to wait for the asker's ACK of a frame: 10000 */
-    uint32_t setup_timeout_ms;  /**< from the letter to RUNNING: 30000 */
+    bool strip_parity;         /**< clear bit 7 of typed bytes: true */
+    uint32_t ack_timeout_ms;   /**< how long to wait for the asker's ACK of a frame: 10000 */
+    uint32_t setup_timeout_ms; /**< from the letter to RUNNING: 30000 */
 } TadResponderConfig;
 
 /** Counters for tests and diagnostics. */
 typedef struct TadResponderStats
 {
-    uint32_t letters;       /**< connect letters taken */
+    uint32_t letters;        /**< connect letters taken */
     uint32_t status_queries; /**< status questions answered (parameter 4 present) */
-    uint32_t refused;       /**< of which refused by the application */
+    uint32_t refused;        /**< of which refused by the application */
     uint32_t frames_in;
     uint32_t frames_out;
-    uint32_t repeats_in;    /**< asker frames seen again */
+    uint32_t repeats_in; /**< asker frames seen again */
     uint32_t xense_resends;
     uint32_t restart_resends;
-    uint32_t escapes;       /**< user ESCA reported to the application */
-    uint32_t escapes_off;   /**< user ESCA answered EDRS (escape disabled) */
-    uint32_t answers_in;    /**< DUMM / CERS / RECO after RUNNING */
+    uint32_t escapes;     /**< user ESCA reported to the application */
+    uint32_t escapes_off; /**< user ESCA answered EDRS (escape disabled) */
+    uint32_t answers_in;  /**< DUMM / CERS / RECO after RUNNING */
     uint32_t text_bytes_in;
     uint32_t text_bytes_out;
 } TadResponderStats;
@@ -276,10 +276,10 @@ struct TadResponder
     uint32_t state_since_ms;
     TadResponderCaller caller;
     TadResponderTerminal terminal;
-    uint8_t reco_count;    /**< RECOs in the bring-up */
-    bool escape_enabled;   /**< from the last CESC we added */
-    bool input_granted;    /**< an RFI has gone into a chain and no BDAT has used it */
-    uint8_t answers_owed;  /**< content frames the asker has not answered yet */
+    uint8_t reco_count;   /**< RECOs in the bring-up */
+    bool escape_enabled;  /**< from the last CESC we added */
+    bool input_granted;   /**< an RFI has gone into a chain and no BDAT has used it */
+    uint8_t answers_owed; /**< content frames the asker has not answered yet */
     /* Control frames waiting, oldest first (TadResponderSend values); chains are not in it. */
     uint8_t queue[TAD_RESP_QUEUE];
     uint8_t q_head;
@@ -327,8 +327,7 @@ int tad_responder_init(TadResponder *r, const TadResponderConfig *cfg,
  *         XMSG_ENOSPC when the node has no two free session places (the call was refused with
  *         XRNSP); XMSG_EINVAL.
  */
-int tad_responder_offer(TadResponder *r, XmsgNode *node, const XmsgDatagram *dg,
-                        uint32_t now_ms);
+int tad_responder_offer(TadResponder *r, XmsgNode *node, const XmsgDatagram *dg, uint32_t now_ms);
 
 /**
  * @brief Whether a port-0 datagram is a TAD connect letter (XSLET naming "*TADADM").

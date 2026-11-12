@@ -153,8 +153,7 @@ size_t fa_build_set_end_of_file(uint8_t *out, size_t cap, const FaEnvelope *env,
  *              zeros, as the captured client did).
  * @return FA_DATA_MESSAGE_SIZE, or 0 when it does not fit.
  */
-size_t fa_build_data_message(uint8_t *out, size_t cap, const FaEnvelope *env,
-                             const uint8_t *bytes);
+size_t fa_build_data_message(uint8_t *out, size_t cap, const FaEnvelope *env, const uint8_t *bytes);
 
 /** @brief Set block size (op 07): F2 0001 A2 <size> F2 00FF. */
 size_t fa_build_set_block_size(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
@@ -214,8 +213,7 @@ size_t fa_build_short_ack(uint8_t *out, size_t cap, uint16_t conversation, uint8
  * @brief Session finished: 0782 <server conversation> <our word> 8000 0000 (10 bytes).
  * MEASURED: capture-read.txt 02:29:16.631; the server answers 07C0 and frees its seat.
  */
-size_t fa_build_session_finished(uint8_t *out, size_t cap, uint16_t conversation,
-                                 uint16_t word);
+size_t fa_build_session_finished(uint8_t *out, size_t cap, uint16_t conversation, uint16_t word);
 
 #ifdef __cplusplus
 }

@@ -121,7 +121,7 @@ static spi_dev_t *const g_hw = &GPSPI3;
 static DRAM_ATTR __attribute__((aligned(4))) lldesc_t g_desc[DESC_COUNT];
 static DRAM_ATTR __attribute__((aligned(4))) uint8_t g_dma_buf[DESC_COUNT][DESC_BYTES];
 
-ring_buffer g_rx_buffer;    /* storage allocated in init, see ring_buffer_alloc() */
+ring_buffer g_rx_buffer; /* storage allocated in init, see ring_buffer_alloc() */
 
 static spi_rx_task_stats g_stats;
 static int g_next_index = 0;      /* descriptor the task expects back next */
@@ -158,8 +158,8 @@ void spi_rx_task_get_stats(spi_rx_task_stats *out)
 void spi_rx_task_print_dma(line_text_fn print)
 {
     line_log_printf(print, "Slave byte counter: %u, DMA int raw 0x%08X, next descriptor %d\r\n",
-                  (unsigned)spi_ll_slave_get_rx_byte_len(g_hw), (unsigned)g_hw->dma_int_raw.val,
-                  g_next_index);
+                    (unsigned)spi_ll_slave_get_rx_byte_len(g_hw), (unsigned)g_hw->dma_int_raw.val,
+                    g_next_index);
     /* 16 descriptors per line: owner letter (D = DMA, s = software) and the
      * buffer bytes. The ring is large; only the 64 descriptors around the
      * one the task expects next are shown. */
@@ -288,12 +288,12 @@ static void start_slave(void)
     periph_module_enable(PERIPH_HSPI_MODULE);
     periph_module_enable(PERIPH_SPI3_DMA_MODULE);
 
-    spi_ll_slave_init(g_hw);                        /* full duplex, slave_mode = 1 */
+    spi_ll_slave_init(g_hw); /* full duplex, slave_mode = 1 */
     spi_ll_slave_set_mode(g_hw, RX_SPI_MODE, true);
-    spi_ll_set_rx_lsbfirst(g_hw, true);             /* first wire bit -> bit 0 */
+    spi_ll_set_rx_lsbfirst(g_hw, true); /* first wire bit -> bit 0 */
     spi_ll_set_tx_lsbfirst(g_hw, true);
-    spi_ll_slave_set_seg_en(g_hw, true);            /* keep going, no end per CS */
-    spi_ll_dma_set_rx_eof_generation(g_hw, false);  /* no EOF on a byte count */
+    spi_ll_slave_set_seg_en(g_hw, true);           /* keep going, no end per CS */
+    spi_ll_dma_set_rx_eof_generation(g_hw, false); /* no EOF on a byte count */
 
     spi_ll_disable_int(g_hw);
     spi_ll_clear_int_stat(g_hw);

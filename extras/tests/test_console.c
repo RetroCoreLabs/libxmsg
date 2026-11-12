@@ -105,7 +105,7 @@ typedef struct FakeNode
     bool tad_user_null;
     uint8_t typed[512];
     size_t typed_len;
-    int take; /* how many bytes onward_write takes; -1 = all */
+    int take;        /* how many bytes onward_write takes; -1 = all */
     unsigned writes; /* onward_write calls that took bytes */
     int escapes;
     int hangups;
@@ -134,8 +134,7 @@ static int fn_resolve(void *ctx, const char *system, uint16_t *number)
     return -1;
 }
 
-static int fn_open(void *ctx, int place, const char *system, uint16_t number,
-                   const char *tad_user)
+static int fn_open(void *ctx, int place, const char *system, uint16_t number, const char *tad_user)
 {
     FakeNode *n = (FakeNode *)ctx;
     (void)place;
@@ -768,8 +767,8 @@ static bool clean_7bit(const FakeLine *f)
 static void seven_bit_own_echo_and_esca(void)
 {
     FakeLine f;
-    ConsoleLine l = make_line(&f, CONSOLE_LINE_7BIT | CONSOLE_LINE_OWN_ECHO |
-                                      CONSOLE_LINE_ESCAPE_MSG);
+    ConsoleLine l =
+        make_line(&f, CONSOLE_LINE_7BIT | CONSOLE_LINE_OWN_ECHO | CONSOLE_LINE_ESCAPE_MSG);
     ConsoleSession *s;
     static const uint8_t esc = 0x1B;
 
@@ -785,7 +784,7 @@ static void seven_bit_own_echo_and_esca(void)
     s = console_host_open(&s_host, &l, 0);
     CHECK(f.echo_calls == 1 && f.echo_last); /* the far side echoes the name */
     type(s, "alice\r", 1);
-    CHECK(!f.echo_last); /* ... and not the password */
+    CHECK(!f.echo_last);      /* ... and not the password */
     CHECK(!has(&f, "alice")); /* we never echo on such a line */
     type(s, "pw\r", 2);
     CHECK(f.echo_last);

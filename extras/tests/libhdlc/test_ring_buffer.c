@@ -21,7 +21,7 @@ static void basics_and_wrap(void)
 {
     ring_buffer rb;
     uint8_t out[16];
-    static const uint8_t a[] = { 1, 2, 3, 4, 5 };
+    static const uint8_t a[] = {1, 2, 3, 4, 5};
 
     CHECK(!ring_buffer_alloc(&rb, 1));
     CHECK(ring_buffer_alloc(&rb, 8));
@@ -30,9 +30,9 @@ static void basics_and_wrap(void)
 
     CHECK(ring_buffer_write_block(&rb, a, 5));
     CHECK_EQ(ring_buffer_length(&rb), 5);
-    CHECK(!ring_buffer_write_block(&rb, a, 5));     /* all or nothing */
+    CHECK(!ring_buffer_write_block(&rb, a, 5)); /* all or nothing */
     CHECK_EQ(ring_buffer_length(&rb), 5);
-    CHECK(!ring_buffer_write_block(&rb, a, 8));     /* never fits, size - 1 is the most */
+    CHECK(!ring_buffer_write_block(&rb, a, 8)); /* never fits, size - 1 is the most */
 
     CHECK_EQ(ring_buffer_read_block(&rb, out, 3), 3);
     CHECK_BYTES(out, 3, "01 02 03");
@@ -55,7 +55,7 @@ static void basics_and_wrap(void)
     ring_buffer_write(&rb, 0x11);
     ring_buffer_clear(&rb);
     CHECK(ring_buffer_is_empty(&rb));
-    CHECK_EQ(ring_buffer_high_water(&rb), 8);       /* clear keeps the measurement */
+    CHECK_EQ(ring_buffer_high_water(&rb), 8); /* clear keeps the measurement */
     ring_buffer_free(&rb);
 }
 
@@ -67,7 +67,7 @@ static void caller_storage(void)
     CHECK(ring_buffer_init(&rb, store, 4));
     ring_buffer_write(&rb, 7);
     CHECK_EQ(store[0], 7);
-    ring_buffer_free(&rb);   /* must not free store */
+    ring_buffer_free(&rb); /* must not free store */
 }
 
 /* ------------------------------------------------------------ threads */

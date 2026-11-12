@@ -17,41 +17,41 @@
 
 /* #27: the first request, 102 -> 100, F1 0x0012, parameter 1 = 16-bit 0. */
 #define REQ_FIRST                                                                                  \
-    "21 13 00 0E 00 64 00 66 00 12 01 00 DD 02 21 00 86 84 00 64 00 00 00 66 06 B2 01 00 "        \
+    "21 13 00 0E 00 64 00 66 00 12 01 00 DD 02 21 00 86 84 00 64 00 00 00 66 06 B2 01 00 "         \
     "01 45 00 04 01 02 00 00"
 /* #75: the second request, magic 0064 0001 + 1. */
 #define REQ_SECOND                                                                                 \
-    "21 13 00 0E 00 64 00 66 00 13 01 00 DD 01 21 00 86 84 00 64 00 00 00 66 06 B2 01 00 "        \
+    "21 13 00 0E 00 64 00 66 00 13 01 00 DD 01 21 00 86 84 00 64 00 00 00 66 06 B2 01 00 "         \
     "01 45 00 06 01 04 00 64 00 02"
 /* #651: the last request, after D19999. */
 #define REQ_LAST                                                                                   \
-    "21 13 00 0E 00 64 00 66 00 1F 01 00 DC F5 21 00 86 84 00 64 00 00 00 66 06 B2 01 00 "        \
+    "21 13 00 0E 00 64 00 66 00 1F 01 00 DC F5 21 00 86 84 00 64 00 00 00 66 06 B2 01 00 "         \
     "01 45 00 06 01 04 4E 1F 00 02"
 
 /* Replies, 100 -> 102, on D100's own count. */
 #define REP_D100                                                                                   \
-    "21 13 00 0E 00 66 00 64 00 11 01 00 DD 03 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "        \
+    "21 13 00 0E 00 66 00 64 00 11 01 00 DD 03 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "         \
     "01 00 00 0C 01 04 00 64 00 01 FE 04 44 31 30 30"
 #define REP_XFTRA                                                                                  \
-    "21 13 00 0E 00 66 00 64 00 13 01 00 DD 01 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "        \
+    "21 13 00 0E 00 66 00 64 00 13 01 00 DD 01 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "         \
     "01 00 00 12 01 04 00 64 02 27 FE 06 2A 58 46 54 52 41 03 02 00 01"
 #define REP_XM_ENNS0                                                                               \
-    "21 13 00 0E 00 66 00 64 00 14 01 00 DD 00 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "        \
+    "21 13 00 0E 00 66 00 64 00 14 01 00 DD 00 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "         \
     "01 00 00 12 01 04 00 64 02 D0 FE 09 2A 58 4D 2D 45 4E 4E 53 30 00"
 #define REP_TADADM                                                                                 \
-    "21 13 00 0E 00 66 00 64 00 16 01 00 DC FE 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "        \
+    "21 13 00 0E 00 66 00 64 00 16 01 00 DC FE 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "         \
     "01 00 00 10 01 04 00 64 04 01 FE 07 2A 54 41 44 41 44 4D 00"
 #define REP_FA_FSA                                                                                 \
-    "21 13 00 0E 00 66 00 64 00 17 01 00 DC FD 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "        \
+    "21 13 00 0E 00 66 00 64 00 17 01 00 DC FD 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "         \
     "01 00 00 14 01 04 00 64 04 CE FE 07 2A 46 41 2D 46 53 41 00 03 02 00 02"
 #define REP_FA_FSA_I                                                                               \
-    "21 13 00 0E 00 66 00 64 00 18 01 00 DC FC 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "        \
+    "21 13 00 0E 00 66 00 64 00 18 01 00 DC FC 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "         \
     "01 00 00 16 01 04 00 64 05 3F FE 09 2A 46 41 2D 46 53 41 2D 49 00 03 02 00 00"
 #define REP_D19999                                                                                 \
-    "21 13 00 0E 00 66 00 64 00 1D 01 00 DC F7 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "        \
+    "21 13 00 0E 00 66 00 64 00 1D 01 00 DC F7 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "         \
     "01 00 00 0E 01 04 4E 1F 00 01 FE 06 44 31 39 39 39 39"
 #define REP_END                                                                                    \
-    "21 13 00 0E 00 66 00 64 00 1E 01 00 DC F6 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "        \
+    "21 13 00 0E 00 66 00 64 00 1E 01 00 DC F6 21 00 86 60 00 66 06 B2 00 66 06 B2 01 00 "         \
     "01 00 00 04 01 02 00 00"
 
 static size_t build_request(uint8_t *out, size_t cap, uint16_t f1, uint32_t asked)
@@ -121,8 +121,8 @@ static void replies_are_rebuilt_byte_for_byte(void)
     XmsgSubhdr sub = {0x86, 0x60, 0x0066, 0x06B2, 0x0066, 0x06B2, 0x0100};
     size_t len = xrout_name_reply_write(body, 0x01, NULL);
     CHECK_EQ(len, 8);
-    n = xmsg_dg_write_data(info, sizeof info, 0x0E, 0x0066, 0x0064, 0x001E, XROUT_NAME_XMCSM,
-                           &sub, body, len);
+    n = xmsg_dg_write_data(info, sizeof info, 0x0E, 0x0066, 0x0064, 0x001E, XROUT_NAME_XMCSM, &sub,
+                           body, len);
     CHECK_BYTES(info, n, REP_END);
 }
 
@@ -224,8 +224,7 @@ static void bad_bodies_are_refused(void)
     long_name[9] = 0x01;
     long_name[10] = 0xFE;
     long_name[11] = 18;
-    CHECK_EQ(xrout_name_reply_read(long_name, sizeof long_name, &status, &r, &is_end),
-             XMSG_EPROTO);
+    CHECK_EQ(xrout_name_reply_read(long_name, sizeof long_name, &status, &r, &is_end), XMSG_EPROTO);
 
     /* Requests: no parameter 1, or not XSGNI. */
     uint8_t bad[4] = {0x01, 0x45, 0x00, 0x00};
@@ -296,8 +295,7 @@ static void table_keeps_magic_order(void)
     CHECK_EQ(xrout_name_row_set(&r, 0, 0x0001, "D0", XROUT_NAME_NO_FREE), XMSG_EINVAL);
     CHECK_EQ(xrout_name_row_set(&r, 100, 0, "X", XROUT_NAME_NO_FREE), XMSG_EINVAL);
     CHECK_EQ(xrout_name_row_set(&r, 100, 1, "", XROUT_NAME_NO_FREE), XMSG_EINVAL);
-    CHECK_EQ(xrout_name_row_set(&r, 100, 1, "ABCDEFGHIJKLMNOPQ", XROUT_NAME_NO_FREE),
-             XMSG_EINVAL);
+    CHECK_EQ(xrout_name_row_set(&r, 100, 1, "ABCDEFGHIJKLMNOPQ", XROUT_NAME_NO_FREE), XMSG_EINVAL);
     CHECK_EQ(xrout_name_row_set(&r, 100, 1, "ABCDEFGHIJKLMNOP", XROUT_NAME_NO_FREE), XMSG_OK);
     CHECK_EQ(xrout_name_row_set(&r, 100, 1, "X", 0x10000), XMSG_EINVAL);
     CHECK_EQ(xrout_name_row_set(&r, 100, 1, "X", -2), XMSG_EINVAL);

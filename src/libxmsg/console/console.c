@@ -255,8 +255,7 @@ static void to_prompt(ConsoleSession *s)
     show_prompt(s);
 }
 
-const char *console_tad_user_name(const ConsoleConfig *cfg, const char *user, char *out,
-                                  size_t cap)
+const char *console_tad_user_name(const ConsoleConfig *cfg, const char *user, char *out, size_t cap)
 {
     size_t n;
     if (cfg == NULL || out == NULL || cap == 0u)
@@ -328,8 +327,8 @@ static bool onward_start(ConsoleSession *s, const char *system, uint32_t now_ms)
 {
     const ConsoleServices *sv = &s->host->cfg.services;
     char name[CONSOLE_TAD_USER_MAX + 1u];
-    const char *tad_user = console_tad_user_name(&s->host->cfg, s->logged_in ? s->user : NULL,
-                                                 name, sizeof name);
+    const char *tad_user =
+        console_tad_user_name(&s->host->cfg, s->logged_in ? s->user : NULL, name, sizeof name);
     uint16_t number = 0;
     int rc;
     if (!system_number(s, system, "you cannot connect to the gateway you are on", &number))
@@ -346,8 +345,7 @@ static bool onward_start(ConsoleSession *s, const char *system, uint32_t now_ms)
     s->onward_echo = true;
     s->typed_len = 0;
     s->hangup_sent = false;
-    term_keyseq_init(&s->keys,
-                     line_is(s, CONSOLE_LINE_ESCAPE_MSG) ? 0u : s->host->cfg.escape_ms,
+    term_keyseq_init(&s->keys, line_is(s, CONSOLE_LINE_ESCAPE_MSG) ? 0u : s->host->cfg.escape_ms,
                      s->host->cfg.keyseq_ms);
     (void)now_ms;
     rc = sv->onward_open(sv->ctx, s->place, s->system, number, tad_user);
@@ -357,8 +355,8 @@ static bool onward_start(ConsoleSession *s, const char *system, uint32_t now_ms)
         s->onward = CONSOLE_ONWARD_NONE;
         return false;
     }
-    XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d (%s): connect %s (system %u)",
-             s->place, s->logged_in ? s->user : "direct", s->system, (unsigned)number);
+    XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d (%s): connect %s (system %u)", s->place,
+             s->logged_in ? s->user : "direct", s->system, (unsigned)number);
     sayf(s, "connecting to %s...\r\n", s->system);
     return true;
 }
@@ -450,8 +448,7 @@ static void start(ConsoleSession *s, const ConsoleLine *line, uint32_t now_ms)
     XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d: on from %s", s->place, s->remote);
     if (s->host->cfg.mode == CONSOLE_MODE_DIRECT)
     {
-        if (!onward_start(s, (s->host->cfg.direct_system != NULL) ? s->host->cfg.direct_system
-                                                                  : "",
+        if (!onward_start(s, (s->host->cfg.direct_system != NULL) ? s->host->cfg.direct_system : "",
                           now_ms))
         {
             close_line(s, CONSOLE_CLOSE_SESSION_ENDED);
@@ -498,8 +495,7 @@ int console_host_init(ConsoleHost *h, const ConsoleConfig *cfg, ConsoleSession *
 {
     if (h == NULL || cfg == NULL || sessions == NULL || count == 0u ||
         cfg->services.resolve == NULL || cfg->services.onward_open == NULL ||
-        cfg->services.onward_write == NULL ||
-        cfg->services.onward_hangup == NULL ||
+        cfg->services.onward_write == NULL || cfg->services.onward_hangup == NULL ||
         (cfg->mode == CONSOLE_MODE_PROMPT && cfg->store.lookup == NULL) || cfg->iterations == 0u)
     {
         return -1;
@@ -688,7 +684,7 @@ void console_host_poll(ConsoleHost *h, uint32_t now_ms)
 static void cmd_help(ConsoleSession *s)
 {
     const ConsoleServices *sv = &s->host->cfg.services;
-    say(s,"CONNECT <system>   connect to a SINTRAN system, e.g. CONNECT D102\r\n"
+    say(s, "CONNECT <system>   connect to a SINTRAN system, e.g. CONNECT D102\r\n"
            "LIST               the routing table of the host we are linked to\r\n"
            "NAMES              the system names and named ports the host knows\r\n"
            "WHO                the users on this bridge\r\n"
@@ -735,8 +731,8 @@ static void cmd_who(ConsoleSession *self, uint32_t now_ms)
             continue;
         }
         e.terminal = c->place + 1;
-        e.user = (h->cfg.mode == CONSOLE_MODE_DIRECT) ? "(direct)"
-                                                     : (c->logged_in ? c->user : NULL);
+        e.user =
+            (h->cfg.mode == CONSOLE_MODE_DIRECT) ? "(direct)" : (c->logged_in ? c->user : NULL);
         e.remote = c->remote;
         e.connected_s = (now_ms - c->connected_ms) / 1000u;
         e.system = (c->phase == CONSOLE_PH_SESSION) ? c->system : NULL;
@@ -831,8 +827,9 @@ static bool cmd_list(ConsoleSession *s)
     {
         sv->link_info(sv->ctx, &li);
     }
-    sayf(s, "Routing table of node %u:\r\n"
-            "  system  how                   detail  hops  WANs\r\n",
+    sayf(s,
+         "Routing table of node %u:\r\n"
+         "  system  how                   detail  hops  WANs\r\n",
          (unsigned)li.peer_node_cfg);
     return true;
 }
@@ -915,8 +912,8 @@ static void cmd_deluser(ConsoleSession *s, const char *name)
         say(s, "cannot write the user list\r\n");
         return;
     }
-    XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d (%s): deleted user %s", s->place,
-             s->user, name);
+    XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d (%s): deleted user %s", s->place, s->user,
+             name);
     sayf(s, "user %s deleted\r\n", name);
 }
 
@@ -1016,8 +1013,8 @@ static void setpw_line(ConsoleSession *s, const char *text)
     }
     else
     {
-        XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d (%s): set the password of %s",
-                 s->place, s->user, s->setpw.name);
+        XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d (%s): set the password of %s", s->place,
+                 s->user, s->setpw.name);
         sayf(s, "password of %s set; it must be changed at the next login\r\n", s->setpw.name);
     }
     auth_wipe(&s->setpw, sizeof s->setpw);
@@ -1035,8 +1032,8 @@ static void passwd_line(ConsoleSession *s, const char *text, uint32_t now_ms)
     }
     if (note == AUTH_NOTE_CHANGED)
     {
-        XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d (%s): changed the password",
-                 s->place, s->user);
+        XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d (%s): changed the password", s->place,
+                 s->user);
     }
     if (st == AUTH_LOGIN_DONE)
     {
@@ -1107,8 +1104,7 @@ static bool cmd_names(ConsoleSession *s, const char *system)
         say(s, "NAMES: not available here\r\n");
         return false;
     }
-    if (system[0] != '\0' &&
-        !system_number(s, system, "it has no host of its own to ask", &number))
+    if (system[0] != '\0' && !system_number(s, system, "it has no host of its own to ask", &number))
     {
         return false;
     }
@@ -1124,8 +1120,9 @@ static bool cmd_names(ConsoleSession *s, const char *system)
         sv->link_info(sv->ctx, &li);
     }
     /* The port column is the port word >> 7, as LIST-NAMES prints it (0x0401 -> 8). */
-    sayf(s, "Names known to node %u:\r\n"
-            "  name              system  port  free\r\n",
+    sayf(s,
+         "Names known to node %u:\r\n"
+         "  name              system  port  free\r\n",
          (number != 0u) ? (unsigned)number : (unsigned)li.peer_node_cfg);
     return true;
 }
@@ -1157,8 +1154,7 @@ static bool app_command(ConsoleSession *s, const char *text)
 static void app_cancel(ConsoleSession *s)
 {
     const ConsoleServices *sv = &s->host->cfg.services;
-    XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d: application command cancelled",
-             s->place);
+    XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d: application command cancelled", s->place);
     s->app_pending = false;
     if (sv->command_cancel != NULL)
     {
@@ -1273,9 +1269,11 @@ static void restore_count(ConsoleSession *s, const char *password)
         fresh.must_change = rec->must_change;
         /* The save is its own statement: XMSG_LOG does not evaluate its arguments when off. */
         bool saved = c->store.save(c->store.ctx, &fresh) == 0;
-        XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d: %s stored again at %lu rounds (was "
-                 "%lu): %s", s->place, rec->name, (unsigned long)c->iterations,
-                 (unsigned long)rec->iterations, saved ? "ok" : "write failed");
+        XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO,
+                 "place %d: %s stored again at %lu rounds (was "
+                 "%lu): %s",
+                 s->place, rec->name, (unsigned long)c->iterations, (unsigned long)rec->iterations,
+                 saved ? "ok" : "write failed");
     }
     auth_wipe(&fresh, sizeof fresh);
 }
@@ -1285,8 +1283,8 @@ static void logged_in(ConsoleSession *s, AuthLoginNote note)
     (void)copy_text(s->user, sizeof s->user, s->login.name);
     s->level = auth_login_level(&s->login);
     s->logged_in = true;
-    XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d: logged in as %s (%s)%s", s->place,
-             s->user, (s->level == AUTH_LEVEL_ADMIN) ? "admin" : "user",
+    XMSG_LOG(XMSG_LOG_CONSOLE, XMSG_LOG_INFO, "place %d: logged in as %s (%s)%s", s->place, s->user,
+             (s->level == AUTH_LEVEL_ADMIN) ? "admin" : "user",
              (note == AUTH_NOTE_CHANGED) ? ", new password stored" : "");
     say(s, "Logged in. HELP lists the commands.\r\n");
     if (s->line.logged_in != NULL)
@@ -1681,8 +1679,8 @@ void console_list_done(ConsoleSession *s, int result, unsigned entries)
     }
     else
     {
-        sayf(s, "LIST: the host refused the question (error %d, after %u system(s))\r\n",
-             result, entries);
+        sayf(s, "LIST: the host refused the question (error %d, after %u system(s))\r\n", result,
+             entries);
     }
     show_prompt(s);
     flush(s);
@@ -1728,8 +1726,8 @@ void console_names_done(ConsoleSession *s, int result, unsigned rows)
     }
     else
     {
-        sayf(s, "NAMES: the host refused the question (error %d, after %u name(s))\r\n",
-             result, rows);
+        sayf(s, "NAMES: the host refused the question (error %d, after %u name(s))\r\n", result,
+             rows);
     }
     show_prompt(s);
     flush(s);

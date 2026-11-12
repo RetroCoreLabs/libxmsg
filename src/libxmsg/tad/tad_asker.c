@@ -489,7 +489,8 @@ static void take_break_setting(TadAsker *a, const TadMessage *m)
             ones = ones && (m->data[i] == 0xFFu);
             zeros = zeros && (m->data[i] == 0x00u);
         }
-        a->break_table = ones ? TAD_BREAK_TABLE_ALL : (zeros ? TAD_BREAK_TABLE_NONE : TAD_BREAK_TABLE_MIXED);
+        a->break_table =
+            ones ? TAD_BREAK_TABLE_ALL : (zeros ? TAD_BREAK_TABLE_NONE : TAD_BREAK_TABLE_MIXED);
     }
     if (strategy > 1 && !(strategy == 7 && a->break_table != TAD_BREAK_TABLE_MIXED))
     {
@@ -500,8 +501,8 @@ static void take_break_setting(TadAsker *a, const TadMessage *m)
     }
     else
     {
-        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_DEBUG, "host break strategy %d, BRKMAX %u",
-                 (int)strategy, (unsigned)a->break_max);
+        XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_DEBUG, "host break strategy %d, BRKMAX %u", (int)strategy,
+                 (unsigned)a->break_max);
     }
 }
 
@@ -958,8 +959,7 @@ int tad_asker_escape(TadAsker *a, uint32_t now_ms)
         return XMSG_ESTATE;
     }
     a->stats.escapes++;
-    XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_INFO, "escape (ESCA) to session port 0x%04X",
-             a->session_port);
+    XMSG_LOG(XMSG_LOG_TAD, XMSG_LOG_INFO, "escape (ESCA) to session port 0x%04X", a->session_port);
     enqueue(a, TAD_SEND_ESCA, now_ms);
     if (a->base.attached && a->base.node != NULL)
     {

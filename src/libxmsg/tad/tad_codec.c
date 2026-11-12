@@ -94,8 +94,8 @@ int tad_writer_add(TadWriter *w, uint8_t opcode, const uint8_t *data, size_t len
 
 int tad_writer_add_host(TadWriter *w, uint8_t opcode, const uint8_t *data, size_t len)
 {
-    bool odd_header = (opcode == TAD_OP_ECKM) || (opcode == TAD_OP_BMMX) ||
-                      (opcode == TAD_OP_RAW_07);
+    bool odd_header =
+        (opcode == TAD_OP_ECKM) || (opcode == TAD_OP_BMMX) || (opcode == TAD_OP_RAW_07);
     bool at_odd = (w->len & 1u) != 0;
 
     if (len > TAD_MAX_DATA || (len > 0 && data == NULL))

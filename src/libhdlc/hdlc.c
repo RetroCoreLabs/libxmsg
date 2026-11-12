@@ -279,7 +279,7 @@ int HOT_PATH_CODE hdlc_encoder_write_bits(hdlc_encoder *enc, uint8_t data, uint3
         uint32_t bit = ((uint32_t)data >> (uint32_t)i) & 1u;
         if (enc->one_count == 5)
         {
-            n++;                    /* stuffed zero: a 0 bit, nothing to set */
+            n++; /* stuffed zero: a 0 bit, nothing to set */
             enc->one_count = 0;
         }
         out |= bit << (uint32_t)n;
@@ -343,9 +343,9 @@ int hdlc_encoder_abort_bits(hdlc_encoder *enc, uint32_t *bits)
  * With ok set and (ones carried in + L) <= 4, no bit of the byte can be a
  * stuffed zero, part of a flag or an abort: all eight are data.
  */
-#define RUN_L(e)  ((int)((e) & 0x07u))
-#define RUN_T(e)  ((int)(((e) >> 3u) & 0x07u))
-#define RUN_OK    0x80u
+#define RUN_L(e) ((int)((e) & 0x07u))
+#define RUN_T(e) ((int)(((e) >> 3u) & 0x07u))
+#define RUN_OK   0x80u
 // clang-format off
 static const HOT_PATH_DATA uint8_t RUN_TABLE[256] =
 {
@@ -665,8 +665,8 @@ void HOT_PATH_CODE hdlc_decoder_feed(hdlc_decoder *dec, uint8_t data, const hdlc
             /* All eight bits are data. The b bits already pending sit in
              * the top of shifter; they come first, then the new byte. */
             int b = dec->bit_count;
-            uint8_t whole = (uint8_t)(((unsigned)dec->shifter >> (8u - (unsigned)b))
-                                      | ((unsigned)data << (unsigned)b));
+            uint8_t whole = (uint8_t)(((unsigned)dec->shifter >> (8u - (unsigned)b)) |
+                                      ((unsigned)data << (unsigned)b));
             uint8_t rest = (uint8_t)(data & (0xFFu << (8u - (unsigned)b)));
             deliver(dec, whole, sink);
             dec->shifter = rest;
@@ -748,11 +748,9 @@ static const u_frame_entry U_FRAMES[] =
 
 #define NUM_U_FRAMES ((int)(sizeof(U_FRAMES) / sizeof(U_FRAMES[0])))
 
-static const char *const S_NAMES[4] = { "RR", "RNR", "REJ", "SREJ" };
-static const char *const S_DESCRIPTIONS[4] =
-{
-    "Receive Ready", "Receive Not Ready", "Reject", "Selective Reject"
-};
+static const char *const S_NAMES[4] = {"RR", "RNR", "REJ", "SREJ"};
+static const char *const S_DESCRIPTIONS[4] = {"Receive Ready", "Receive Not Ready", "Reject",
+                                              "Selective Reject"};
 
 hdlc_control_field hdlc_decode_control(uint8_t control)
 {

@@ -33,7 +33,8 @@
 #include <stdbool.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /**
@@ -43,13 +44,13 @@ extern "C" {
  * two FCS bytes leaves HDLC_CRC_GOOD in the register.
  * @{
  */
-#define HDLC_CRC_INIT 0xFFFFu   /**< starting value of the CRC register */
-#define HDLC_CRC_GOOD 0xF0B8u   /**< residue after a good frame plus FCS */
+#define HDLC_CRC_INIT 0xFFFFu /**< starting value of the CRC register */
+#define HDLC_CRC_GOOD 0xF0B8u /**< residue after a good frame plus FCS */
 /** @} */
 
-#define HDLC_FLAG  0x7Eu    /**< 01111110, frame delimiter */
-#define HDLC_ABORT 0x7Fu    /**< 01111111, seven ones */
-#define HDLC_IDLE  0xFFu    /**< marking line, nothing sent */
+#define HDLC_FLAG  0x7Eu /**< 01111110, frame delimiter */
+#define HDLC_ABORT 0x7Fu /**< 01111111, seven ones */
+#define HDLC_IDLE  0xFFu /**< marking line, nothing sent */
 
 /**
  * @brief One CRC step over one byte.
@@ -113,10 +114,10 @@ bool hdlc_fcs_is_good(const uint8_t *frame_with_fcs, size_t len);
  */
 typedef struct
 {
-    uint8_t shifter;    /**< output byte being built, filled from bit 7 down */
-    int bit_count;      /**< bits in shifter, 0..7 */
-    int one_count;      /**< ones in a row sent so far, 0..5 */
-    uint16_t crc;       /**< running CRC over the bytes written */
+    uint8_t shifter; /**< output byte being built, filled from bit 7 down */
+    int bit_count;   /**< bits in shifter, 0..7 */
+    int one_count;   /**< ones in a row sent so far, 0..5 */
+    uint16_t crc;    /**< running CRC over the bytes written */
 } hdlc_encoder;
 
 /**
@@ -249,14 +250,14 @@ int hdlc_encoder_abort_bits(hdlc_encoder *enc, uint32_t *bits);
  */
 typedef enum
 {
-    HDLC_RX_OK = 0,     /**< whole bytes, CRC residue HDLC_CRC_GOOD */
-    HDLC_RX_TOO_LONG,   /**< more bytes than hdlc_decoder_set_max_bytes() allows; the
+    HDLC_RX_OK = 0,   /**< whole bytes, CRC residue HDLC_CRC_GOOD */
+    HDLC_RX_TOO_LONG, /**< more bytes than hdlc_decoder_set_max_bytes() allows; the
                              extra bytes were NOT passed to on_byte() */
-    HDLC_RX_ODD_BITS,   /**< the closing flag did not fall on a byte boundary: the bits
+    HDLC_RX_ODD_BITS, /**< the closing flag did not fall on a byte boundary: the bits
                              between the flags are not a whole number of bytes (ISO 13239
                              4.3.3 invalid frame; usually a bit slip). The last byte passed
                              to on_byte() holds some of the flag's own bits. */
-    HDLC_RX_BAD_CRC     /**< whole bytes, but the CRC residue is wrong */
+    HDLC_RX_BAD_CRC   /**< whole bytes, but the CRC residue is wrong */
 } hdlc_rx_status;
 
 /**
@@ -304,13 +305,13 @@ typedef struct
  */
 typedef struct
 {
-    uint32_t ok;            /**< frames ended HDLC_RX_OK */
-    uint32_t bad_crc;       /**< frames ended HDLC_RX_BAD_CRC */
-    uint32_t odd_bits;      /**< frames ended HDLC_RX_ODD_BITS */
-    uint32_t too_long;      /**< frames ended HDLC_RX_TOO_LONG */
-    uint32_t aborts;        /**< frames of HDLC_MIN_FRAME_BYTES or more cut by seven ones */
-    uint32_t short_frames;  /**< flag-to-flag runs of 1..3 bytes, ignored (see feed) */
-    uint32_t bytes;         /**< bytes passed on: to on_byte(), or stored in the buffer */
+    uint32_t ok;           /**< frames ended HDLC_RX_OK */
+    uint32_t bad_crc;      /**< frames ended HDLC_RX_BAD_CRC */
+    uint32_t odd_bits;     /**< frames ended HDLC_RX_ODD_BITS */
+    uint32_t too_long;     /**< frames ended HDLC_RX_TOO_LONG */
+    uint32_t aborts;       /**< frames of HDLC_MIN_FRAME_BYTES or more cut by seven ones */
+    uint32_t short_frames; /**< flag-to-flag runs of 1..3 bytes, ignored (see feed) */
+    uint32_t bytes;        /**< bytes passed on: to on_byte(), or stored in the buffer */
 } hdlc_rx_stats;
 
 /**
@@ -321,19 +322,19 @@ typedef struct
  */
 typedef struct
 {
-    bool active;        /**< opening flag seen, collecting bits */
-    bool have_data;     /**< at least one byte delivered for this frame */
-    bool overflow;      /**< this frame passed max_bytes */
-    int byte_count;     /**< bytes assembled for this frame, kept or not */
-    int max_bytes;      /**< longest frame passed on, FCS included; 0 = no limit */
-    uint8_t *buf;       /**< per-frame mode: where frame bytes go; NULL = per-byte mode */
-    int buf_size;       /**< size of buf in bytes */
-    int limit;          /**< bytes kept per frame: the smaller of max_bytes and
+    bool active;         /**< opening flag seen, collecting bits */
+    bool have_data;      /**< at least one byte delivered for this frame */
+    bool overflow;       /**< this frame passed max_bytes */
+    int byte_count;      /**< bytes assembled for this frame, kept or not */
+    int max_bytes;       /**< longest frame passed on, FCS included; 0 = no limit */
+    uint8_t *buf;        /**< per-frame mode: where frame bytes go; NULL = per-byte mode */
+    int buf_size;        /**< size of buf in bytes */
+    int limit;           /**< bytes kept per frame: the smaller of max_bytes and
                              buf_size, 0 = none; worked out once, used per byte */
-    uint8_t shifter;    /**< input byte being built, filled from bit 7 down */
-    int bit_count;      /**< bits in shifter, 0..7 */
-    int one_count;      /**< ones in a row seen so far, capped at 8 */
-    uint16_t crc;       /**< running CRC over the bytes delivered */
+    uint8_t shifter;     /**< input byte being built, filled from bit 7 down */
+    int bit_count;       /**< bits in shifter, 0..7 */
+    int one_count;       /**< ones in a row seen so far, capped at 8 */
+    uint16_t crc;        /**< running CRC over the bytes delivered */
     hdlc_rx_stats stats; /**< counters, see hdlc_rx_stats */
 } hdlc_decoder;
 
@@ -436,10 +437,10 @@ const uint8_t *hdlc_run_table(void);
 /** @brief The three HDLC frame classes, told apart by the low control bits. */
 typedef enum
 {
-    HDLC_FRAME_UNKNOWN,     /**< could not classify (never happens for 8-bit control) */
-    HDLC_FRAME_I,           /**< information: bit 0 = 0, carries N(S) and N(R) */
-    HDLC_FRAME_S,           /**< supervisory: bits 1..0 = 01, carries N(R) */
-    HDLC_FRAME_U            /**< unnumbered: bits 1..0 = 11, M1 and M2 name the type */
+    HDLC_FRAME_UNKNOWN, /**< could not classify (never happens for 8-bit control) */
+    HDLC_FRAME_I,       /**< information: bit 0 = 0, carries N(S) and N(R) */
+    HDLC_FRAME_S,       /**< supervisory: bits 1..0 = 01, carries N(R) */
+    HDLC_FRAME_U        /**< unnumbered: bits 1..0 = 11, M1 and M2 name the type */
 } hdlc_frame_type;
 
 /**
@@ -449,14 +450,14 @@ typedef enum
  */
 typedef struct
 {
-    hdlc_frame_type type;       /**< I, S or U */
-    int ns;                     /**< N(S), I frames only, bits 3..1 */
-    int nr;                     /**< N(R), I and S frames, bits 7..5 */
-    int m1;                     /**< U frames: bits 3..2 */
-    int m2;                     /**< U frames: bits 7..5 */
-    bool poll_final;            /**< bit 4, P/F */
-    const char *name;           /**< short type name: RR, SABM, UA, ... "" for I */
-    const char *description;    /**< one-line meaning of name */
+    hdlc_frame_type type;    /**< I, S or U */
+    int ns;                  /**< N(S), I frames only, bits 3..1 */
+    int nr;                  /**< N(R), I and S frames, bits 7..5 */
+    int m1;                  /**< U frames: bits 3..2 */
+    int m2;                  /**< U frames: bits 7..5 */
+    bool poll_final;         /**< bit 4, P/F */
+    const char *name;        /**< short type name: RR, SABM, UA, ... "" for I */
+    const char *description; /**< one-line meaning of name */
 } hdlc_control_field;
 
 /**

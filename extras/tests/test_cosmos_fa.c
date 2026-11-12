@@ -244,7 +244,7 @@ static Run s_run;
 typedef struct Sink
 {
     uint8_t file[32768];
-    uint32_t got;      /* bytes in order */
+    uint32_t got; /* bytes in order */
     bool out_of_order;
     uint32_t opened_length;
     int opened_calls;
@@ -1062,12 +1062,14 @@ static void write_requests_match_the_capture(void)
     /* 02:33:02.035, pad byte aside: open WRTEST1:OUT for writing. */
     env.counter = 0x81;
     n = fa_build_open_write(out, sizeof out, &env, 0x0002, "WRTEST1:OUT", true);
-    CHECK_BYTES(out, n, "07F000448100D761920005920002F20002BF22575254455354313A4F5554222757F20003"
-                        "920001F200FF");
+    CHECK_BYTES(out, n,
+                "07F000448100D761920005920002F20002BF22575254455354313A4F5554222757F20003"
+                "920001F200FF");
     /* Overwrite: the same open with the name bare (RetroIO LiveSyncTransferAgent). */
     n = fa_build_open_write(out, sizeof out, &env, 0x0002, "WRTEST1:OUT", false);
-    CHECK_BYTES(out, n, "07F000448100D761920005920002F20002BD575254455354313A4F55542757F20003"
-                        "920001F200FF");
+    CHECK_BYTES(out, n,
+                "07F000448100D761920005920002F20002BD575254455354313A4F55542757F20003"
+                "920001F200FF");
     CHECK(strcmp(fa_error_name(FA_ERR_FILE_EXISTS), "file already exists") == 0);
     /* A data message is the envelope and the bytes, nothing else. */
     memset(bytes, 0x5A, sizeof bytes);

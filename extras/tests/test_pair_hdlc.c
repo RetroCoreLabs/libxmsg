@@ -95,7 +95,8 @@ static void in_memory_with_faults(void)
     for (unsigned seq = 0; seq < FRAMES_PER_SIDE; seq++)
     {
         size_t fl = build_frame(seq, frame);
-        size_t wl = byte_frame_encode_accm(frame, fl, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
+        size_t wl =
+            byte_frame_encode_accm(frame, fl, BYTE_FRAME_ACCM_NONE, true, wire, sizeof wire);
         CHECK(wl > 0);
         CHECK_EQ(test_pair_write(&s_pair, 0, wire, wl), (int)wl);
         CHECK_EQ(test_pair_write(&s_pair, 1, wire, wl), (int)wl);

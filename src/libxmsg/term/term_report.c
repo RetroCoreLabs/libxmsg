@@ -80,8 +80,8 @@ int term_report_who(const TermWhoEntry *e, size_t n, char *buf, size_t cap)
             return -1;
         }
         put(&o, "%c %4d %-16s %-27s %-12s ", e[i].is_self ? '*' : ' ', e[i].terminal,
-            (e[i].user != NULL) ? e[i].user : "(login)",
-            (e[i].remote != NULL) ? e[i].remote : "?", dur);
+            (e[i].user != NULL) ? e[i].user : "(login)", (e[i].remote != NULL) ? e[i].remote : "?",
+            dur);
         if (e[i].system == NULL)
         {
             put(&o, "at the prompt\r\n");
@@ -137,7 +137,8 @@ int term_report_info(const TermLinkInfo *li, char *buf, size_t cap)
     put(&o, "Frames:  %lu in, %lu out, %lu sent again, %lu with an unusual address\r\n",
         (unsigned long)li->frames_in, (unsigned long)li->frames_out,
         (unsigned long)li->retransmissions, (unsigned long)li->unusual_address);
-    put(&o, "Window:  the peer's receive window is %u (from its last address byte)\r\n", (unsigned)li->peer_window);
+    put(&o, "Window:  the peer's receive window is %u (from its last address byte)\r\n",
+        (unsigned)li->peer_window);
     put(&o, "Data:    %lu datagrams in, %lu out\r\n", (unsigned long)li->datagrams_in,
         (unsigned long)li->datagrams_out);
     put(&o, "Uptime:  %s\r\n", up);

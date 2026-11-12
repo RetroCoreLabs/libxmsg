@@ -35,7 +35,7 @@ static int derive(const char *password, const uint8_t *salt, uint32_t iterations
                   uint8_t out[AUTH_HASH_SIZE])
 {
     return auth_hash_pbkdf2((const uint8_t *)password, strlen(password), salt, AUTH_SALT_SIZE,
-                              iterations, out, AUTH_HASH_SIZE);
+                            iterations, out, AUTH_HASH_SIZE);
 }
 
 int auth_user_make(AuthUser *out, const char *name, const char *password, uint32_t iterations,
@@ -323,8 +323,8 @@ int auth_user_parse_line(const char *line, AuthUser *out)
         }
     }
     if ((nf != 5u && nf != 6u) || flen[0] == 0 || flen[0] > AUTH_NAME_MAX ||
-        flen[1] != strlen(AUTH_SCHEME) ||
-        memcmp(f[1], AUTH_SCHEME, flen[1]) != 0 || flen[2] == 0 || flen[2] > 10u)
+        flen[1] != strlen(AUTH_SCHEME) || memcmp(f[1], AUTH_SCHEME, flen[1]) != 0 || flen[2] == 0 ||
+        flen[2] > 10u)
     {
         return -1;
     }

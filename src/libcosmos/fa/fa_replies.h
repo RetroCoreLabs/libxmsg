@@ -40,8 +40,8 @@ typedef struct FaReply
     uint16_t seq;          /**< the sequence of the request it answers */
     const uint8_t *fields; /**< the QFORM after op and seq */
     size_t fields_len;
-    bool refused;          /**< selector 1 carries a SINTRAN error */
-    uint16_t error;        /**< that error, when refused */
+    bool refused;   /**< selector 1 carries a SINTRAN error */
+    uint16_t error; /**< that error, when refused */
 } FaReply;
 
 /**

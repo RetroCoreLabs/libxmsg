@@ -20,7 +20,7 @@
 
 /* Frame 4905 minus LAPB address/control and FCS. */
 #define LIVE_D100_REQUEST                                                                          \
-    "21 13 00 0E 00 65 00 64 00 29 01 00 DC EC 21 00 86 84 00 65 00 00 00 64 09 D4 01 00 "        \
+    "21 13 00 0E 00 65 00 64 00 29 01 00 DC EC 21 00 86 84 00 65 00 00 00 64 09 D4 01 00 "         \
     "01 4B 00 04 01 02 00 65"
 
 /* The answer: our F1 0x0028, sub-header 86 60 with D100's system and asking port in both address
@@ -28,7 +28,7 @@
  * reply a machine gives about itself, e.g. ListRoutingTests.cs CapturedResponseHex). The
  * checksum DCED is the ones-complement sum of words 0-5 (sintran_hdr.h). */
 #define EXPECTED_REPLY                                                                             \
-    "21 13 00 0E 00 64 00 65 00 28 01 00 DC ED 21 00 86 60 00 64 09 D4 00 64 09 D4 01 00 "        \
+    "21 13 00 0E 00 64 00 65 00 28 01 00 DC ED 21 00 86 60 00 64 09 D4 00 64 09 D4 01 00 "         \
     "01 00 00 10 01 02 00 65 02 02 00 04 03 02 00 65 04 02 00 00"
 
 /* ------------------------------------------------------------------ Flags1 store */
@@ -426,7 +426,9 @@ static void walk_needs_a_ready_link(void)
 
 /* D100's 7WHO from the live TADA hang (2026-11-10 09:44:39.232, info field of the 38-byte
  * I-frame): to our port 0x00EB, which belonged to a session lost when the board rebooted. */
-#define LIVE_7WHO_TO_DEAD_PORT                                                                      "21 13 00 0E 00 65 00 64 00 4A 00 48 DD 83 21 00 82 14 00 65 00 EB 00 64 09 B6 00 48 00 00 "     "00 02 FC 00"
+static const char LIVE_7WHO_TO_DEAD_PORT[] =
+    "21 13 00 0E 00 65 00 64 00 4A 00 48 DD 83 21 00 82 14 00 65 00 EB 00 64 09 B6 00 48 00 00 "
+    "00 02 FC 00";
 
 static void data_to_a_closed_port_gets_xeima_not_an_ack(void)
 {
