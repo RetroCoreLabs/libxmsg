@@ -116,17 +116,20 @@ size_t fa_build_open_read(uint8_t *out, size_t cap, const FaEnvelope *env, uint1
                           const char *spec);
 
 /**
- * @brief Open for writing (op 05): F2 0002 <string "\"<spec>\"'W"> F2 0003 92 0001 F2 00FF.
+ * @brief Open for writing (op 05): F2 0002 <string "\"<spec>\"'W" or "<spec>'W">
+ *        F2 0003 92 0001 F2 00FF.
  *
- * MEASURED: capture-write.txt 02:33:02.035, COPY-FILE writing WRTEST1:OUT, sent
- * BF "\"WRTEST1:OUT\"'W" then F2 0003 92 0001. In SINTRAN a name in quotes is created when it
- * does not exist. What the server does with a quoted name that already exists is not in any
- * capture we hold.
- * @param spec The file as the server names it, without quotes: "NAME:TYPE".
+ * To create, the name goes in quotes. MEASURED: capture-write.txt 02:33:02.035, COPY-FILE
+ * writing WRTEST1:OUT, sent BF "\"WRTEST1:OUT\"'W" then F2 0003 92 0001. A file that exists is
+ * then refused with SINTRAN error 62 (FA_ERR_FILE_EXISTS; D100, RetroIO 2026-08-18 and libxmsg
+ * 2026-11-12). To overwrite a file that exists, the name goes bare: RetroIO's sync daemon
+ * overwrote files on D100 this way (LiveSyncTransferAgent, 2026-08-18).
+ * @param spec   The file as the server names it, without quotes: "NAME:TYPE".
+ * @param create true to create (quotes), false to overwrite (bare).
  * @return Bytes written, or 0 when the specification is longer than 251 characters.
  */
 size_t fa_build_open_write(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
-                           const char *spec);
+                           const char *spec, bool create);
 
 /** @brief Write a block (op 09): F2 0001 A4 <block> F2 00FF (capture-write.txt). */
 size_t fa_build_write_block(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,

@@ -137,7 +137,7 @@ static size_t build_request(FaClient *c, const FaClientItem *it, uint8_t *body, 
     case FA_STEP_OPEN:
         if (c->writing)
         {
-            return fa_build_open_write(body, cap, &env, it->seq, c->spec);
+            return fa_build_open_write(body, cap, &env, it->seq, c->spec, c->create);
         }
         return fa_build_open_read(body, cap, &env, it->seq, c->spec);
     case FA_STEP_SET_BLOCK_SIZE:
@@ -937,10 +937,21 @@ int fa_client_read(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t pee
 
 int fa_client_write(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_system,
                     const char *local_user, const char *remote_user, const char *password,
-                    const char *spec, uint32_t length, uint32_t now_ms)
+                    const char *spec, uint32_t length, FaWriteMode mode, uint32_t now_ms)
 {
-    return start(c, node, peer_node, peer_system, local_user, remote_user, password, spec,
-                 FA_JOB_WRITE, length, now_ms);
+    int rc;
+
+    if (mode != FA_WRITE_CREATE && mode != FA_WRITE_OVERWRITE)
+    {
+        return XMSG_EINVAL;
+    }
+    rc = start(c, node, peer_node, peer_system, local_user, remote_user, password, spec,
+               FA_JOB_WRITE, length, now_ms);
+    if (rc == XMSG_OK)
+    {
+        c->create = (mode == FA_WRITE_CREATE); /* read when the open is built, after the confirm */
+    }
+    return rc;
 }
 
 int fa_client_list(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_system,

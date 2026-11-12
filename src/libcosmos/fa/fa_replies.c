@@ -103,6 +103,8 @@ const char *fa_error_name(uint16_t error)
         return "no such file";
     case FA_ERR_WRONG_PASSWORD:
         return "wrong password";
+    case FA_ERR_FILE_EXISTS:
+        return "file already exists";
     case FA_ERR_END_OF_DIRECTORY:
         return "end of directory";
     default:

@@ -197,10 +197,11 @@ size_t fa_build_open_read(uint8_t *out, size_t cap, const FaEnvelope *env, uint1
 }
 
 size_t fa_build_open_write(uint8_t *out, size_t cap, const FaEnvelope *env, uint16_t seq,
-                           const char *spec)
+                           const char *spec, bool create)
 {
     uint8_t text[255];
     size_t len;
+    size_t at = 0;
     QformWriter w;
 
     if (out == NULL || env == NULL || spec == NULL)
@@ -212,15 +213,22 @@ size_t fa_build_open_write(uint8_t *out, size_t cap, const FaEnvelope *env, uint
     {
         return 0;
     }
-    text[0] = (uint8_t)'"';
-    memcpy(text + 1, spec, len);
-    text[len + 1u] = (uint8_t)'"';
-    text[len + 2u] = (uint8_t)'\'';
-    text[len + 3u] = (uint8_t)'W';
+    if (create)
+    {
+        text[at++] = (uint8_t)'"';
+    }
+    memcpy(text + at, spec, len);
+    at += len;
+    if (create)
+    {
+        text[at++] = (uint8_t)'"';
+    }
+    text[at++] = (uint8_t)'\'';
+    text[at++] = (uint8_t)'W';
     qform_writer_init(&w, out, cap);
     put_head(&w, env, FA_OP_OPEN, seq);
     qform_put_selector(&w, 2);
-    qform_put_string(&w, text, len + 4u);
+    qform_put_string(&w, text, at);
     qform_put_selector(&w, 3);
     qform_put_tag16(&w, QFORM_TAG_INT16, 1);
     return finish(&w);

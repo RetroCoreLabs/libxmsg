@@ -441,7 +441,7 @@ static void client_start(const FaClientConfig *cfg, const char *spec, uint32_t n
     else if (s_run.writing)
     {
         CHECK_EQ(fa_client_write(&s_client, &s_a, 102, system, "SYSTEM", remote, "", spec,
-                                 WRITE_LENGTH, now),
+                                 WRITE_LENGTH, FA_WRITE_CREATE, now),
                  XMSG_OK);
     }
     else
@@ -1052,9 +1052,14 @@ static void write_requests_match_the_capture(void)
     CHECK_EQ(fa_build_set_end_of_file(out, sizeof out, &env, 1, 0), 0);
     /* 02:33:02.035, pad byte aside: open WRTEST1:OUT for writing. */
     env.counter = 0x81;
-    n = fa_build_open_write(out, sizeof out, &env, 0x0002, "WRTEST1:OUT");
+    n = fa_build_open_write(out, sizeof out, &env, 0x0002, "WRTEST1:OUT", true);
     CHECK_BYTES(out, n, "07F000448100D761920005920002F20002BF22575254455354313A4F5554222757F20003"
                         "920001F200FF");
+    /* Overwrite: the same open with the name bare (RetroIO LiveSyncTransferAgent). */
+    n = fa_build_open_write(out, sizeof out, &env, 0x0002, "WRTEST1:OUT", false);
+    CHECK_BYTES(out, n, "07F000448100D761920005920002F20002BD575254455354313A4F55542757F20003"
+                        "920001F200FF");
+    CHECK(strcmp(fa_error_name(FA_ERR_FILE_EXISTS), "file already exists") == 0);
     /* A data message is the envelope and the bytes, nothing else. */
     memset(bytes, 0x5A, sizeof bytes);
     env.counter = 0x04;
@@ -1153,12 +1158,17 @@ static void write_arguments_are_refused(void)
     memset(&cb, 0, sizeof cb);
     (void)fa_client_init(&c, NULL, &cb);
     /* No source. */
-    CHECK_EQ(fa_client_write(&c, &s_a, 102, 102, "A", "A", "", "X:Y", 10, 0), XMSG_EINVAL);
+    CHECK_EQ(fa_client_write(&c, &s_a, 102, 102, "A", "A", "", "X:Y", 10, FA_WRITE_CREATE, 0),
+             XMSG_EINVAL);
     cb.source = sink_source;
     (void)fa_client_init(&c, NULL, &cb);
     /* An empty file: no capture shows one being written. */
-    CHECK_EQ(fa_client_write(&c, &s_a, 102, 102, "A", "A", "", "X:Y", 0, 0), XMSG_EINVAL);
-    CHECK_EQ(fa_client_write(&c, &s_a, 102, 102, "A", "A", "", "", 10, 0), XMSG_EINVAL);
+    CHECK_EQ(fa_client_write(&c, &s_a, 102, 102, "A", "A", "", "X:Y", 0, FA_WRITE_CREATE, 0),
+             XMSG_EINVAL);
+    CHECK_EQ(fa_client_write(&c, &s_a, 102, 102, "A", "A", "", "", 10, FA_WRITE_CREATE, 0),
+             XMSG_EINVAL);
+    CHECK_EQ(fa_client_write(&c, &s_a, 102, 102, "A", "A", "", "X:Y", 10, (FaWriteMode)7, 0),
+             XMSG_EINVAL);
     CHECK_EQ(fa_client_state(&c), FA_CLIENT_IDLE);
 }
 

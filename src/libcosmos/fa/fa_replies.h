@@ -29,6 +29,7 @@ extern "C"
 /** SINTRAN error numbers seen in refusals. */
 #define FA_ERR_NO_SUCH_FILE     46u
 #define FA_ERR_WRONG_PASSWORD   48u
+#define FA_ERR_FILE_EXISTS      62u /**< 076 octal: a create of a file that exists */
 #define FA_ERR_END_OF_DIRECTORY 197u
 
 /** A parsed reply. */

@@ -186,6 +186,7 @@ typedef struct FaClient
 
     bool listing;                          /**< a walk rather than a read */
     bool writing;                          /**< a write rather than a read */
+    bool create;                           /**< writing: create (quoted name), not overwrite */
     bool cancelled;                        /**< fa_client_cancel: tearing down, no more
                                                 callbacks but `done` */
     uint8_t walk_block[FA_WALK_BLOCK_SIZE]; /**< the name block every walk request carries */
@@ -249,11 +250,23 @@ int fa_client_list(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t pee
                    const char *local_user, const char *remote_user, const char *password,
                    const char *filter, uint32_t now_ms);
 
+/** Whether fa_client_write makes a new file or replaces one that exists. */
+typedef enum FaWriteMode
+{
+    FA_WRITE_CREATE = 0, /**< name in quotes; a file that exists is refused with error 62 */
+    FA_WRITE_OVERWRITE   /**< bare name; the file must exist (refusal otherwise, number not seen) */
+} FaWriteMode;
+
 /**
  * @brief Start writing one file: `length` bytes, taken through the `source` callback.
  *
- * The file is opened with its name in quotes, as SINTRAN's COPY-FILE does, which creates it
- * when it does not exist. `done` comes with 0 when the server has the whole file, with
+ * FA_WRITE_CREATE opens the name in quotes, as SINTRAN's COPY-FILE does (capture-write.txt);
+ * a file that exists is then refused with FA_ERR_FILE_EXISTS (62), and is left as it was
+ * (measured on D100 2026-11-12). FA_WRITE_OVERWRITE opens the bare name, as RetroIO's sync
+ * daemon did on D100 (2026-08-18). The set end of file declares the new length; that a file
+ * written shorter than before is cut to it is not yet measured.
+ * A caller that does not know whether the file exists can create, and overwrite on error 62.
+ * `done` comes with 0 when the server has the whole file, with
  * FA_CLIENT_EREFUSED and the SINTRAN error when it refused a step (the file is then closed and
  * the seat given back), or with XMSG_EIO when `source` did not give the bytes (the file is
  * then left open on the server: BUGS.md C3).
@@ -261,11 +274,12 @@ int fa_client_list(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t pee
  *               written, so 0 is refused rather than guessed).
  * The other arguments are as fa_client_read(); `spec` is "NAME:TYPE" in remote_user's
  * directory, without quotes.
+ * @param mode   Create or overwrite.
  * @return As fa_client_read(); XMSG_EINVAL also when length is 0 or there is no `source`.
  */
 int fa_client_write(FaClient *c, XmsgNode *node, uint16_t peer_node, uint16_t peer_system,
                     const char *local_user, const char *remote_user, const char *password,
-                    const char *spec, uint32_t length, uint32_t now_ms);
+                    const char *spec, uint32_t length, FaWriteMode mode, uint32_t now_ms);
 
 /**
  * @brief Stop a read, a write or a listing early (the user pressed the escape key).
