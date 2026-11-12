@@ -173,6 +173,15 @@ static void replies_are_read(void)
     CHECK(fa_reply_open_info(&r, &fno, &flen));
     CHECK_EQ(fno, 0x40);
     CHECK_EQ(flen, 17905);
+    /* D100 open reply for the 0-byte (SYSTEM)RONNY-R:TXT (XMSGGW dump 2026-11-12 14:40:03.501,
+     * pad byte 52 as sent): no selector 3, which means 0 bytes. */
+    len = test_hex_to_bytes("07F0000281009112920005920002F20002A20040F200FF52", buf, sizeof buf);
+    CHECK(fa_reply_parse(buf, (size_t)len, &r));
+    CHECK(!r.refused);
+    flen = 99;
+    CHECK(fa_reply_open_info(&r, &fno, &flen));
+    CHECK_EQ(fno, 0x40);
+    CHECK_EQ(flen, 0);
     /* Captured refusal (capture-open-error.txt 02:37:42.349): error 46 = 0x2E. */
     len = test_hex_to_bytes("07F00002810090BB920005920002F20001A2002EF200FFA4", buf, sizeof buf);
     CHECK(fa_reply_parse(buf, (size_t)len, &r));

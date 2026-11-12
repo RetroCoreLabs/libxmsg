@@ -52,7 +52,9 @@ bool fa_reply_parse(const uint8_t *body, size_t len, FaReply *r);
 
 /**
  * @brief Read an open reply: selector 2 the file number (A2), selector 3 the length in bytes (A4).
- * @return true when both are there.
+ *        A reply without selector 3 is a file of 0 bytes (measured on D100: the server leaves
+ *        the length out for an empty file).
+ * @return true when the file number is there and selector 3 is either absent or an A4 value.
  */
 bool fa_reply_open_info(const FaReply *r, uint16_t *file_number, uint32_t *length);
 

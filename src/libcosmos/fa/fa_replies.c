@@ -53,8 +53,18 @@ bool fa_reply_open_info(const FaReply *r, uint16_t *file_number, uint32_t *lengt
         return false;
     }
     *file_number = (uint16_t)v;
-    if (!qform_find_field(r->fields, r->fields_len, 3, &it) || it.tag != QFORM_TAG_TYPED32 ||
-        !qform_item_uint(&it, &v))
+    /* MEASURED on D100 (2026-11-12, through XMSGGW): for a file that holds 0 bytes the server
+     * leaves selector 3 out. (SYSTEM)RONNY-R:TXT, RONNY-R2:TXT and RONNY-R3:TXT each show
+     * "1 PAGE , 0 BYTES IN FILE" in FILE-STATISTICS and answer an open with only the file number
+     * (92 0005 92 0002 F2 0002 A2 0040 F2 00FF), and SINTRAN's own COPY-FILE from one of them
+     * says "SOURCE EMPTY". A 6-byte file on the same machine carries its length. So a missing
+     * selector 3 is a length of 0; a selector 3 of any other form is still an error. */
+    if (!qform_find_field(r->fields, r->fields_len, 3, &it))
+    {
+        *length = 0;
+        return true;
+    }
+    if (it.tag != QFORM_TAG_TYPED32 || !qform_item_uint(&it, &v))
     {
         return false;
     }
