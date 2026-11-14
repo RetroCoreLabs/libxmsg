@@ -46,8 +46,8 @@
 
 /* Library version, also in library.properties and src/CMakeLists.txt - keep the three in step. */
 #define XMSG_VERSION_MAJOR  0
-#define XMSG_VERSION_MINOR  1
-#define XMSG_VERSION_PATCH  0
-#define XMSG_VERSION_STRING "0.1.0"
+#define XMSG_VERSION_MINOR  3
+#define XMSG_VERSION_PATCH  5
+#define XMSG_VERSION_STRING "0.3.5"
 
 #endif /* XMSG_CONFIG_H */

@@ -8,7 +8,7 @@
 # their own top-level CMake projects (they need pico_sdk_init() before project()), and the Arduino
 # sketches are compiled by the Arduino IDE, which reads library.properties at the repository root.
 cmake_minimum_required(VERSION 3.13)
-project(libxmsg VERSION 0.1.0 LANGUAGES C)
+project(libxmsg VERSION 0.3.5 LANGUAGES C)
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(XMSG_IS_TOP_LEVEL ON)

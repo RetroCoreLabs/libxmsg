@@ -107,7 +107,7 @@ flowchart TB
 
 ## Status
 
-Version 0.1.0 - the link, the datagrams and the terminal session are written, tested against
+Version 0.3.5 - the link, the datagrams and the terminal session are written, tested against
 captured traffic, and run against a live SINTRAN III K machine (RetroCore's ND-100 emulator): link
 up and held, login, LIST-FILES, LOGOUT and hang-up. The integration tests skip when no machine is
 reachable.

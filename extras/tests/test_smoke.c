@@ -62,7 +62,14 @@ static void config_defaults_are_visible(void)
     CHECK(XMSG_MAX_SESSIONS >= 1);
     CHECK(XMSG_LAPB_N1 >= 4);
     CHECK_EQ(XMSG_LOG_CATEGORY_COUNT, 11);
-    CHECK(strcmp(XMSG_VERSION_STRING, "0.1.0") == 0);
+    {
+        /* The string and the three numbers must agree (the release workflow checks the tag
+         * against library.properties and CMake; this checks the header against itself). */
+        char v[32];
+        (void)snprintf(v, sizeof v, "%d.%d.%d", XMSG_VERSION_MAJOR, XMSG_VERSION_MINOR,
+                       XMSG_VERSION_PATCH);
+        CHECK(strcmp(XMSG_VERSION_STRING, v) == 0);
+    }
 }
 
 int main(void)
