@@ -40,7 +40,7 @@ jobs:
           (cd dist && sha256sum "libxmsg-${GITHUB_REF_NAME}.zip" > SHA256SUMS.txt && cat SHA256SUMS.txt)
 
       - name: Publish the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/libxmsg-${{ github.ref_name }}.zip
