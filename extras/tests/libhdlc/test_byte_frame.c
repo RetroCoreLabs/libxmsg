@@ -35,6 +35,9 @@ static int feed_all(byte_frame_decoder *d, const uint8_t *p, int n, uint8_t *got
     return frames;
 }
 
+/* The decoder's buffer: the caller's since 2026-11-16 (byte_frame_decoder_init). */
+static uint8_t s_buf[BYTE_FRAME_MAX];
+
 static void round_trip_all_byte_values(void)
 {
     uint8_t in[256];
@@ -46,8 +49,7 @@ static void round_trip_all_byte_values(void)
     {
         in[i] = (uint8_t)i;
     }
-    memset(&d, 0, sizeof d);
-    byte_frame_decoder_reset(&d);
+    CHECK_EQ(byte_frame_decoder_init(&d, s_buf, sizeof s_buf), 0);
     int n = byte_frame_encode(in, 256, wire);
     CHECK_EQ(feed_all(&d, wire, n, got, &got_len), 1);
     CHECK_EQ(got_len, 256);
@@ -64,8 +66,7 @@ static void noise_empty_and_bad_endings(void)
     uint8_t got[BYTE_FRAME_MAX];
     int got_len = 0;
     byte_frame_decoder d;
-    memset(&d, 0, sizeof d);
-    byte_frame_decoder_reset(&d);
+    CHECK_EQ(byte_frame_decoder_init(&d, s_buf, sizeof s_buf), 0);
     CHECK_EQ(feed_all(&d, wire, (int)sizeof wire, got, &got_len), 1);
     CHECK_BYTES(got, (size_t)got_len, "02 03");
 }
@@ -75,8 +76,7 @@ static void overlong_counted_and_survives_reset(void)
     uint8_t got[BYTE_FRAME_MAX];
     int got_len = 0;
     byte_frame_decoder d;
-    memset(&d, 0, sizeof d);
-    byte_frame_decoder_reset(&d);
+    CHECK_EQ(byte_frame_decoder_init(&d, s_buf, sizeof s_buf), 0);
     (void)byte_frame_decoder_feed(&d, 0x7E);
     for (int i = 0; i < BYTE_FRAME_MAX + 5; i++)
     {
@@ -113,22 +113,87 @@ static void escape_after_escape(void)
     uint8_t got[16];
     int got_len = 0;
 
-    memset(&d, 0, sizeof d);
-    byte_frame_decoder_reset(&d);
+    CHECK_EQ(byte_frame_decoder_init(&d, s_buf, sizeof s_buf), 0);
     CHECK_EQ(feed_all(&d, wire, (int)sizeof wire, got, &got_len), 1);
     CHECK_BYTES(got, got_len, "01 5D 41 02");
 }
 
-/* A decoder in zeroed memory works without a reset, as the old one did. */
-static void zeroed_decoder_needs_no_reset(void)
+/* Since 2026-11-16 a decoder never given a buffer keeps nothing and counts every byte, so a
+ * missing byte_frame_decoder_init() shows in no_buffer instead of passing as a quiet line. */
+static void decoder_without_buffer_counts(void)
 {
     static byte_frame_decoder d;
     static const uint8_t wire[] = {0x7E, 0x11, 0x22, 0x7E};
     uint8_t got[16];
     int got_len = 0;
 
-    CHECK_EQ(feed_all(&d, wire, (int)sizeof wire, got, &got_len), 1);
-    CHECK_BYTES(got, got_len, "11 22");
+    CHECK_EQ(feed_all(&d, wire, (int)sizeof wire, got, &got_len), 0);
+    CHECK_EQ(d.no_buffer, 4);
+    byte_frame_decoder_reset(&d);
+    CHECK_EQ(d.no_buffer, 4);
+}
+
+static void init_rejects_bad_arguments(void)
+{
+    byte_frame_decoder d;
+    uint8_t small[8];
+    CHECK_EQ(byte_frame_decoder_init(NULL, small, sizeof small), -1);
+    CHECK_EQ(byte_frame_decoder_init(&d, NULL, sizeof small), -1);
+    CHECK_EQ(byte_frame_decoder_init(&d, small, 7), -1);
+    CHECK_EQ(byte_frame_decoder_init(&d, small, sizeof small), 0);
+}
+
+/* A caller's smaller buffer is the limit: 16 bytes fit, 17 are dropped and counted. */
+static void small_caller_buffer_is_the_limit(void)
+{
+    static uint8_t small[16];
+    uint8_t got[32];
+    int got_len = 0;
+    byte_frame_decoder d;
+    static const uint8_t flag = 0x7E;
+
+    CHECK_EQ(byte_frame_decoder_init(&d, small, sizeof small), 0);
+    (void)byte_frame_decoder_feed(&d, 0x7E);
+    for (int i = 0; i < 17; i++)
+    {
+        (void)byte_frame_decoder_feed(&d, 0x42);
+    }
+    CHECK_EQ(feed_all(&d, &flag, 1, got, &got_len), 0);
+    CHECK_EQ(d.overlong, 1);
+    for (int i = 0; i < 16; i++)
+    {
+        (void)byte_frame_decoder_feed(&d, 0x43);
+    }
+    CHECK_EQ(feed_all(&d, &flag, 1, got, &got_len), 1);
+    CHECK_EQ(got_len, 16);
+    CHECK(d.buffer == small);
+}
+
+/* The sizes HDLCGW will try on the bench (2026-11-14): 1025, 2048, 4103 and 4105 bytes, every
+ * byte value, through the encoder and back. */
+static void x25_sizes_round_trip(void)
+{
+    static const int sizes[] = {1025, 2048, 4103, 4105};
+    static uint8_t in[4105];
+    static uint8_t wire[2 + (2 * 4105)];
+    static uint8_t got[BYTE_FRAME_MAX];
+    byte_frame_decoder d;
+
+    for (int i = 0; i < 4105; i++)
+    {
+        in[i] = (uint8_t)((i * 7) + 0x7C);
+    }
+    for (size_t k = 0; k < sizeof sizes / sizeof sizes[0]; k++)
+    {
+        int got_len = 0;
+        int n;
+        CHECK_EQ(byte_frame_decoder_init(&d, s_buf, sizeof s_buf), 0);
+        n = byte_frame_encode(in, sizes[k], wire);
+        CHECK_EQ(feed_all(&d, wire, n, got, &got_len), 1);
+        CHECK_EQ(got_len, sizes[k]);
+        CHECK(memcmp(got, in, (size_t)sizes[k]) == 0);
+        CHECK_EQ(d.overlong, 0);
+    }
 }
 
 int main(void)
@@ -138,6 +203,9 @@ int main(void)
     noise_empty_and_bad_endings();
     overlong_counted_and_survives_reset();
     escape_after_escape();
-    zeroed_decoder_needs_no_reset();
+    decoder_without_buffer_counts();
+    init_rejects_bad_arguments();
+    small_caller_buffer_is_the_limit();
+    x25_sizes_round_trip();
     TEST_DONE();
 }

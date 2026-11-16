@@ -41,8 +41,8 @@
 **    buffer, FCS check on or off, any escape set, a resumable encoder   **
 **    for a non-blocking transport. libxmsg uses this.                   **
 **  - byte_frame_decoder / byte_frame_encode(): the short form HDLCGW    **
-**    and RC422Dev use between the gateway and the PC: a fixed           **
-**    BYTE_FRAME_MAX buffer inside the decoder, FCS passed through       **
+**    and RC422Dev use between the gateway and the PC: the caller's      **
+**    buffer (at most BYTE_FRAME_MAX), FCS passed through                **
 **    unchecked (the host checks end to end), every byte below 0x20      **
 **    escaped. Built on the same engine.                                 **
 **                                                                       **
@@ -242,8 +242,19 @@ size_t byte_frame_encode_accm(const uint8_t *frame, size_t len, uint32_t accm, b
 
 /* ============================================ short form (HDLCGW, RC422Dev) */
 
-/** Longest frame the short-form decoder accepts, in bytes after un-escaping. */
-#define BYTE_FRAME_MAX 1024
+#ifndef BYTE_FRAME_MAX
+/** Longest frame the short-form decoder accepts, in bytes after un-escaping, FCS included.
+ *  4112: Ronny's rule (2026-11-14) is that the gateways carry X.25 data packets of up to 4096
+ *  octets, which is 4105 octets on the line with address 1, control 2 (modulo 128), packet
+ *  header 4 and FCS 2; rounded up to a multiple of 16. It is only an upper bound: the memory is
+ *  the caller's (byte_frame_decoder_init), so a build with little RAM gives a smaller buffer,
+ *  or sets the bound itself with -DBYTE_FRAME_MAX=n. It was 1024 until 2026-11-16. */
+#define BYTE_FRAME_MAX 4112
+#endif
+
+#if BYTE_FRAME_MAX < 8
+#error "BYTE_FRAME_MAX must hold at least a control frame's 6 bytes of overhead and 2 of payload"
+#endif
 
 /**
  * @brief Byte-stuff one frame for the host: flag, the bytes with 0x7E, 0x7D and every byte
@@ -259,24 +270,37 @@ int byte_frame_encode(const uint8_t *frame, int len, uint8_t *out);
 /**
  * @brief Collects frames from the byte stream coming from the host.
  *
- * The engine with the FCS check off over a built-in buffer. Not thread safe; one decoder per
- * receiving task. Read buffer, length and overlong; the rest is private.
+ * The engine with the FCS check off over a buffer the caller gives with
+ * byte_frame_decoder_init(), so a firmware puts the memory where it has room (internal RAM or
+ * PSRAM on the ESP32). Not thread safe; one decoder per receiving task. Read buffer, length,
+ * overlong and no_buffer; the rest is private.
  */
 typedef struct
 {
-    uint8_t buffer[BYTE_FRAME_MAX]; /**< the frame being collected / last delivered */
-    int length;                     /**< bytes in buffer: of the delivered frame right after
-                                         byte_frame_decoder_feed() returned true, else so far */
-    uint32_t overlong;              /**< frames dropped for being longer than BYTE_FRAME_MAX;
-                                         counts from zero storage, NOT cleared by
-                                         byte_frame_decoder_reset(), so a reconnect does
-                                         not lose the count */
-    byte_frame_rx rx;               /**< the engine; private */
+    uint8_t *buffer;    /**< the caller's storage: the frame being collected / last delivered */
+    int length;         /**< bytes in buffer: of the delivered frame right after
+                             byte_frame_decoder_feed() returned true, else so far */
+    uint32_t overlong;  /**< frames dropped for being longer than the buffer (at most
+                             BYTE_FRAME_MAX); NOT cleared by byte_frame_decoder_reset(), so a
+                             reconnect does not lose the count */
+    uint32_t no_buffer; /**< bytes fed before byte_frame_decoder_init() gave a buffer, all
+                             dropped. Not 0 means the init call is missing: show it (STAT) */
+    byte_frame_rx rx;   /**< the engine; private */
 } byte_frame_decoder;
 
 /**
- * @brief Return a decoder to the hunting state. A decoder in zeroed memory (static) also
- *        works without it: the first feed sets it up.
+ * @brief Give a decoder its buffer, clear its counters and start hunting for a flag. Call once
+ *        before the first feed. Until then every byte fed is dropped and counted in no_buffer.
+ * @param[out] dec  Decoder.
+ * @param[in]  buf  Storage for one frame, FCS included; the caller owns it and keeps it alive.
+ * @param[in]  cap  Its size. A frame longer than cap, or than BYTE_FRAME_MAX when cap is
+ *                  bigger, is dropped and counted in overlong.
+ * @return 0, or -1 for a NULL decoder or buffer or a cap below 8.
+ */
+int byte_frame_decoder_init(byte_frame_decoder *dec, uint8_t *buf, size_t cap);
+
+/**
+ * @brief Return a decoder to the hunting state, keeping its buffer and its counters.
  * @param[in,out] dec  Decoder; must not be NULL.
  */
 void byte_frame_decoder_reset(byte_frame_decoder *dec);

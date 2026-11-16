@@ -16,6 +16,7 @@
 #include "libhdlc/hot_path.h"
 
 #include <stddef.h>
+#include <string.h>
 
 /* ------------------------------------------------------------ decoder */
 
@@ -396,13 +397,25 @@ int HOT_PATH_CODE byte_frame_encode(const uint8_t *frame, int len, uint8_t *out)
                                        2u + (2u * (size_t)len));
 }
 
+int byte_frame_decoder_init(byte_frame_decoder *dec, uint8_t *buf, size_t cap)
+{
+    if (dec == NULL || buf == NULL || cap < 8u)
+    {
+        return -1;
+    }
+    if (cap > (size_t)BYTE_FRAME_MAX)
+    {
+        cap = (size_t)BYTE_FRAME_MAX; /* BYTE_FRAME_MAX stays the bound a build promised */
+    }
+    memset(dec, 0, sizeof *dec);
+    dec->buffer = buf;
+    return byte_frame_rx_init(&dec->rx, buf, cap, false);
+}
+
 void byte_frame_decoder_reset(byte_frame_decoder *dec)
 {
-    /* Point the engine at the built-in buffer without clearing its counters, so a reconnect
-     * keeps them, the same as overlong. */
-    dec->rx.buf = dec->buffer;
-    dec->rx.cap = BYTE_FRAME_MAX;
-    dec->rx.check_fcs = false;
+    /* The engine keeps its buffer and cap; its counters stay, so a reconnect keeps them, the
+     * same as overlong. A decoder never given a buffer stays without one. */
     byte_frame_rx_reset(&dec->rx);
     dec->length = 0;
 }
@@ -412,9 +425,12 @@ bool HOT_PATH_CODE byte_frame_decoder_feed(byte_frame_decoder *dec, uint8_t data
     size_t used;
     byte_frame_rx_status st;
 
-    if (dec->rx.buf == NULL)
+    if (dec->buffer == NULL)
     {
-        byte_frame_decoder_reset(dec); /* zeroed storage, never reset */
+        /* No byte_frame_decoder_init(): nothing can be kept. Counted, so the missing call shows
+         * up (until 2026-11-16 a zeroed decoder used a buffer inside itself). */
+        dec->no_buffer = dec->no_buffer + 1u;
+        return false;
     }
     st = byte_frame_rx_feed(&dec->rx, &data, 1u, &used);
     if (st == BYTE_FRAME_RX_FRAME)

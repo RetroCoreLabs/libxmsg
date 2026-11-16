@@ -56,9 +56,11 @@
 #define CHUNK_MAX        512
 #define CHUNKS_IN_FLIGHT 2
 
-/* 4 KB: three maximum-size stuffed frames from the host can wait here
- * before spi_tx_task_push() has to block console_task, which then stops
- * reading USB and so holds the host back; nothing is lost. Internal RAM,
+/* The default ring of spi_tx_task_init(). 4 KB: three stuffed 1024-byte
+ * frames from the host can wait here before spi_tx_task_push() has to block
+ * console_task, which then stops reading USB and so holds the host back;
+ * nothing is lost. A firmware carrying longer frames (4105 bytes for X.25,
+ * 2026-11-14) sizes it with spi_tx_task_init_ring(). Internal RAM,
  * not PSRAM, because every transmitted byte passes through it
  * (hot_path.h); it was 16 KB in PSRAM until 2026-11-09. STAT shows how full
  * it ever got (high water). */
@@ -85,9 +87,42 @@ static spi_device_handle_t g_device = NULL;
 static volatile uint32_t g_tx_data_bytes = 0;
 static volatile uint32_t g_tx_idle_bytes = 0;
 
+/* The ring's size, set once by spi_tx_task_init_ring(). */
+static int g_ring_size = 0;
+
+int spi_tx_task_init_ring(int size, spi_tx_ring_place place)
+{
+    bool ok;
+
+    if (size < 64 || g_ring_size != 0)
+    {
+        return -1;
+    }
+    if (place == SPI_TX_RING_PSRAM)
+    {
+        /* PSRAM when the board has it, the internal heap otherwise (ring_buffer_alloc). */
+        ok = ring_buffer_alloc(&g_tx_buffer, size);
+    }
+    else
+    {
+        ok = ring_buffer_alloc_internal(&g_tx_buffer, size);
+    }
+    if (!ok)
+    {
+        return -1;
+    }
+    g_ring_size = size;
+    return 0;
+}
+
+int spi_tx_task_push_max(void)
+{
+    return (g_ring_size > 0) ? g_ring_size - 1 : 0;
+}
+
 void spi_tx_task_init(void)
 {
-    if (!ring_buffer_alloc_internal(&g_tx_buffer, BUFFER_SIZE))
+    if (spi_tx_task_init_ring(BUFFER_SIZE, SPI_TX_RING_INTERNAL) != 0)
     {
         /* Without the ring nothing can be sent; say so and stop here rather
          * than run with a buffer that does not exist. */
@@ -131,9 +166,9 @@ uint32_t spi_tx_task_idle_bytes(void)
 
 int spi_tx_task_push(const uint8_t *bytes, int n)
 {
-    if (n > BUFFER_SIZE - 1)
+    if (n > spi_tx_task_push_max())
     {
-        return -1;
+        return -1; /* larger than the ring, or the ring was never set up */
     }
 
     /* One locked write for the whole block: the transmit task must never

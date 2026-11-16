@@ -73,7 +73,7 @@ Inside the byte stuffing. Multi-byte numbers are little-endian (low byte first).
 | 1 | type | message type. Bit 7 clear = host to firmware, bit 7 set = firmware to host |
 | 2 | id | request id 1..255, chosen by the host and copied into every reply to that request. 0 = not a reply to anything (log, statistics, events) |
 | 3 | flags | bit 0 LAST, bit 1 ERROR, bits 4..7 chunk counter |
-| 4.. | payload | 0 to `CONTROL_FRAME_MAX_PAYLOAD` bytes (1018: the 1024-byte frame limit minus 6) |
+| 4.. | payload | 0 to `CONTROL_FRAME_MAX_PAYLOAD` bytes: `BYTE_FRAME_MAX` minus 6, so 4106 with the default 4112 (1018 until 2026-11-16, when the limit was 1024). How much a firmware puts in one REPLY chunk is its own choice (HDLCGW: 512) |
 | last 2 | check | the un-inverted CRC over everything before it, low byte first |
 
 `control_frame_build()` writes this and `control_frame_parse()` reads it back. The payload pointer

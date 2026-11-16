@@ -23,10 +23,48 @@ extern "C"
 
 extern ring_buffer g_tx_buffer; /**< bit-stuffed bytes waiting for the line */
 
+/** Where the transmit ring's storage comes from (spi_tx_task_init_ring). */
+typedef enum
+{
+    SPI_TX_RING_INTERNAL = 0, /**< internal RAM: the hot-path rule (hot_path.h) */
+    SPI_TX_RING_PSRAM         /**< PSRAM when the board has it, else internal RAM */
+} spi_tx_ring_place;
+
 /**
- * @brief Set up g_tx_buffer. Call once from setup(), before any task starts.
+ * @brief Set up g_tx_buffer as 4096 bytes of internal RAM. Call once from setup(), before any
+ *        task starts; stops there with an error line when the memory is not there. The same as
+ *        spi_tx_task_init_ring(4096, SPI_TX_RING_INTERNAL).
  */
 void spi_tx_task_init(void);
+
+/**
+ * @brief Set up g_tx_buffer with a size and a place the firmware chooses. Call once from
+ *        setup(), before any task starts, INSTEAD of spi_tx_task_init().
+ *
+ * The ring must hold a whole bit-stuffed frame at once (spi_tx_task_push takes all or none):
+ * size - 1 is the largest push. Worst case, every frame byte 0xFF, bit stuffing adds one bit
+ * per five, so a 4105-byte frame is 4105 * 8 * 6 / 5 = 39408 bits = 4926 bytes, plus its
+ * flags; one such frame needs a ring of at least about 4930 bytes, and 8192 lets the next one
+ * be queued while it goes out.
+ *
+ * SPI_TX_RING_PSRAM goes against the hot-path rule of 2026-11-09 (every byte on the line in
+ * internal RAM, hot_path.h): Ronny left the choice to the firmware on 2026-11-16, for builds
+ * whose internal RAM has no room. NOT MEASURED: whether the transmit task reading the ring
+ * from PSRAM keeps the line fed at 307200 bit/s or 983000 bit/s. The DMA chunks stay in
+ * internal RAM either way.
+ *
+ * @param[in] size   Ring size in bytes, at least 64.
+ * @param[in] place  Internal RAM or PSRAM.
+ * @return 0, or -1 for a size below 64, a second call, or no memory.
+ */
+int spi_tx_task_init_ring(int size, spi_tx_ring_place place);
+
+/**
+ * @brief The largest block spi_tx_task_push() accepts: the ring size minus one, 0 before the
+ *        ring is set up.
+ * @return Bytes.
+ */
+int spi_tx_task_push_max(void);
 
 /**
  * @brief FreeRTOS task entry point. Runs the transmitter forever.
