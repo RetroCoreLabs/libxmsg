@@ -94,3 +94,6 @@ jobs:
         run: .github/scripts/banned.sh
       - name: ASCII only, LF only, no tabs, no trailing whitespace
         run: .github/scripts/ascii-check.sh
+      - name: Documentation (links, machine paths, README layout)
+        # A copy of repo-standards tools/check-docs.py; refresh it from there, never edit it here.
+        run: python extras/tools/check-docs.py .
