@@ -98,9 +98,9 @@ EMOJI = re.compile(
     "["
     "\U0001F300-\U0001FAFF"   # pictographs, emoticons, symbols, supplemental
     "\U0001F000-\U0001F2FF"   # mahjong through enclosed alphanumeric supplement
-    "☀-➿"           # miscellaneous symbols and dingbats
-    "️"                  # variation selector 16, the "render as emoji" marker
-    "⬀-⯿"           # miscellaneous symbols and arrows (stars, etc.)
+    "\u2600-\u27bf"           # miscellaneous symbols and dingbats
+    "\ufe0f"                  # variation selector 16, the "render as emoji" marker
+    "\u2b00-\u2bff"           # miscellaneous symbols and arrows (stars, etc.)
     "]")
 
 # Directories holding generated or third-party material rather than our documentation.
