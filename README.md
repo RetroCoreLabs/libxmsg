@@ -120,11 +120,29 @@ reachable.
   Replayed against a complete session captured between two real SINTRAN
   machines, every frame the library sends is byte-identical to the one the real asker sent.
 - **Telnet tool:** `examples/host_tad_telnet` gives each telnet client its own session.
-- **COSMOS file client** (`libcosmos`): read a file, list files and get file statistics. Checked
-  live on D100: files read byte for byte, a full listing of 253 files, and listings filtered by
-  name or type (`:SYMB`, `:MODE`).
-- **Still to come:** the ESP32 and Pico examples in this repository, the COSMOS file server,
-  writing a file, and the FTP bridge.
+- **COSMOS file client** (`libcosmos`): read a file, write one (create a new file, or overwrite
+  one that exists), list files, get file statistics, and cancel a transfer. Checked live on D100:
+  files read byte for byte, a full listing of 253 files, listings filtered by name or type
+  (`:SYMB`, `:MODE`), a file overwritten with 2000, 3000 and then 500 bytes and read back each
+  time, and 0-byte files read as empty.
+- **Console:** one login and command line for every way a user arrives (telnet, USB, an incoming
+  CONNECT-TO): users and passwords, CONNECT, LIST, NAMES, WHO, INFO, `HELP <command>` and TAB
+  completion of the command word. The XMSGGW gateway runs it on an ESP32-S2.
+- **Still to come:** the ESP32 and Pico examples in this repository, the COSMOS file server, and
+  the FTP command core.
+
+## Current limitations
+
+Each has an entry in [extras/BUGS.md](extras/BUGS.md) with what is known and what is not.
+
+- **B1:** TAD break strategies 2 to 6 and 8, and a mixed strategy 7 table, are not implemented.
+- **C1:** the character after the apostrophe in a file name sent to open a file for reading is
+  not understood.
+- **C2:** the short-acknowledgement counter past 127 has not been checked against a real server.
+- **C3:** a write whose data source fails leaves the file open on the server.
+- **L-PICO:** libhdlc's locked ring buffer (`ring_buffer`) has no lock on the Raspberry Pi Pico.
+  A Pico build that includes `ring_buffer.h` stops with an error; the Pico uses the lock-free
+  `spsc_ring` (one writer, one reader), and the rest of the library builds.
 
 A listing (LIST-FILES) and file statistics (FILE-STATISTICS) are the same walk through the
 directory; statistics just names one file. The server picks the matching files:
@@ -353,6 +371,29 @@ carries them over another network. There were three of them:
 So the HDLC line is not a side road. It is the way XMSG worked first, and for some years the only
 way it worked. A device that speaks XMSG over HDLC, as this library does, joins the network
 the way the machines themselves first did.
+
+## Releases
+
+Each release on the [releases page](https://github.com/RetroCoreLabs/libxmsg/releases) carries:
+
+| Artifact | What it is | How it is built |
+|---|---|---|
+| `libxmsg-vX.Y.Z.zip` | The Arduino library: `library.properties`, `LICENSE`, `README.md`, `src/` and `examples/` | `zip` in `.github/workflows/release.yml`, after the build and tests pass once more |
+| `SHA256SUMS.txt` | The checksum of the zip | `sha256sum` over the zip |
+
+### Cutting a release
+
+The version is in three files and they must agree: `version=` in `library.properties`,
+`project(libxmsg VERSION ...)` in `src/CMakeLists.txt`, and the `XMSG_VERSION_*` macros in
+`src/libxmsg/xmsg_config.h` (the smoke test checks the macros against each other). Then:
+
+```bash
+git tag -a v0.3.5 -m "libxmsg 0.3.5"
+git push origin v0.3.5
+```
+
+The release job stops without publishing if the tag does not match `library.properties` and
+CMake, or if the build or a test fails.
 
 ## Documentation
 
