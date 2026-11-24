@@ -427,9 +427,10 @@ static bool take_walk_entry(FaClient *c, const FaReply *r)
  * A block the server refused with FA_ERR_PAGE_NOT_IN_FILE: a hole in the file. Ronny's decision
  * (2026-11-24, HDLCGW BUGS.md B4): deliver the block as zeros, cut at the file's length, and go
  * on, so the copy has the file's full length. A PC file cannot hold a hole; SINTRAN's COPY-FILE
- * keeps it as one, so writing such a copy back makes the hole a page of zeros. UNVERIFIED: that
- * no data message follows the refusal (none did on D100, as reported by HDLCGW); one that did
- * would be ignored and logged, as any data outside a block read.
+ * keeps it as one, so writing such a copy back makes the hole a page of zeros. MEASURED (D100,
+ * HDLCGW bench 2026-11-24): no data message follows the refusal; stats.ignored stayed 0 for
+ * PLANC-100-F00:PROG (169984 bytes, holes at blocks 61-63), BIGCOPY:TXT (0 bytes, 1 hole) and
+ * BIGCOPY3:TXT (12690 bytes, no hole). One that did would be ignored and logged.
  */
 static void take_hole(FaClient *c, uint32_t now_ms)
 {
