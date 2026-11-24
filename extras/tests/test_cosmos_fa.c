@@ -981,6 +981,261 @@ static void cancel_run(const FaVectorEvent *ev, size_t n, const char *spec, Canc
     }
 }
 
+/* ------------------------------------------------------------------------------------------ */
+/* Holes: blocks the server refuses with SINTRAN error 18                                     */
+/* ------------------------------------------------------------------------------------------ */
+
+/* A test server that answers every request itself, for a read whose chosen blocks are refused.
+ * Its messages copy the captured server's (capture-read.txt): the confirm, the short ack, a
+ * reply with the request's op and sequence, the two halves of a block. A refused block takes
+ * the form of the captured refusal (capture-open-error.txt) with the chosen error. No capture
+ * of a hole exists: D100's behaviour is as HDLCGW reported it (BUGS.md B4, 2026-11-24): the
+ * read is refused and no data message follows. */
+#define HOLE_QUEUE 16
+
+typedef struct HoleServer
+{
+    uint8_t q[HOLE_QUEUE][FA_DATA_MESSAGE_SIZE];
+    size_t qlen[HOLE_QUEUE];
+    size_t head;
+    size_t count;
+    const char *open_reply_hex; /* the open reply to send */
+    uint32_t refuse_mask;       /* bit b set: the read of block b is refused */
+    uint8_t error;              /* the SINTRAN error it is refused with */
+    int reads;                  /* read requests seen */
+} HoleServer;
+
+static HoleServer s_hole;
+
+/* Byte at a file offset as the test server sends it: never zero, so a zero is a filled hole. */
+static uint8_t hole_pattern(uint32_t offset)
+{
+    return (uint8_t)((offset % 251u) + 1u);
+}
+
+static void hole_push(const uint8_t *b, size_t n)
+{
+    size_t slot;
+    CHECK(s_hole.count < HOLE_QUEUE && n <= FA_DATA_MESSAGE_SIZE);
+    if (s_hole.count >= HOLE_QUEUE || n > FA_DATA_MESSAGE_SIZE)
+    {
+        return;
+    }
+    slot = (s_hole.head + s_hole.count) % HOLE_QUEUE;
+    memcpy(s_hole.q[slot], b, n);
+    s_hole.qlen[slot] = n;
+    s_hole.count++;
+}
+
+/* Send what fits in the window now; the rest on a later millisecond. */
+static void hole_drain(uint32_t now)
+{
+    while (s_hole.count > 0u &&
+           server_send(s_hole.q[s_hole.head], s_hole.qlen[s_hole.head], now) == XMSG_OK)
+    {
+        s_hole.head = (s_hole.head + 1u) % HOLE_QUEUE;
+        s_hole.count--;
+    }
+}
+
+static void hole_send_block(uint32_t block)
+{
+    static uint8_t data[FA_DATA_MESSAGE_SIZE];
+    static const uint8_t k_first[FA_ENVELOPE_SIZE] = {0x07, 0xF0, 0x00, 0x02,
+                                                      0x05, 0x00, 0x90, 0xBB};
+    static const uint8_t k_second[FA_ENVELOPE_SIZE] = {0x07, 0xF0, 0x00, 0x02,
+                                                       0x86, 0x00, 0x00, 0x01};
+    for (uint32_t half = 0; half < 2u; half++)
+    {
+        uint32_t base = (block * FA_BLOCK_SIZE) + (half * FA_DATA_BYTES);
+        memcpy(data, (half == 0u) ? k_first : k_second, FA_ENVELOPE_SIZE);
+        for (uint32_t i = 0; i < FA_DATA_BYTES; i++)
+        {
+            data[FA_ENVELOPE_SIZE + i] = hole_pattern(base + i);
+        }
+        hole_push(data, sizeof data);
+    }
+}
+
+/* The block number of a read request: the A4 value just before F2 00 FF. */
+static uint32_t read_block_of(const uint8_t *msg, size_t len)
+{
+    size_t e = end_of_fields(msg, len);
+    CHECK(e >= 5u && msg[e - 5u] == 0xA4u);
+    if (e < 5u)
+    {
+        return 0;
+    }
+    return ((uint32_t)msg[e - 4u] << 24u) | ((uint32_t)msg[e - 3u] << 16u) |
+           ((uint32_t)msg[e - 2u] << 8u) | msg[e - 1u];
+}
+
+static void hole_answer(const uint8_t *msg, size_t len)
+{
+    static const uint8_t k_confirm[] = {0x07, 0xD2, 0x00, 0x02, 0x00, 0x42, 0x64, 0x00};
+    static const uint8_t k_ack[] = {0x07, 0xA2, 0x00, 0x02, 0x0E, 0x00, 0x92, 0x2A};
+    static const uint8_t k_close[] = {0x07, 0xC0, 0x00, 0x02, 0x00, 0x42, 0x00, 0x00};
+    uint8_t reply[64] = {0x07, 0xF0, 0x00, 0x02, 0x9F, 0x00, 0x90, 0xBB, 0x92,
+                         0x00, 0x00, 0x92, 0x00, 0x00, 0xF2, 0x00, 0xFF, 0x8C};
+    size_t reply_len = 18;
+    uint16_t type;
+    uint16_t op;
+    int n;
+
+    if (len < 8u)
+    {
+        return;
+    }
+    if (msg[0] == 0x1Bu)
+    {
+        hole_push(k_confirm, sizeof k_confirm); /* the letter */
+        return;
+    }
+    type = (uint16_t)((msg[0] << 8u) | msg[1]);
+    if (type == FA_TYPE_SESSION_FINISHED)
+    {
+        hole_push(k_close, sizeof k_close);
+        return;
+    }
+    if (type != FA_TYPE_REQUEST || len < 14u || len == FA_DATA_MESSAGE_SIZE || msg[8] != 0x92u)
+    {
+        return; /* a short ack */
+    }
+    op = (uint16_t)((msg[9] << 8u) | msg[10]);
+    if (op == FA_OP_OPEN)
+    {
+        n = test_hex_to_bytes(s_hole.open_reply_hex, reply, sizeof reply);
+        CHECK(n > 14);
+        reply_len = (n > 0) ? (size_t)n : 0u;
+    }
+    else if (op == FA_OP_READ)
+    {
+        uint32_t block = read_block_of(msg, len);
+        s_hole.reads++;
+        if (block < 32u && (s_hole.refuse_mask & (1u << block)) != 0u)
+        {
+            /* The captured refusal's form with op 8 and the chosen error in place of 46. */
+            n = test_hex_to_bytes("07F00002810090BB920008920000F20001A2002EF200FFA4", reply,
+                                  sizeof reply);
+            reply_len = (n > 0) ? (size_t)n : 0u;
+            reply[19] = s_hole.error;
+            memcpy(reply + 12, msg + 12, 2);
+            hole_push(k_ack, sizeof k_ack);
+            hole_push(reply, reply_len);
+            return;
+        }
+        memcpy(reply + 9, msg + 9, 2);
+        memcpy(reply + 12, msg + 12, 2);
+        hole_push(k_ack, sizeof k_ack);
+        hole_push(reply, reply_len);
+        hole_send_block(block);
+        return;
+    }
+    else
+    {
+        memcpy(reply + 9, msg + 9, 2); /* op */
+    }
+    memcpy(reply + 12, msg + 12, 2); /* sequence */
+    hole_push(k_ack, sizeof k_ack);
+    hole_push(reply, reply_len);
+}
+
+/* Read one file from the test server, the blocks in refuse_mask refused with error. */
+static void hole_run(const char *open_reply_hex, uint32_t refuse_mask, uint8_t error)
+{
+    FaClientConfig cfg;
+    uint32_t now = bring_up();
+    uint32_t until = now + 60000u;
+
+    memset(&s_hole, 0, sizeof s_hole);
+    s_hole.open_reply_hex = open_reply_hex;
+    s_hole.refuse_mask = refuse_mask;
+    s_hole.error = error;
+    fa_client_config_default(&cfg);
+    client_start(&cfg, "PLANC-100-F00:PROG", now);
+    while (now < until && s_sink.done_calls == 0)
+    {
+        now++;
+        pump(now);
+        while (s_server.count > 0)
+        {
+            hole_answer(s_server.bodies[s_server.head], s_server.lens[s_server.head]);
+            s_server.head = (s_server.head + 1u) % MAX_SEEN;
+            s_server.count--;
+        }
+        hole_drain(now);
+    }
+    for (uint32_t i = 0; i < 200u; i++)
+    {
+        now++;
+        pump(now);
+        hole_drain(now);
+    }
+}
+
+/* The captured open reply: 17905 bytes, 9 blocks. */
+static const char k_open_17905[] =
+    "07F00002810090BB920005920002F20002A20040F20003A4000045F1F200FF00";
+
+/* Ronny's decision 2026-11-24 (HDLCGW BUGS.md B4): a block refused with error 18 is a hole and
+ * arrives as zeros; the file keeps its full length. Blocks 3 and 8 (the last, cut at 17905) are
+ * holes here; every other byte is the server's. */
+static void holes_arrive_as_zeros(void)
+{
+    hole_run(k_open_17905, (1u << 3u) | (1u << 8u), FA_ERR_PAGE_NOT_IN_FILE);
+    CHECK_EQ(s_sink.done_calls, 1);
+    CHECK_EQ(s_sink.result, 0);
+    CHECK_EQ(s_sink.sintran_error, 0);
+    CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_DONE);
+    CHECK_EQ(s_sink.opened_length, 17905);
+    CHECK_EQ(s_hole.reads, 9);
+    CHECK_EQ(s_client.stats.holes, 2);
+    CHECK_EQ(s_client.stats.ignored, 0);
+    CHECK(!s_sink.out_of_order);
+    CHECK_EQ(s_sink.got, 17905);
+    for (uint32_t i = 0; i < 17905u; i++)
+    {
+        uint32_t block = i / FA_BLOCK_SIZE;
+        uint8_t want = (block == 3u || block == 8u) ? 0u : hole_pattern(i);
+        if (s_sink.file[i] != want)
+        {
+            CHECK_EQ(s_sink.file[i], want);
+            break;
+        }
+    }
+    CHECK(!s_client.base.attached);
+}
+
+/* An empty file (D100: "0 bytes, 1 block", open reply without a length) whose one block is
+ * refused with error 18 (as HDLCGW saw it): done, 0 bytes, nothing delivered. */
+static void empty_file_with_a_hole_is_empty(void)
+{
+    hole_run("07F0000281009112920005920002F20002A20040F200FF52", 1u, FA_ERR_PAGE_NOT_IN_FILE);
+    CHECK_EQ(s_sink.done_calls, 1);
+    CHECK_EQ(s_sink.result, 0);
+    CHECK_EQ(s_sink.opened_calls, 1);
+    CHECK_EQ(s_sink.opened_length, 0);
+    CHECK_EQ(s_hole.reads, 1);
+    CHECK_EQ(s_client.stats.holes, 1);
+    CHECK_EQ(s_sink.got, 0);
+    CHECK_EQ(s_sink.data_calls, 0);
+    CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_DONE);
+}
+
+/* Any other refusal of a read still ends the job: block 3 refused with error 46 gives the three
+ * blocks before it, then close, release and a refused result. */
+static void other_read_refusal_still_fails(void)
+{
+    hole_run(k_open_17905, 1u << 3u, (uint8_t)FA_ERR_NO_SUCH_FILE);
+    CHECK_EQ(s_sink.done_calls, 1);
+    CHECK_EQ(s_sink.result, FA_CLIENT_EREFUSED);
+    CHECK_EQ(s_sink.sintran_error, FA_ERR_NO_SUCH_FILE);
+    CHECK_EQ(s_hole.reads, 4);
+    CHECK_EQ(s_client.stats.holes, 0);
+    CHECK_EQ(s_sink.got, 3u * FA_BLOCK_SIZE);
+    CHECK_EQ(fa_client_state(&s_client), FA_CLIENT_DONE);
+}
+
 static void cancelled_listing_gives_the_seat_back(void)
 {
     s_run = (Run){true, "SYS", "BAK04", 0, true, false};
@@ -1314,6 +1569,9 @@ int main(void)
     file_statistics_replays_the_capture();
     walk_requests_and_dates();
     silent_server_times_out();
+    holes_arrive_as_zeros();
+    empty_file_with_a_hole_is_empty();
+    other_read_refusal_still_fails();
     cancelled_listing_gives_the_seat_back();
     cancelled_read_closes_the_file();
     cancelled_before_the_confirm();

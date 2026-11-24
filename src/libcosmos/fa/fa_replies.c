@@ -109,6 +109,8 @@ const char *fa_error_name(uint16_t error)
 {
     switch (error)
     {
+    case FA_ERR_PAGE_NOT_IN_FILE:
+        return "page not in file";
     case FA_ERR_NO_SUCH_FILE:
         return "no such file";
     case FA_ERR_WRONG_PASSWORD:

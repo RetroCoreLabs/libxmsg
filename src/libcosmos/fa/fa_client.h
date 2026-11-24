@@ -117,6 +117,8 @@ typedef struct FaClientStats
     uint32_t xense_resends;
     uint32_t restart_resends;
     uint32_t ignored; /**< messages that did not fit the step (logged) */
+    uint32_t holes;   /**< blocks the server refused with FA_ERR_PAGE_NOT_IN_FILE, delivered as
+                           zeros (a read) */
 } FaClientStats;
 
 typedef enum FaClientSend

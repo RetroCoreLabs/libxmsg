@@ -423,6 +423,38 @@ static bool take_walk_entry(FaClient *c, const FaReply *r)
     return true;
 }
 
+/*
+ * A block the server refused with FA_ERR_PAGE_NOT_IN_FILE: a hole in the file. Ronny's decision
+ * (2026-11-24, HDLCGW BUGS.md B4): deliver the block as zeros, cut at the file's length, and go
+ * on, so the copy has the file's full length. A PC file cannot hold a hole; SINTRAN's COPY-FILE
+ * keeps it as one, so writing such a copy back makes the hole a page of zeros. UNVERIFIED: that
+ * no data message follows the refusal (none did on D100, as reported by HDLCGW); one that did
+ * would be ignored and logged, as any data outside a block read.
+ */
+static void take_hole(FaClient *c, uint32_t now_ms)
+{
+    static const uint8_t zeros[FA_DATA_BYTES] = {0};
+
+    c->stats.holes++;
+    XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_WARN,
+             "fa client: block %u of %s is a hole (error %u), delivered as zeros",
+             (unsigned)c->block, c->spec, (unsigned)FA_ERR_PAGE_NOT_IN_FILE);
+    for (uint32_t half = 0; half < 2u; half++)
+    {
+        uint32_t offset = (c->block * FA_BLOCK_SIZE) + (half * FA_DATA_BYTES);
+        if (offset < c->length && c->cb.data != NULL && !c->cancelled)
+        {
+            uint32_t n = c->length - offset;
+            if (n > FA_DATA_BYTES)
+            {
+                n = FA_DATA_BYTES;
+            }
+            c->cb.data(c->cb.ctx, offset, zeros, n);
+        }
+    }
+    next_step(c, now_ms);
+}
+
 static void on_reply(FaClient *c, const uint8_t *body, size_t len, uint32_t now_ms)
 {
     static const uint16_t step_ops[] = {FA_OP_RESERVE, FA_OP_OPEN,    FA_OP_SET_BLOCK_SIZE,
@@ -448,6 +480,11 @@ static void on_reply(FaClient *c, const uint8_t *body, size_t len, uint32_t now_
         XMSG_LOG(XMSG_LOG_COSMOS, XMSG_LOG_INFO, "fa client: end of directory after %u files",
                  (unsigned)c->entries);
         go_to_step(c, FA_STEP_RELEASE, now_ms);
+        return;
+    }
+    if (r.refused && c->step == FA_STEP_READ && r.error == FA_ERR_PAGE_NOT_IN_FILE)
+    {
+        take_hole(c, now_ms);
         return;
     }
     if (r.refused && c->sintran_error == 0u)

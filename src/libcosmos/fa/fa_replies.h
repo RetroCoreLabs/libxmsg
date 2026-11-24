@@ -27,6 +27,11 @@ extern "C"
 #endif
 
 /** SINTRAN error numbers seen in refusals. */
+/** 022 octal: a read of a page the file does not have (a hole: a page inside the file's length
+ *  with nothing on disk). The meaning is INFERRED, not found in a manual: D100 2026-11-24, HDLCGW
+ *  BUGS.md B4, PLANC-100-F00:PROG (80 pages, 83 blocks by length) refuses block 62 with it, and
+ *  SINTRAN's own COPY-FILE copies the file with the same 80 pages. */
+#define FA_ERR_PAGE_NOT_IN_FILE 18u
 #define FA_ERR_NO_SUCH_FILE     46u
 #define FA_ERR_WRONG_PASSWORD   48u
 #define FA_ERR_FILE_EXISTS      62u /**< 076 octal: a create of a file that exists */
